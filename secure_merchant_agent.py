@@ -193,7 +193,7 @@ class SecureMerchantAgent:
         print(f"  → {len(results)}件の商品が見つかりました")
         return results
     
-    def create_signed_cart_mandate(
+    def create_cart_mandate(
         self,
         intent_mandate: IntentMandate,
         products: List[Product],
@@ -201,31 +201,34 @@ class SecureMerchantAgent:
         shipping_address: Optional[Address] = None
     ) -> List[CartMandate]:
         """
-        Cart Mandateを作成し、Merchant署名を追加
-        
+        Cart Mandateを作成（署名なし）
+
+        注意: Merchant Agentは Cart Mandate を作成するのみで、
+        署名は Merchant エンティティが別途行います。
+
         Args:
             intent_mandate: Intent Mandate
             products: 選択された商品
             quantities: 商品ごとの数量
             shipping_address: 配送先住所
-            
+
         Returns:
-            List[CartMandate]: 署名されたCart Mandateのリスト
+            List[CartMandate]: 未署名のCart Mandateのリスト
         """
-        print(f"\n[{self.merchant_name}] Cart Mandateを作成中...")
-        
+        print(f"\n[Merchant Agent: {self.merchant_name}] Cart Mandateを作成中...")
+
         cart_mandates = []
-        
+
         for product in products:
             quantity = quantities.get(product.id, 1) if quantities else 1
-            
+
             # Cart Itemを作成
             unit_price = product.price
             total_price = Amount(
                 value=str(float(unit_price.value) * quantity),
                 currency=unit_price.currency
             )
-            
+
             cart_item = CartItem(
                 id=product.id,
                 name=product.name,
@@ -235,12 +238,12 @@ class SecureMerchantAgent:
                 total_price=total_price,
                 image_url=product.image_url
             )
-            
+
             # 金額計算
             subtotal = total_price
             tax_amount = float(subtotal.value) * self.default_tax_rate
             tax = Amount(value=f"{tax_amount:.2f}", currency=subtotal.currency)
-            
+
             # 配送情報
             shipping_info = ShippingInfo(
                 address=shipping_address or Address(
@@ -254,7 +257,7 @@ class SecureMerchantAgent:
                 cost=self.default_shipping_cost,
                 estimated_delivery=(datetime.utcnow() + timedelta(days=5)).isoformat() + 'Z'
             )
-            
+
             # 合計金額
             total_value = (
                 float(subtotal.value) +
@@ -262,11 +265,11 @@ class SecureMerchantAgent:
                 float(shipping_info.cost.value)
             )
             total = Amount(value=f"{total_value:.2f}", currency=subtotal.currency)
-            
-            # Cart Mandateを作成
+
+            # Cart Mandateを作成（署名なし）
             now = datetime.utcnow()
             expires_at = now + timedelta(hours=1)
-            
+
             cart_mandate = CartMandate(
                 id=f"cart_{uuid.uuid4().hex}",
                 type='CartMandate',
@@ -282,23 +285,14 @@ class SecureMerchantAgent:
                 created_at=now.isoformat() + 'Z',
                 expires_at=expires_at.isoformat() + 'Z'
             )
-            
-            # Merchant署名を追加
-            cart_mandate.merchant_signature = self.signature_manager.sign_mandate(
-                asdict(cart_mandate),
-                self.agent_id
-            )
-            
+
             print(f"  ✓ Cart Mandate作成: {cart_mandate.id}")
             print(f"    商品: {cart_item.name}")
             print(f"    合計: {cart_mandate.total}")
-            print(f"    Merchant署名追加完了")
-            
-            # 署名を検証
-            self._verify_cart_mandate_signature(cart_mandate)
-            
+            print(f"    ※ Merchant署名は Merchant エンティティが追加します")
+
             cart_mandates.append(cart_mandate)
-        
+
         return cart_mandates
     
     def _verify_cart_mandate_signature(self, cart_mandate: CartMandate) -> bool:
@@ -435,23 +429,18 @@ async def demo_secure_merchant():
     
     products = merchant_agent.search_products(intent_mandate)
     
-    # Cart Mandateを作成（署名付き）
+    # Cart Mandateを作成（署名なし）
     print("\n" + "=" * 80)
-    print("ステップ3: Cart Mandateの作成と署名")
+    print("ステップ3: Cart Mandateの作成")
     print("=" * 80)
-    
-    cart_mandates = merchant_agent.create_signed_cart_mandate(
+
+    cart_mandates = merchant_agent.create_cart_mandate(
         intent_mandate=intent_mandate,
         products=products[:2]  # 最初の2商品
     )
-    
-    # Cart Mandateを検証
-    print("\n" + "=" * 80)
-    print("ステップ4: Cart Mandateの完全検証")
-    print("=" * 80)
-    
-    for cart in cart_mandates:
-        merchant_agent.verify_complete_cart_mandate(cart)
+
+    print("\n  ※ 注意: AP2プロトコルに準拠した実装では、")
+    print("    Merchant署名は別途 Merchant エンティティが追加します。")
     
     print("\n" + "=" * 80)
     print("デモンストレーション完了!")

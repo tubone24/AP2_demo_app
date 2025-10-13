@@ -14,6 +14,8 @@ from ap2_types import Amount, Address, CardPaymentMethod
 from ap2_crypto import KeyManager
 from secure_shopping_agent import SecureShoppingAgent
 from secure_merchant_agent import SecureMerchantAgent
+from merchant import Merchant
+from payment_processor import MerchantPaymentProcessor
 from credential_provider import CredentialProvider
 from receipt_generator import generate_receipt_pdf
 
@@ -101,6 +103,20 @@ def initialize_participants(user_passphrase: str, shopping_agent_passphrase: str
             merchant_name="Demo Running Shoes Store",
             merchant_id="merchant_demo_001",
             passphrase=merchant_agent_passphrase
+        )
+
+        # Merchant (実際の販売者)
+        st.session_state.merchant = Merchant(
+            merchant_id="merchant_demo_001",
+            merchant_name="Demo Running Shoes Store",
+            passphrase="merchant_secure_pass"
+        )
+
+        # Merchant Payment Processor
+        st.session_state.payment_processor = MerchantPaymentProcessor(
+            processor_id="processor_demo_001",
+            processor_name="Demo Payment Processor",
+            passphrase="processor_secure_pass"
         )
 
         # Credential Provider
@@ -216,6 +232,7 @@ def show_participant_banner(participants: list, action: str):
         "shopping_agent": {"icon": "🤖", "name": "Shopping Agent", "color": "#50C878"},
         "credential_provider": {"icon": "🔑", "name": "Credential Provider", "color": "#E74C3C"},
         "merchant_agent": {"icon": "🏪", "name": "Merchant Agent", "color": "#FF8C42"},
+        "merchant": {"icon": "🏬", "name": "Merchant", "color": "#F39C12"},
         "payment_processor": {"icon": "💳", "name": "Payment Processor", "color": "#9B59B6"}
     }
 
@@ -391,19 +408,21 @@ def step3_cart_creation():
     if st.session_state.cart_mandate and st.session_state.cart_mandate.user_signature:
         # User署名済み
         show_participant_banner(
-            ["merchant_agent", "user", "shopping_agent"],
-            "Merchant AgentがCart Mandateを作成 → Userが承認 → Shopping Agentが署名を追加"
+            ["merchant_agent", "merchant", "user", "shopping_agent"],
+            "Merchant Agent がCart Mandate作成 → Merchant が署名 → User が承認 → Shopping Agentが検証"
         )
     else:
         # Merchant署名のみ
         show_participant_banner(
-            ["merchant_agent", "user"],
-            "Merchant AgentがCart Mandateを作成（Merchant署名）→ Userが承認してUser署名を追加"
+            ["merchant_agent", "merchant", "user"],
+            "Merchant Agent がCart Mandate作成 → Merchant が検証・署名 → User が承認してUser署名を追加"
         )
 
     st.markdown("""
-    Merchant AgentがCart Mandateを作成し、Merchant署名を追加します。
-    その後、ユーザーがカート内容を確認してUser署名を追加します。
+    **AP2プロトコル準拠フロー:**
+    1. **Merchant Agent** がCart Mandateを作成（署名なし）
+    2. **Merchant** がCart Mandateを検証してMerchant署名を追加
+    3. **User** がカート内容を確認してUser署名を追加
     """)
 
     col1, col2 = st.columns(2)
@@ -436,13 +455,19 @@ def step3_cart_creation():
                         country=country
                     )
 
-                    cart_mandates = st.session_state.merchant_agent.create_signed_cart_mandate(
+                    # Merchant AgentがCart Mandateを作成（署名なし）
+                    cart_mandates = st.session_state.merchant_agent.create_cart_mandate(
                         intent_mandate=st.session_state.intent_mandate,
                         products=[st.session_state.products[selected_product_idx]],
                         shipping_address=shipping_address
                     )
 
-                    st.session_state.cart_mandate = cart_mandates[0]
+                    unsigned_cart = cart_mandates[0]
+
+                    # MerchantがCart Mandateを検証して署名
+                    signed_cart = st.session_state.merchant.sign_cart_mandate(unsigned_cart)
+
+                    st.session_state.cart_mandate = signed_cart
                     st.rerun()
 
     with col2:

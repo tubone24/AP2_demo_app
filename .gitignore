@@ -163,3 +163,5 @@ cython_debug/
 #.idea/
 
 keys
+
+demo_receipt.pdf

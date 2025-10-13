@@ -1,0 +1,398 @@
+"""
+AP2 Protocol - Merchant Payment Processor
+決済処理を担当するエンティティ
+Credential Providerと連携して実際の決済を実行
+"""
+
+from datetime import datetime
+from typing import Optional
+import uuid
+import time
+
+from ap2_types import (
+    CartMandate,
+    PaymentMandate,
+    TransactionResult,
+    TransactionStatus,
+    Amount
+)
+from ap2_crypto import KeyManager, SignatureManager
+
+
+class MerchantPaymentProcessor:
+    """
+    Merchant Payment Processor (決済処理業者)
+
+    AP2プロトコルにおいて、実際の決済処理を担当するエンティティ。
+    Credential Providerから取得した支払い情報を使用して、
+    トランザクションの承認とキャプチャを実行する。
+
+    役割:
+    - Payment Mandateの検証
+    - トランザクションの承認（Authorization）
+    - トランザクションのキャプチャ（Capture）
+    - 決済ネットワークとの通信（シミュレート）
+    - トランザクション状態の管理
+    """
+
+    def __init__(self, processor_id: str, processor_name: str, passphrase: str):
+        """
+        Payment Processorを初期化
+
+        Args:
+            processor_id: 決済処理業者ID
+            processor_name: 決済処理業者名
+            passphrase: 秘密鍵を保護するパスフレーズ
+        """
+        self.processor_id = processor_id
+        self.processor_name = processor_name
+
+        # 鍵管理
+        self.key_manager = KeyManager()
+        try:
+            self.private_key = self.key_manager.load_private_key_encrypted(
+                processor_id,
+                passphrase
+            )
+            self.public_key = self.private_key.public_key()
+        except:
+            self.private_key, self.public_key = self.key_manager.generate_key_pair(processor_id)
+            self.key_manager.save_private_key_encrypted(processor_id, self.private_key, passphrase)
+            self.key_manager.save_public_key(processor_id, self.public_key)
+
+        self.signature_manager = SignatureManager(self.key_manager)
+
+        # トランザクション履歴
+        self.transactions = {}
+
+        print(f"[Payment Processor] 初期化完了: {processor_name} (ID: {processor_id})")
+
+    def validate_payment_mandate(self, payment_mandate: PaymentMandate, cart_mandate: CartMandate) -> bool:
+        """
+        Payment Mandateを検証
+
+        Args:
+            payment_mandate: 検証するPayment Mandate
+            cart_mandate: 対応するCart Mandate
+
+        Returns:
+            検証が成功したかどうか
+        """
+        print(f"[Payment Processor] Payment Mandateを検証中...")
+
+        # 1. Cart Mandate IDが一致するか確認
+        if payment_mandate.cart_mandate_id != cart_mandate.id:
+            print(f"[Payment Processor] エラー: Cart Mandate IDが一致しません")
+            return False
+
+        # 2. 金額が一致するか確認
+        if payment_mandate.amount.value != cart_mandate.total.value:
+            print(f"[Payment Processor] エラー: 金額が一致しません")
+            return False
+
+        # 3. 通貨が一致するか確認
+        if payment_mandate.amount.currency != cart_mandate.total.currency:
+            print(f"[Payment Processor] エラー: 通貨が一致しません")
+            return False
+
+        # 4. 支払い方法が有効か確認
+        if not payment_mandate.payment_method:
+            print(f"[Payment Processor] エラー: 支払い方法が設定されていません")
+            return False
+
+        print(f"[Payment Processor] 検証完了: Payment Mandateは有効です")
+        return True
+
+    def authorize_transaction(
+        self,
+        payment_mandate: PaymentMandate,
+        cart_mandate: CartMandate
+    ) -> TransactionResult:
+        """
+        トランザクションを承認（Authorization）
+
+        Args:
+            payment_mandate: Payment Mandate
+            cart_mandate: Cart Mandate
+
+        Returns:
+            トランザクション結果
+        """
+        print(f"[Payment Processor] トランザクションの承認を開始...")
+
+        # Payment Mandateを検証
+        if not self.validate_payment_mandate(payment_mandate, cart_mandate):
+            raise ValueError("Payment Mandateの検証に失敗しました")
+
+        # トランザクションIDを生成
+        transaction_id = f"txn_{uuid.uuid4().hex[:12]}"
+
+        # 決済ネットワークとの通信をシミュレート
+        print(f"[Payment Processor] 決済ネットワークに承認リクエストを送信中...")
+        time.sleep(0.5)  # シミュレート用の遅延
+
+        # 承認処理をシミュレート（常に成功）
+        authorized_at = datetime.utcnow().isoformat() + "Z"
+
+        # トランザクション結果を作成
+        transaction_result = TransactionResult(
+            id=transaction_id,
+            status=TransactionStatus.AUTHORIZED,
+            cart_mandate_id=cart_mandate.id,
+            payment_mandate_id=payment_mandate.id,
+            amount=payment_mandate.amount,
+            authorized_at=authorized_at,
+            captured_at=None,
+            receipt_url=None
+        )
+
+        # トランザクションを保存
+        self.transactions[transaction_id] = transaction_result
+
+        print(f"[Payment Processor] トランザクション承認完了: {transaction_id}")
+        print(f"[Payment Processor] 金額: {payment_mandate.amount.currency} {payment_mandate.amount.value}")
+        print(f"[Payment Processor] 支払い方法: {payment_mandate.payment_method.brand.upper()} ****{payment_mandate.payment_method.last4}")
+
+        return transaction_result
+
+    def capture_transaction(self, transaction_id: str) -> TransactionResult:
+        """
+        トランザクションをキャプチャ（実際の決済実行）
+
+        Args:
+            transaction_id: トランザクションID
+
+        Returns:
+            更新されたトランザクション結果
+        """
+        print(f"[Payment Processor] トランザクションのキャプチャを開始: {transaction_id}")
+
+        # トランザクションが存在するか確認
+        if transaction_id not in self.transactions:
+            raise ValueError(f"トランザクションが見つかりません: {transaction_id}")
+
+        transaction = self.transactions[transaction_id]
+
+        # トランザクションが承認済みか確認
+        if transaction.status != TransactionStatus.AUTHORIZED:
+            raise ValueError(f"トランザクションは承認済みではありません: {transaction.status}")
+
+        # 決済ネットワークとの通信をシミュレート
+        print(f"[Payment Processor] 決済ネットワークにキャプチャリクエストを送信中...")
+        time.sleep(0.5)  # シミュレート用の遅延
+
+        # キャプチャ処理をシミュレート（常に成功）
+        captured_at = datetime.utcnow().isoformat() + "Z"
+
+        # 領収書URLを生成（実際はS3などのストレージURLを使用）
+        receipt_url = f"https://receipts.ap2-demo.com/{transaction_id}.pdf"
+
+        # トランザクション結果を更新
+        transaction.status = TransactionStatus.CAPTURED
+        transaction.captured_at = captured_at
+        transaction.receipt_url = receipt_url
+
+        print(f"[Payment Processor] トランザクションキャプチャ完了: {transaction_id}")
+        print(f"[Payment Processor] 決済完了日時: {captured_at}")
+        print(f"[Payment Processor] 領収書URL: {receipt_url}")
+
+        return transaction
+
+    def refund_transaction(self, transaction_id: str, amount: Optional[Amount] = None) -> TransactionResult:
+        """
+        トランザクションを返金
+
+        Args:
+            transaction_id: トランザクションID
+            amount: 返金額（Noneの場合は全額返金）
+
+        Returns:
+            更新されたトランザクション結果
+        """
+        print(f"[Payment Processor] トランザクションの返金を開始: {transaction_id}")
+
+        # トランザクションが存在するか確認
+        if transaction_id not in self.transactions:
+            raise ValueError(f"トランザクションが見つかりません: {transaction_id}")
+
+        transaction = self.transactions[transaction_id]
+
+        # トランザクションがキャプチャ済みか確認
+        if transaction.status != TransactionStatus.CAPTURED:
+            raise ValueError(f"トランザクションはキャプチャ済みではありません: {transaction.status}")
+
+        # 返金額を決定
+        refund_amount = amount if amount else transaction.amount
+
+        # 決済ネットワークとの通信をシミュレート
+        print(f"[Payment Processor] 決済ネットワークに返金リクエストを送信中...")
+        time.sleep(0.5)  # シミュレート用の遅延
+
+        # 返金処理をシミュレート（常に成功）
+        refunded_at = datetime.utcnow().isoformat() + "Z"
+
+        # トランザクション結果を更新
+        transaction.status = TransactionStatus.REFUNDED
+
+        print(f"[Payment Processor] トランザクション返金完了: {transaction_id}")
+        print(f"[Payment Processor] 返金額: {refund_amount.currency} {refund_amount.value}")
+        print(f"[Payment Processor] 返金日時: {refunded_at}")
+
+        return transaction
+
+    def get_transaction(self, transaction_id: str) -> Optional[TransactionResult]:
+        """
+        トランザクション情報を取得
+
+        Args:
+            transaction_id: トランザクションID
+
+        Returns:
+            トランザクション結果（存在しない場合はNone）
+        """
+        return self.transactions.get(transaction_id)
+
+    def verify_processor_signature(self, transaction_result: TransactionResult, signature: str) -> bool:
+        """
+        Payment Processor署名を検証
+
+        Args:
+            transaction_result: トランザクション結果
+            signature: 検証する署名
+
+        Returns:
+            署名が有効かどうか
+        """
+        transaction_data = {
+            "id": transaction_result.id,
+            "status": transaction_result.status.value,
+            "amount": {
+                "value": transaction_result.amount.value,
+                "currency": transaction_result.amount.currency
+            },
+            "authorized_at": transaction_result.authorized_at,
+            "captured_at": transaction_result.captured_at
+        }
+
+        return self.signature_manager.verify_signature(
+            transaction_data,
+            signature
+        )
+
+
+def demo_payment_processor():
+    """Payment Processorのデモ"""
+    from merchant import Merchant
+    from secure_merchant_agent import SecureMerchantAgent
+    from ap2_types import IntentMandate, IntentConstraints, Address, CardPaymentMethod
+    from datetime import datetime, timedelta
+
+    print("=== Payment Processor Demo ===\n")
+
+    # Merchant Agentを初期化
+    merchant_agent = SecureMerchantAgent(
+        agent_id="merchant_agent_demo",
+        merchant_name="Demo Running Shoes Store",
+        merchant_id="merchant_demo_001",
+        passphrase="merchant_agent_pass"
+    )
+
+    # Merchantを初期化
+    merchant = Merchant(
+        merchant_id="merchant_demo_001",
+        merchant_name="Demo Running Shoes Store",
+        passphrase="merchant_secure_pass"
+    )
+
+    # Payment Processorを初期化
+    payment_processor = MerchantPaymentProcessor(
+        processor_id="processor_demo_001",
+        processor_name="Demo Payment Processor",
+        passphrase="processor_secure_pass"
+    )
+
+    # Intent Mandateを作成
+    intent_mandate = IntentMandate(
+        id="intent_001",
+        type="IntentMandate",
+        version="1.0",
+        user_id="user_demo_001",
+        user_public_key="dummy_public_key",
+        intent="ランニングシューズを購入したい",
+        constraints=IntentConstraints(
+            valid_until=(datetime.utcnow() + timedelta(hours=24)).isoformat(),
+            max_amount=Amount(value="100.00", currency="USD"),
+            brands=["Nike", "Adidas"]
+        ),
+        created_at=datetime.utcnow().isoformat(),
+        expires_at=(datetime.utcnow() + timedelta(hours=24)).isoformat()
+    )
+
+    # 商品を検索
+    products = merchant_agent.search_products(intent_mandate)
+
+    # Cart Mandateを作成
+    shipping_address = Address(
+        street="123 Main Street",
+        city="San Francisco",
+        state="CA",
+        postal_code="94105",
+        country="US"
+    )
+
+    cart_mandates = merchant_agent.create_cart_mandate(
+        intent_mandate=intent_mandate,
+        products=[products[0]],
+        shipping_address=shipping_address
+    )
+
+    cart_mandate = cart_mandates[0]
+
+    # MerchantがCart Mandateに署名
+    print("\n--- MerchantがCart Mandateに署名 ---")
+    signed_cart = merchant.sign_cart_mandate(cart_mandate)
+
+    # Payment Mandateを作成（簡易版）
+    print("\n--- Payment Mandateを作成 ---")
+    payment_method = CardPaymentMethod(
+        type='card',
+        token='tok_demo_xxxxx',
+        last4='4242',
+        brand='visa',
+        expiry_month=12,
+        expiry_year=2026,
+        holder_name='Demo User'
+    )
+
+    payment_mandate = PaymentMandate(
+        id=f"payment_{uuid.uuid4().hex[:12]}",
+        type="PaymentMandate",
+        version="1.0",
+        cart_mandate_id=signed_cart.id,
+        credential_provider_id="cp_demo_001",
+        payment_method=payment_method,
+        amount=signed_cart.total,
+        created_at=datetime.utcnow().isoformat()
+    )
+
+    print(f"Payment Mandate ID: {payment_mandate.id}")
+    print(f"支払い方法: {payment_method.brand.upper()} ****{payment_method.last4}")
+
+    # トランザクションを承認
+    print("\n--- トランザクションを承認 ---")
+    transaction = payment_processor.authorize_transaction(payment_mandate, signed_cart)
+
+    print(f"\nトランザクションID: {transaction.id}")
+    print(f"ステータス: {transaction.status.value}")
+
+    # トランザクションをキャプチャ
+    print("\n--- トランザクションをキャプチャ ---")
+    captured_transaction = payment_processor.capture_transaction(transaction.id)
+
+    print(f"\nトランザクションID: {captured_transaction.id}")
+    print(f"ステータス: {captured_transaction.status.value}")
+    print(f"領収書URL: {captured_transaction.receipt_url}")
+
+
+if __name__ == "__main__":
+    demo_payment_processor()
