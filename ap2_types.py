@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Any, Literal
 from datetime import datetime
 from enum import Enum
+from decimal import Decimal
 
 
 # ========================================
@@ -24,12 +25,81 @@ class Signature:
 
 @dataclass
 class Amount:
-    """金額"""
+    """金額（精度保証のためDecimalを使用）"""
     value: str  # 数値を文字列で表現（精度保証のため）
     currency: str  # ISO 4217通貨コード（例: "USD", "JPY"）
 
     def __str__(self) -> str:
         return f"{self.currency} {self.value}"
+
+    def to_decimal(self) -> Decimal:
+        """
+        文字列からDecimalに変換
+
+        Returns:
+            Decimal: 正確な金額表現
+        """
+        return Decimal(self.value)
+
+    @staticmethod
+    def from_decimal(amount: Decimal, currency: str) -> 'Amount':
+        """
+        DecimalからAmountを作成
+
+        Args:
+            amount: Decimal形式の金額
+            currency: 通貨コード
+
+        Returns:
+            Amount: Amount オブジェクト
+        """
+        # Decimalを文字列に変換（精度を保つ）
+        return Amount(value=str(amount), currency=currency)
+
+    def __add__(self, other: 'Amount') -> 'Amount':
+        """金額の加算"""
+        if self.currency != other.currency:
+            raise ValueError(f"通貨が一致しません: {self.currency} != {other.currency}")
+        result = self.to_decimal() + other.to_decimal()
+        return Amount.from_decimal(result, self.currency)
+
+    def __sub__(self, other: 'Amount') -> 'Amount':
+        """金額の減算"""
+        if self.currency != other.currency:
+            raise ValueError(f"通貨が一致しません: {self.currency} != {other.currency}")
+        result = self.to_decimal() - other.to_decimal()
+        return Amount.from_decimal(result, self.currency)
+
+    def __mul__(self, multiplier: int | Decimal) -> 'Amount':
+        """金額の乗算"""
+        if isinstance(multiplier, int):
+            multiplier = Decimal(multiplier)
+        result = self.to_decimal() * multiplier
+        return Amount.from_decimal(result, self.currency)
+
+    def __lt__(self, other: 'Amount') -> bool:
+        """金額の比較 <"""
+        if self.currency != other.currency:
+            raise ValueError(f"通貨が一致しません: {self.currency} != {other.currency}")
+        return self.to_decimal() < other.to_decimal()
+
+    def __le__(self, other: 'Amount') -> bool:
+        """金額の比較 <="""
+        if self.currency != other.currency:
+            raise ValueError(f"通貨が一致しません: {self.currency} != {other.currency}")
+        return self.to_decimal() <= other.to_decimal()
+
+    def __gt__(self, other: 'Amount') -> bool:
+        """金額の比較 >"""
+        if self.currency != other.currency:
+            raise ValueError(f"通貨が一致しません: {self.currency} != {other.currency}")
+        return self.to_decimal() > other.to_decimal()
+
+    def __ge__(self, other: 'Amount') -> bool:
+        """金額の比較 >="""
+        if self.currency != other.currency:
+            raise ValueError(f"通貨が一致しません: {self.currency} != {other.currency}")
+        return self.to_decimal() >= other.to_decimal()
 
 
 class AgentType(Enum):
@@ -220,6 +290,7 @@ class PaymentMandate:
     payer_id: str
     payee_id: str
     created_at: str  # ISO 8601
+    expires_at: str  # ISO 8601 - Payment Mandateの有効期限
     risk_score: Optional[int] = None
     fraud_indicators: Optional[List[str]] = None
     user_signature: Optional[Signature] = None
@@ -262,6 +333,188 @@ class TransactionResult:
     error_message: Optional[str] = None
     receipt_url: Optional[str] = None
     receipt_data: Optional[ReceiptData] = None
+
+
+# ========================================
+# AP2プロトコル定数
+# ========================================
+
+# サポートされているプロトコルバージョン
+SUPPORTED_AP2_VERSIONS = ["0.1", "0.2", "1.0"]
+DEFAULT_AP2_VERSION = "0.1"
+
+
+# ========================================
+# バージョンネゴシエーション機能
+# ========================================
+
+def is_version_supported(version: str) -> bool:
+    """
+    指定されたバージョンがサポートされているか確認
+
+    Args:
+        version: チェックするバージョン文字列
+
+    Returns:
+        bool: サポートされている場合はTrue
+    """
+    return version in SUPPORTED_AP2_VERSIONS
+
+
+def get_compatible_version(requested_version: str, available_versions: Optional[List[str]] = None) -> Optional[str]:
+    """
+    互換性のあるバージョンを取得
+
+    Args:
+        requested_version: リクエストされたバージョン
+        available_versions: 利用可能なバージョンのリスト（Noneの場合はSUPPORTED_AP2_VERSIONSを使用）
+
+    Returns:
+        Optional[str]: 互換性のあるバージョン（見つからない場合はNone）
+    """
+    if available_versions is None:
+        available_versions = SUPPORTED_AP2_VERSIONS
+
+    # 完全一致を優先
+    if requested_version in available_versions:
+        return requested_version
+
+    # メジャーバージョンが一致する最新バージョンを探す
+    try:
+        requested_major = requested_version.split('.')[0]
+        compatible_versions = [
+            v for v in available_versions
+            if v.split('.')[0] == requested_major
+        ]
+
+        if compatible_versions:
+            # バージョン番号でソート（降順）して最新を返す
+            return sorted(compatible_versions, reverse=True)[0]
+
+    except (IndexError, ValueError):
+        pass
+
+    return None
+
+
+def validate_mandate_version(mandate_version: str, entity_name: str = "Entity") -> None:
+    """
+    Mandateのバージョンを検証
+
+    Args:
+        mandate_version: Mandateのバージョン文字列
+        entity_name: エンティティ名（エラーメッセージ用）
+
+    Raises:
+        VersionError: バージョンがサポートされていない場合
+    """
+    if not is_version_supported(mandate_version):
+        raise VersionError(
+            error_code=AP2ErrorCode.UNSUPPORTED_VERSION,
+            message=f"{entity_name}がサポートしていないバージョンです: {mandate_version}",
+            details={
+                "requested_version": mandate_version,
+                "supported_versions": SUPPORTED_AP2_VERSIONS,
+                "entity": entity_name
+            }
+        )
+
+
+# ========================================
+# AP2標準エラーコード
+# ========================================
+
+class AP2ErrorCode(Enum):
+    """AP2プロトコル標準エラーコード"""
+
+    # 署名関連エラー
+    INVALID_SIGNATURE = "invalid_signature"
+    MISSING_SIGNATURE = "missing_signature"
+    SIGNATURE_VERIFICATION_FAILED = "signature_verification_failed"
+
+    # Mandate関連エラー
+    EXPIRED_INTENT = "expired_intent"
+    EXPIRED_CART = "expired_cart"
+    EXPIRED_PAYMENT = "expired_payment"
+    INVALID_MANDATE_CHAIN = "invalid_mandate_chain"
+    MANDATE_NOT_FOUND = "mandate_not_found"
+
+    # 金額・制約関連エラー
+    AMOUNT_EXCEEDED = "amount_exceeded"
+    CONSTRAINT_VIOLATION = "constraint_violation"
+    INVALID_AMOUNT = "invalid_amount"
+
+    # 認証・認可エラー
+    UNAUTHORIZED = "unauthorized"
+    INSUFFICIENT_PERMISSIONS = "insufficient_permissions"
+    DEVICE_ATTESTATION_FAILED = "device_attestation_failed"
+
+    # バージョン関連エラー
+    UNSUPPORTED_VERSION = "unsupported_version"
+    VERSION_MISMATCH = "version_mismatch"
+
+    # トランザクション関連エラー
+    TRANSACTION_FAILED = "transaction_failed"
+    INSUFFICIENT_FUNDS = "insufficient_funds"
+    PAYMENT_METHOD_DECLINED = "payment_method_declined"
+
+    # 一般エラー
+    INVALID_REQUEST = "invalid_request"
+    INTERNAL_ERROR = "internal_error"
+    NETWORK_ERROR = "network_error"
+
+
+class AP2Exception(Exception):
+    """AP2プロトコル例外のベースクラス"""
+
+    def __init__(
+        self,
+        error_code: AP2ErrorCode,
+        message: str,
+        details: Optional[Dict[str, Any]] = None
+    ):
+        self.error_code = error_code
+        self.message = message
+        self.details = details or {}
+        super().__init__(f"[{error_code.value}] {message}")
+
+    def to_dict(self) -> Dict[str, Any]:
+        """エラーを辞書形式で返す"""
+        return {
+            "error_code": self.error_code.value,
+            "error_message": self.message,
+            "details": self.details
+        }
+
+
+class SignatureError(AP2Exception):
+    """署名関連エラー"""
+    pass
+
+
+class MandateError(AP2Exception):
+    """Mandate関連エラー"""
+    pass
+
+
+class AmountError(AP2Exception):
+    """金額関連エラー"""
+    pass
+
+
+class AuthorizationError(AP2Exception):
+    """認証・認可エラー"""
+    pass
+
+
+class VersionError(AP2Exception):
+    """バージョン関連エラー"""
+    pass
+
+
+class TransactionError(AP2Exception):
+    """トランザクション関連エラー"""
+    pass
 
 
 # ========================================

@@ -375,19 +375,28 @@ class SignatureManager:
     ) -> Signature:
         """
         Mandateに署名
-        
+
         Args:
             mandate: Mandateの辞書表現
             key_id: 使用する秘密鍵のID
-            
+
         Returns:
             Signature: 署名オブジェクト
         """
-        # 署名対象からsignatureフィールドを除外
+        # Intent Mandateの場合は、intentとconstraintsフィールドのみを署名対象にする
+        if mandate.get('type') == 'IntentMandate':
+            # intentとconstraintsのみを署名対象にする
+            signing_data = {
+                'intent': mandate.get('intent'),
+                'constraints': mandate.get('constraints')
+            }
+            return self.sign_data(signing_data, key_id)
+
+        # 他のMandateタイプの場合は、署名対象からsignatureフィールドを除外
         mandate_copy = mandate.copy()
         mandate_copy.pop('user_signature', None)
         mandate_copy.pop('merchant_signature', None)
-        
+
         return self.sign_data(mandate_copy, key_id)
     
     def verify_mandate_signature(
@@ -397,19 +406,28 @@ class SignatureManager:
     ) -> bool:
         """
         Mandateの署名を検証
-        
+
         Args:
             mandate: Mandateの辞書表現
             signature: 検証する署名
-            
+
         Returns:
             bool: 検証結果
         """
-        # 署名対象からsignatureフィールドを除外
+        # Intent Mandateの場合は、intentとconstraintsフィールドのみを検証対象にする
+        if mandate.get('type') == 'IntentMandate':
+            # intentとconstraintsのみを検証対象にする
+            verification_data = {
+                'intent': mandate.get('intent'),
+                'constraints': mandate.get('constraints')
+            }
+            return self.verify_signature(verification_data, signature)
+
+        # 他のMandateタイプの場合は、署名対象からsignatureフィールドを除外
         mandate_copy = mandate.copy()
         mandate_copy.pop('user_signature', None)
         mandate_copy.pop('merchant_signature', None)
-        
+
         return self.verify_signature(mandate_copy, signature)
 
 

@@ -14,7 +14,9 @@ from ap2_types import (
     PaymentMandate,
     TransactionResult,
     TransactionStatus,
-    Amount
+    Amount,
+    AP2ErrorCode,
+    MandateError
 )
 from ap2_crypto import KeyManager, SignatureManager
 
@@ -98,8 +100,28 @@ class MerchantPaymentProcessor:
 
         Returns:
             検証が成功したかどうか
+
+        Raises:
+            MandateError: Payment Mandateが期限切れの場合
         """
         print(f"[Payment Processor] Payment Mandateを検証中...")
+
+        # 0. Payment Mandateの有効期限をチェック
+        expires_at = datetime.fromisoformat(payment_mandate.expires_at.replace('Z', '+00:00'))
+        now = datetime.now(expires_at.tzinfo)
+
+        if now > expires_at:
+            raise MandateError(
+                error_code=AP2ErrorCode.EXPIRED_PAYMENT,
+                message=f"Payment Mandateは期限切れです: {payment_mandate.id}",
+                details={
+                    "payment_mandate_id": payment_mandate.id,
+                    "expired_at": payment_mandate.expires_at,
+                    "current_time": now.isoformat()
+                }
+            )
+
+        print(f"  ✓ Payment Mandate有効期限OK")
 
         # 1. Cart Mandate IDが一致するか確認
         if payment_mandate.cart_mandate_id != cart_mandate.id:
@@ -583,15 +605,24 @@ def demo_payment_processor():
         holder_name='Demo User'
     )
 
+    # Payment Mandateを作成（有効期限15分）
+    now = datetime.utcnow()
+    expires_at = now + timedelta(minutes=15)
+
     payment_mandate = PaymentMandate(
         id=f"payment_{uuid.uuid4().hex[:12]}",
         type="PaymentMandate",
         version="1.0",
         cart_mandate_id=signed_cart.id,
-        credential_provider_id="cp_demo_001",
+        intent_mandate_id=intent_mandate.id,
         payment_method=payment_method,
         amount=signed_cart.total,
-        created_at=datetime.utcnow().isoformat()
+        transaction_type="human_not_present",
+        agent_involved=False,
+        payer_id="user_demo_001",
+        payee_id="merchant_demo_001",
+        created_at=now.isoformat() + 'Z',
+        expires_at=expires_at.isoformat() + 'Z'
     )
 
     print(f"Payment Mandate ID: {payment_mandate.id}")

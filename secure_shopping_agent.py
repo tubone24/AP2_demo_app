@@ -18,7 +18,12 @@ from ap2_types import (
     AgentType,
     CardPaymentMethod,
     TransactionResult,
-    TransactionStatus
+    TransactionStatus,
+    AP2ErrorCode,
+    MandateError,
+    VersionError,
+    validate_mandate_version,
+    DEFAULT_AP2_VERSION
 )
 
 from ap2_crypto import KeyManager, SignatureManager
@@ -161,25 +166,49 @@ class SecureShoppingAgent:
         
         return intent_mandate
     
+    def _verify_intent_mandate_expiration(self, intent_mandate: IntentMandate) -> None:
+        """
+        Intent Mandateの有効期限を検証
+
+        Args:
+            intent_mandate: 検証するIntent Mandate
+
+        Raises:
+            MandateError: 期限切れの場合
+        """
+        expires_at = datetime.fromisoformat(intent_mandate.expires_at.replace('Z', '+00:00'))
+        now = datetime.now(expires_at.tzinfo)
+
+        if now > expires_at:
+            raise MandateError(
+                error_code=AP2ErrorCode.EXPIRED_INTENT,
+                message=f"Intent Mandateは期限切れです: {intent_mandate.id}",
+                details={
+                    "intent_mandate_id": intent_mandate.id,
+                    "expired_at": intent_mandate.expires_at,
+                    "current_time": now.isoformat()
+                }
+            )
+
     def _verify_intent_mandate(self, intent_mandate: IntentMandate) -> bool:
         """Intent Mandateの署名を検証"""
         print(f"[{self.agent_name}] Intent Mandateの署名を検証中...")
-        
+
         if not intent_mandate.user_signature:
             print(f"  ✗ ユーザー署名がありません")
             return False
-        
+
         mandate_dict = asdict(intent_mandate)
         is_valid = self.signature_manager.verify_mandate_signature(
             mandate_dict,
             intent_mandate.user_signature
         )
-        
+
         if is_valid:
             print(f"  ✓ Intent Mandateの署名は有効です")
         else:
             print(f"  ✗ Intent Mandateの署名が無効です")
-        
+
         return is_valid
     
     def verify_cart_mandate(
@@ -294,6 +323,10 @@ class SecureShoppingAgent:
         """
         print(f"\n[{self.agent_name}] Payment Mandateを作成中...")
 
+        # Intent Mandateの有効期限を検証
+        self._verify_intent_mandate_expiration(intent_mandate)
+        print(f"  ✓ Intent Mandate有効期限OK")
+
         if device_attestation:
             print(f"  ✓ Device Attestation検出: {device_attestation.device_id}")
             print(f"    - Platform: {device_attestation.platform}")
@@ -302,6 +335,10 @@ class SecureShoppingAgent:
         # Payment IDが指定されていない場合は新規生成
         if not payment_id:
             payment_id = f"payment_{uuid.uuid4().hex}"
+
+        # Payment Mandateの有効期限を設定（作成時刻から15分）
+        now = datetime.utcnow()
+        expires_at = now + timedelta(minutes=15)
 
         payment_mandate = PaymentMandate(
             id=payment_id,
@@ -315,7 +352,8 @@ class SecureShoppingAgent:
             agent_involved=True,
             payer_id=user_id,
             payee_id=cart_mandate.merchant_id,
-            created_at=datetime.utcnow().isoformat() + 'Z',
+            created_at=now.isoformat() + 'Z',
+            expires_at=expires_at.isoformat() + 'Z',
             device_attestation=device_attestation  # AP2ステップ23: Device Attestationを含める
         )
         

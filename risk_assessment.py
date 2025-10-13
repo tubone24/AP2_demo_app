@@ -6,9 +6,12 @@ Payment Mandateのリスクスコアと不正指標を評価
 from typing import List, Dict, Optional, Tuple
 from datetime import datetime, timedelta
 from dataclasses import dataclass
+from decimal import Decimal
+
 from ap2_types import (
     PaymentMandate, CartMandate, IntentMandate,
-    PaymentMethod, Amount
+    PaymentMethod, Amount,
+    AP2ErrorCode, MandateError
 )
 
 
@@ -68,7 +71,25 @@ class RiskAssessmentEngine:
 
         Returns:
             RiskAssessmentResult: リスク評価結果
+
+        Raises:
+            MandateError: Intent Mandateが期限切れの場合
         """
+        # Intent Mandateの有効期限を検証
+        expires_at = datetime.fromisoformat(intent_mandate.expires_at.replace('Z', '+00:00'))
+        now = datetime.now(expires_at.tzinfo)
+
+        if now > expires_at:
+            raise MandateError(
+                error_code=AP2ErrorCode.EXPIRED_INTENT,
+                message=f"Intent Mandateは期限切れです: {intent_mandate.id}",
+                details={
+                    "intent_mandate_id": intent_mandate.id,
+                    "expired_at": intent_mandate.expires_at,
+                    "current_time": now.isoformat()
+                }
+            )
+
         risk_factors = {}
         fraud_indicators = []
 
@@ -173,30 +194,38 @@ class RiskAssessmentEngine:
         Returns:
             0-80のリスクスコア（高額取引用に上限を引き上げ）
         """
-        amount_value = float(amount.value)
-        max_amount_value = float(intent_mandate.constraints.max_amount.value)
+        # Decimalで精度を保証
+        amount_value = amount.to_decimal()
+        max_amount_value = intent_mandate.constraints.max_amount.to_decimal()
 
         risk = 0
 
         # 絶対額によるリスク（段階的に評価）
-        if amount_value >= self.SUSPICIOUS_VALUE_THRESHOLD:  # 10,000ドル以上
+        threshold_suspicious = Decimal(str(self.SUSPICIOUS_VALUE_THRESHOLD))
+        threshold_extreme = Decimal(str(self.EXTREME_VALUE_THRESHOLD))
+        threshold_very_high = Decimal(str(self.VERY_HIGH_VALUE_THRESHOLD))
+        threshold_high = Decimal(str(self.HIGH_VALUE_THRESHOLD))
+        threshold_moderate = Decimal(str(self.MODERATE_VALUE_THRESHOLD))
+        threshold_fifty = Decimal("50.0")
+
+        if amount_value >= threshold_suspicious:  # 10,000ドル以上
             risk += 60  # 極めて高リスク
-        elif amount_value >= self.EXTREME_VALUE_THRESHOLD:  # 5,000ドル以上
+        elif amount_value >= threshold_extreme:  # 5,000ドル以上
             risk += 45  # 非常に高リスク
-        elif amount_value >= self.VERY_HIGH_VALUE_THRESHOLD:  # 1,000ドル以上
+        elif amount_value >= threshold_very_high:  # 1,000ドル以上
             risk += 35  # 高リスク
-        elif amount_value >= self.HIGH_VALUE_THRESHOLD:  # 500ドル以上
+        elif amount_value >= threshold_high:  # 500ドル以上
             risk += 25  # 中リスク
-        elif amount_value >= self.MODERATE_VALUE_THRESHOLD:  # 100ドル以上
+        elif amount_value >= threshold_moderate:  # 100ドル以上
             risk += 10  # 低〜中リスク
-        elif amount_value >= 50.0:  # 50ドル以上
+        elif amount_value >= threshold_fifty:  # 50ドル以上
             risk += 5   # 低リスク
 
         # Intent制約上限との比率
-        ratio = amount_value / max_amount_value if max_amount_value > 0 else 0
-        if ratio >= 0.95:  # 上限の95%以上
+        ratio = amount_value / max_amount_value if max_amount_value > Decimal("0") else Decimal("0")
+        if ratio >= Decimal("0.95"):  # 上限の95%以上
             risk += 10
-        elif ratio >= 0.80:  # 上限の80%以上
+        elif ratio >= Decimal("0.80"):  # 上限の80%以上
             risk += 5
 
         return min(risk, 80)  # 上限を40から80に引き上げ
@@ -213,8 +242,8 @@ class RiskAssessmentEngine:
         Returns:
             0または50（違反があれば高リスク）
         """
-        # 金額オーバー
-        if float(payment_mandate.amount.value) > float(intent_mandate.constraints.max_amount.value):
+        # 金額オーバー（Decimalで精度を保証）
+        if payment_mandate.amount.to_decimal() > intent_mandate.constraints.max_amount.to_decimal():
             return 50
 
         # 通貨不一致
@@ -324,12 +353,14 @@ class RiskAssessmentEngine:
             elif len(recent_transactions) >= 3:
                 risk += 15
 
-            # 金額の急激な変化
+            # 金額の急激な変化（Decimalで精度を保証）
             if history:
-                avg_amount = sum(float(t['amount']) for t in history[-5:]) / min(len(history), 5)
-                current_amount = float(amount.value)
+                # 過去5件の取引金額の平均をDecimalで計算
+                recent_amounts = [Decimal(t['amount']) for t in history[-5:]]
+                avg_amount = sum(recent_amounts) / Decimal(min(len(history), 5))
+                current_amount = amount.to_decimal()
 
-                if current_amount > avg_amount * 3:
+                if current_amount > avg_amount * Decimal("3"):
                     # 平均の3倍以上（異常パターン）
                     risk += 15
 
@@ -536,7 +567,10 @@ def demo_risk_assessment():
         created_at=datetime.now().isoformat()
     )
 
-    # Payment Mandateを作成
+    # Payment Mandateを作成（有効期限15分）
+    now = datetime.now()
+    expires_at = now + timedelta(minutes=15)
+
     payment_mandate = PaymentMandate(
         id="payment_001",
         type="PaymentMandate",
@@ -557,7 +591,8 @@ def demo_risk_assessment():
         agent_involved=True,
         payer_id="user_001",
         payee_id="merchant_001",
-        created_at=datetime.now().isoformat()
+        created_at=now.isoformat(),
+        expires_at=expires_at.isoformat()
     )
 
     # リスク評価を実行

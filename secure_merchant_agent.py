@@ -7,6 +7,7 @@ import uuid
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
 from dataclasses import asdict
+from decimal import Decimal, ROUND_HALF_UP
 
 from ap2_types import (
     CartMandate,
@@ -16,7 +17,12 @@ from ap2_types import (
     ShippingInfo,
     Address,
     AgentIdentity,
-    AgentType
+    AgentType,
+    AP2ErrorCode,
+    MandateError,
+    AmountError,
+    DEFAULT_AP2_VERSION,
+    SUPPORTED_AP2_VERSIONS
 )
 
 from ap2_crypto import KeyManager, SignatureManager
@@ -174,6 +180,30 @@ class SecureMerchantAgent:
             ),
         ]
     
+    def _verify_intent_mandate_expiration(self, intent_mandate: IntentMandate) -> None:
+        """
+        Intent Mandateの有効期限を検証
+
+        Args:
+            intent_mandate: 検証するIntent Mandate
+
+        Raises:
+            MandateError: 期限切れの場合
+        """
+        expires_at = datetime.fromisoformat(intent_mandate.expires_at.replace('Z', '+00:00'))
+        now = datetime.now(expires_at.tzinfo)
+
+        if now > expires_at:
+            raise MandateError(
+                error_code=AP2ErrorCode.EXPIRED_INTENT,
+                message=f"Intent Mandateは期限切れです: {intent_mandate.id}",
+                details={
+                    "intent_mandate_id": intent_mandate.id,
+                    "expired_at": intent_mandate.expires_at,
+                    "current_time": now.isoformat()
+                }
+            )
+
     def search_products(
         self,
         intent_mandate: IntentMandate,
@@ -181,38 +211,45 @@ class SecureMerchantAgent:
     ) -> List[Product]:
         """
         Intent Mandateの制約に基づいて商品を検索
-        
+
         Args:
             intent_mandate: Intent Mandate
             query: 検索クエリ（オプション）
-            
+
         Returns:
             List[Product]: マッチした商品のリスト
+
+        Raises:
+            MandateError: Intent Mandateが期限切れの場合
         """
         print(f"\n[{self.merchant_name}] 商品検索を実行:")
         print(f"  意図: {intent_mandate.intent}")
-        
+
+        # Intent Mandateの有効期限を検証
+        self._verify_intent_mandate_expiration(intent_mandate)
+        print(f"  ✓ Intent Mandate有効期限OK")
+
         results = []
         constraints = intent_mandate.constraints
-        
+
         for product in self.catalog:
             # カテゴリーチェック
             if constraints.categories and product.category not in constraints.categories:
                 continue
-            
+
             # ブランドチェック
             if constraints.brands and product.brand not in constraints.brands:
                 continue
-            
-            # 価格チェック
+
+            # 価格チェック（Decimalを使用）
             if constraints.max_amount:
-                product_price = float(product.price.value)
-                max_price = float(constraints.max_amount.value)
+                product_price = product.price.to_decimal()
+                max_price = constraints.max_amount.to_decimal()
                 if product_price > max_price:
                     continue
-            
+
             results.append(product)
-        
+
         print(f"  → {len(results)}件の商品が見つかりました")
         return results
     
@@ -245,9 +282,12 @@ class SecureMerchantAgent:
         if not products:
             raise ValueError("商品が選択されていません")
 
-        # すべてのCart Itemを作成
+        # Intent Mandateの有効期限を検証
+        self._verify_intent_mandate_expiration(intent_mandate)
+
+        # すべてのCart Itemを作成（Decimalで精度を保証）
         cart_items = []
-        subtotal_value = 0.0
+        subtotal_value = Decimal("0.00")
 
         for product in products:
             quantity = quantities.get(product.id, 1) if quantities else 1
@@ -255,13 +295,15 @@ class SecureMerchantAgent:
             if quantity <= 0:
                 continue  # 数量が0以下の商品はスキップ
 
-            # Cart Itemを作成
+            # Cart Itemを作成（Decimalを使用）
             unit_price = product.price
-            item_total_value = float(unit_price.value) * quantity
-            total_price = Amount(
-                value=f"{item_total_value:.2f}",
-                currency=unit_price.currency
-            )
+            unit_price_decimal = unit_price.to_decimal()
+            item_total_decimal = unit_price_decimal * Decimal(quantity)
+
+            # Decimal を ROUND_HALF_UP で2桁に丸める
+            item_total_decimal = item_total_decimal.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+            total_price = Amount.from_decimal(item_total_decimal, unit_price.currency)
 
             cart_item = CartItem(
                 id=product.id,
@@ -274,17 +316,20 @@ class SecureMerchantAgent:
             )
 
             cart_items.append(cart_item)
-            subtotal_value += item_total_value
+            subtotal_value += item_total_decimal
 
-            print(f"  ✓ 商品追加: {cart_item.name} x {quantity} = ${item_total_value:.2f}")
+            print(f"  ✓ 商品追加: {cart_item.name} x {quantity} = ${item_total_decimal}")
 
         if not cart_items:
             raise ValueError("有効な商品がありません")
 
-        # 金額計算
-        subtotal = Amount(value=f"{subtotal_value:.2f}", currency="USD")
-        tax_amount = subtotal_value * self.default_tax_rate
-        tax = Amount(value=f"{tax_amount:.2f}", currency="USD")
+        # 金額計算（Decimalで精度を保証）
+        subtotal = Amount.from_decimal(subtotal_value, "USD")
+
+        # 税額計算（Decimal）
+        tax_rate_decimal = Decimal(str(self.default_tax_rate))
+        tax_amount_decimal = (subtotal_value * tax_rate_decimal).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        tax = Amount.from_decimal(tax_amount_decimal, "USD")
 
         # 配送情報
         shipping_info = ShippingInfo(
@@ -300,13 +345,10 @@ class SecureMerchantAgent:
             estimated_delivery=(datetime.utcnow() + timedelta(days=5)).isoformat() + 'Z'
         )
 
-        # 合計金額
-        total_value = (
-            subtotal_value +
-            tax_amount +
-            float(shipping_info.cost.value)
-        )
-        total = Amount(value=f"{total_value:.2f}", currency="USD")
+        # 合計金額（Decimalで精度を保証）
+        shipping_cost_decimal = self.default_shipping_cost.to_decimal()
+        total_value_decimal = subtotal_value + tax_amount_decimal + shipping_cost_decimal
+        total = Amount.from_decimal(total_value_decimal, "USD")
 
         # Cart Mandateを作成（署名なし）
         now = datetime.utcnow()
@@ -331,9 +373,9 @@ class SecureMerchantAgent:
         print(f"\n  ✓ Cart Mandate作成完了: {cart_mandate.id}")
         print(f"    商品数: {len(cart_items)}点")
         print(f"    小計: ${subtotal_value:.2f}")
-        print(f"    税金: ${tax_amount:.2f}")
-        print(f"    配送料: ${float(shipping_info.cost.value):.2f}")
-        print(f"    合計: ${total_value:.2f}")
+        print(f"    税金: ${tax_amount_decimal:.2f}")
+        print(f"    配送料: ${shipping_cost_decimal:.2f}")
+        print(f"    合計: ${total_value_decimal:.2f}")
         print(f"    ※ Merchant署名は Merchant エンティティが追加します")
 
         return cart_mandate
@@ -397,23 +439,27 @@ class SecureMerchantAgent:
             
             print(f"  ✓ User署名は有効です")
         
-        # 4. 金額の整合性チェック
+        # 4. 金額の整合性チェック（Decimalで精度を保証）
         calculated_subtotal = sum(
-            float(item.total_price.value) for item in cart_mandate.items
+            item.total_price.to_decimal() for item in cart_mandate.items
         )
-        
-        if abs(calculated_subtotal - float(cart_mandate.subtotal.value)) > 0.01:
+        expected_subtotal = cart_mandate.subtotal.to_decimal()
+
+        if abs(calculated_subtotal - expected_subtotal) > Decimal("0.01"):
             print(f"  ✗ 小計の計算が一致しません")
+            print(f"    計算値: {calculated_subtotal}, 期待値: {expected_subtotal}")
             return False
-        
+
         calculated_total = (
-            float(cart_mandate.subtotal.value) +
-            float(cart_mandate.tax.value) +
-            float(cart_mandate.shipping.cost.value)
+            cart_mandate.subtotal.to_decimal() +
+            cart_mandate.tax.to_decimal() +
+            cart_mandate.shipping.cost.to_decimal()
         )
-        
-        if abs(calculated_total - float(cart_mandate.total.value)) > 0.01:
+        expected_total = cart_mandate.total.to_decimal()
+
+        if abs(calculated_total - expected_total) > Decimal("0.01"):
             print(f"  ✗ 合計金額の計算が一致しません")
+            print(f"    計算値: {calculated_total}, 期待値: {expected_total}")
             return False
         
         print(f"  ✓ 金額の整合性OK")
