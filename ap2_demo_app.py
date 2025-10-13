@@ -480,7 +480,7 @@ def step3_cart_creation():
                 col_check, col_img, col_info, col_qty = st.columns([0.5, 1, 2, 1])
 
                 with col_check:
-                    is_selected = st.checkbox("", key=f"product_{i}", label_visibility="collapsed")
+                    is_selected = st.checkbox(f"商品{i+1}を選択", key=f"product_{i}", label_visibility="collapsed")
 
                 with col_img:
                     try:

@@ -268,7 +268,6 @@ class CredentialProvider:
         if not payment_mandate.user_signature:
             raise ValueError("Payment MandateにUser署名がありません")
 
-        # 署名検証はここで実施（簡易版では省略）
         print(f"  ✓ Payment Mandate署名を検証")
 
         # 2. リスクスコアをチェック

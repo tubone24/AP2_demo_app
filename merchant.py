@@ -91,6 +91,8 @@ class Merchant:
         Returns:
             署名されたCart Mandate
         """
+        from dataclasses import asdict
+
         # Cart Mandateを検証
         if not self.validate_cart_mandate(cart_mandate):
             raise ValueError("Cart Mandateの検証に失敗しました")
@@ -98,20 +100,11 @@ class Merchant:
         # Merchant署名を作成
         print(f"[Merchant] Cart MandateにMerchant署名を追加中...")
 
-        # Cart Mandateのデータを署名
-        cart_data = {
-            "id": cart_mandate.id,
-            "type": cart_mandate.type,
-            "version": cart_mandate.version,
-            "intent_mandate_id": cart_mandate.intent_mandate_id,
-            "merchant_id": cart_mandate.merchant_id,
-            "merchant_name": cart_mandate.merchant_name,
-            "total": str(cart_mandate.total),
-            "items_count": len(cart_mandate.items)
-        }
-
-        signature = self.signature_manager.sign_data(
-            cart_data,
+        # Cart Mandate全体を辞書に変換して署名
+        # sign_mandateメソッドが自動的にsignatureフィールドを除外してくれる
+        cart_dict = asdict(cart_mandate)
+        signature = self.signature_manager.sign_mandate(
+            cart_dict,
             self.merchant_id
         )
 
@@ -133,22 +126,16 @@ class Merchant:
         Returns:
             署名が有効かどうか
         """
+        from dataclasses import asdict
+
         if not cart_mandate.merchant_signature:
             return False
 
-        cart_data = {
-            "id": cart_mandate.id,
-            "type": cart_mandate.type,
-            "version": cart_mandate.version,
-            "intent_mandate_id": cart_mandate.intent_mandate_id,
-            "merchant_id": cart_mandate.merchant_id,
-            "merchant_name": cart_mandate.merchant_name,
-            "total": str(cart_mandate.total),
-            "items_count": len(cart_mandate.items)
-        }
-
-        return self.signature_manager.verify_signature(
-            cart_data,
+        # Cart Mandate全体を辞書に変換して検証
+        # verify_mandate_signatureメソッドが自動的にsignatureフィールドを除外してくれる
+        cart_dict = asdict(cart_mandate)
+        return self.signature_manager.verify_mandate_signature(
+            cart_dict,
             cart_mandate.merchant_signature
         )
 
