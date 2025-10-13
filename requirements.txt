@@ -1,0 +1,13 @@
+# AP2 Protocol サンプルコード - 必要なパッケージ
+
+# 暗号ライブラリ
+cryptography>=41.0.0
+
+# Pythonの基本非同期処理（標準ライブラリ）
+# asyncio - Python 3.7+に含まれる
+
+# 型ヒント用（Python 3.9+では標準ライブラリ）
+# typing - Python 3.5+に含まれる
+
+# データクラス（Python 3.7+では標準ライブラリ）
+# dataclasses - Python 3.7+に含まれる

@@ -1,0 +1,463 @@
+"""
+AP2 Protocol - Merchant Agent（暗号署名機能統合版）
+実際の暗号署名を使用したセキュアな実装
+"""
+
+import uuid
+from datetime import datetime, timedelta
+from typing import List, Optional, Dict, Any
+from dataclasses import asdict
+
+from ap2_types import (
+    CartMandate,
+    CartItem,
+    IntentMandate,
+    Amount,
+    ShippingInfo,
+    Address,
+    AgentIdentity,
+    AgentType
+)
+
+from ap2_crypto import KeyManager, SignatureManager
+
+
+class Product:
+    """商品モデル"""
+    
+    def __init__(
+        self,
+        id: str,
+        name: str,
+        description: str,
+        price: Amount,
+        category: str,
+        brand: str,
+        image_url: Optional[str] = None,
+        stock: int = 100
+    ):
+        self.id = id
+        self.name = name
+        self.description = description
+        self.price = price
+        self.category = category
+        self.brand = brand
+        self.image_url = image_url
+        self.stock = stock
+
+
+class SecureMerchantAgent:
+    """
+    Merchant Agent（暗号署名統合版）
+    実際の暗号署名を使用してCart Mandateを作成
+    """
+    
+    def __init__(
+        self,
+        agent_id: str,
+        merchant_name: str,
+        merchant_id: str,
+        passphrase: str
+    ):
+        """
+        Args:
+            agent_id: エージェントID
+            merchant_name: マーチャント名
+            merchant_id: マーチャントID
+            passphrase: 秘密鍵の暗号化に使用するパスフレーズ
+        """
+        self.agent_id = agent_id
+        self.merchant_name = merchant_name
+        self.merchant_id = merchant_id
+        
+        # 鍵管理と署名管理の初期化
+        self.key_manager = KeyManager()
+        self.signature_manager = SignatureManager(self.key_manager)
+        
+        # エージェント自身の鍵ペアを生成
+        self._initialize_agent_keys(passphrase)
+        
+        self.identity = AgentIdentity(
+            id=agent_id,
+            name=merchant_name,
+            type=AgentType.MERCHANT,
+            public_key=self.key_manager.public_key_to_base64(self.public_key)
+        )
+        
+        # 商品カタログを初期化
+        self.catalog = self._initialize_catalog()
+        
+        # デフォルトの配送情報
+        self.default_shipping_cost = Amount(value="10.00", currency="USD")
+        self.default_tax_rate = 0.08  # 8%
+    
+    def _initialize_agent_keys(self, passphrase: str):
+        """エージェントの鍵ペアを初期化"""
+        print(f"[{self.merchant_name}] 鍵ペアを初期化中...")
+        
+        try:
+            # 既存の鍵を読み込み
+            self.private_key = self.key_manager.load_private_key_encrypted(
+                self.agent_id,
+                passphrase
+            )
+            self.public_key = self.private_key.public_key()
+            print(f"  ✓ 既存の鍵を読み込みました")
+            
+        except Exception:
+            # 新しい鍵を生成
+            print(f"  新しい鍵ペアを生成します...")
+            self.private_key, self.public_key = self.key_manager.generate_key_pair(
+                self.agent_id
+            )
+            
+            # 暗号化して保存
+            self.key_manager.save_private_key_encrypted(
+                self.agent_id,
+                self.private_key,
+                passphrase
+            )
+            self.key_manager.save_public_key(self.agent_id, self.public_key)
+    
+    def _initialize_catalog(self) -> List[Product]:
+        """商品カタログを初期化"""
+        return [
+            Product(
+                id="prod_001",
+                name="Nike Air Zoom Pegasus 40",
+                description="軽量で快適なランニングシューズ。クッション性に優れています。",
+                price=Amount(value="89.99", currency="USD"),
+                category="running",
+                brand="Nike",
+                image_url="https://example.com/images/nike-pegasus.jpg"
+            ),
+            Product(
+                id="prod_002",
+                name="Adidas Ultraboost 22",
+                description="エネルギーリターンに優れた、人気のランニングシューズ。",
+                price=Amount(value="95.00", currency="USD"),
+                category="running",
+                brand="Adidas",
+                image_url="https://example.com/images/adidas-ultraboost.jpg"
+            ),
+            Product(
+                id="prod_003",
+                name="Asics Gel-Nimbus 25",
+                description="長距離ランに最適。優れたクッション性と安定性。",
+                price=Amount(value="99.00", currency="USD"),
+                category="running",
+                brand="Asics",
+                image_url="https://example.com/images/asics-nimbus.jpg"
+            ),
+        ]
+    
+    def search_products(
+        self,
+        intent_mandate: IntentMandate,
+        query: Optional[str] = None
+    ) -> List[Product]:
+        """
+        Intent Mandateの制約に基づいて商品を検索
+        
+        Args:
+            intent_mandate: Intent Mandate
+            query: 検索クエリ（オプション）
+            
+        Returns:
+            List[Product]: マッチした商品のリスト
+        """
+        print(f"\n[{self.merchant_name}] 商品検索を実行:")
+        print(f"  意図: {intent_mandate.intent}")
+        
+        results = []
+        constraints = intent_mandate.constraints
+        
+        for product in self.catalog:
+            # カテゴリーチェック
+            if constraints.categories and product.category not in constraints.categories:
+                continue
+            
+            # ブランドチェック
+            if constraints.brands and product.brand not in constraints.brands:
+                continue
+            
+            # 価格チェック
+            if constraints.max_amount:
+                product_price = float(product.price.value)
+                max_price = float(constraints.max_amount.value)
+                if product_price > max_price:
+                    continue
+            
+            results.append(product)
+        
+        print(f"  → {len(results)}件の商品が見つかりました")
+        return results
+    
+    def create_signed_cart_mandate(
+        self,
+        intent_mandate: IntentMandate,
+        products: List[Product],
+        quantities: Optional[Dict[str, int]] = None,
+        shipping_address: Optional[Address] = None
+    ) -> List[CartMandate]:
+        """
+        Cart Mandateを作成し、Merchant署名を追加
+        
+        Args:
+            intent_mandate: Intent Mandate
+            products: 選択された商品
+            quantities: 商品ごとの数量
+            shipping_address: 配送先住所
+            
+        Returns:
+            List[CartMandate]: 署名されたCart Mandateのリスト
+        """
+        print(f"\n[{self.merchant_name}] Cart Mandateを作成中...")
+        
+        cart_mandates = []
+        
+        for product in products:
+            quantity = quantities.get(product.id, 1) if quantities else 1
+            
+            # Cart Itemを作成
+            unit_price = product.price
+            total_price = Amount(
+                value=str(float(unit_price.value) * quantity),
+                currency=unit_price.currency
+            )
+            
+            cart_item = CartItem(
+                id=product.id,
+                name=product.name,
+                description=product.description,
+                quantity=quantity,
+                unit_price=unit_price,
+                total_price=total_price,
+                image_url=product.image_url
+            )
+            
+            # 金額計算
+            subtotal = total_price
+            tax_amount = float(subtotal.value) * self.default_tax_rate
+            tax = Amount(value=f"{tax_amount:.2f}", currency=subtotal.currency)
+            
+            # 配送情報
+            shipping_info = ShippingInfo(
+                address=shipping_address or Address(
+                    street="123 Main St",
+                    city="San Francisco",
+                    state="CA",
+                    postal_code="94105",
+                    country="US"
+                ),
+                method="Standard Shipping",
+                cost=self.default_shipping_cost,
+                estimated_delivery=(datetime.utcnow() + timedelta(days=5)).isoformat() + 'Z'
+            )
+            
+            # 合計金額
+            total_value = (
+                float(subtotal.value) +
+                float(tax.value) +
+                float(shipping_info.cost.value)
+            )
+            total = Amount(value=f"{total_value:.2f}", currency=subtotal.currency)
+            
+            # Cart Mandateを作成
+            now = datetime.utcnow()
+            expires_at = now + timedelta(hours=1)
+            
+            cart_mandate = CartMandate(
+                id=f"cart_{uuid.uuid4().hex}",
+                type='CartMandate',
+                version='0.1',
+                intent_mandate_id=intent_mandate.id,
+                items=[cart_item],
+                subtotal=subtotal,
+                tax=tax,
+                shipping=shipping_info,
+                total=total,
+                merchant_id=self.merchant_id,
+                merchant_name=self.merchant_name,
+                created_at=now.isoformat() + 'Z',
+                expires_at=expires_at.isoformat() + 'Z'
+            )
+            
+            # Merchant署名を追加
+            cart_mandate.merchant_signature = self.signature_manager.sign_mandate(
+                asdict(cart_mandate),
+                self.agent_id
+            )
+            
+            print(f"  ✓ Cart Mandate作成: {cart_mandate.id}")
+            print(f"    商品: {cart_item.name}")
+            print(f"    合計: {cart_mandate.total}")
+            print(f"    Merchant署名追加完了")
+            
+            # 署名を検証
+            self._verify_cart_mandate_signature(cart_mandate)
+            
+            cart_mandates.append(cart_mandate)
+        
+        return cart_mandates
+    
+    def _verify_cart_mandate_signature(self, cart_mandate: CartMandate) -> bool:
+        """Cart Mandateの署名を検証"""
+        if not cart_mandate.merchant_signature:
+            print(f"  ✗ Merchant署名がありません")
+            return False
+        
+        cart_dict = asdict(cart_mandate)
+        is_valid = self.signature_manager.verify_mandate_signature(
+            cart_dict,
+            cart_mandate.merchant_signature
+        )
+        
+        if is_valid:
+            print(f"  ✓ Merchant署名は有効です")
+        else:
+            print(f"  ✗ Merchant署名が無効です")
+        
+        return is_valid
+    
+    def verify_complete_cart_mandate(self, cart_mandate: CartMandate) -> bool:
+        """
+        Cart Mandate全体の検証（署名、金額、有効期限など）
+        
+        Args:
+            cart_mandate: 検証するCart Mandate
+            
+        Returns:
+            bool: 検証結果
+        """
+        print(f"\n[{self.merchant_name}] Cart Mandateを検証中: {cart_mandate.id}")
+        
+        # 1. 有効期限チェック
+        expires_at = datetime.fromisoformat(cart_mandate.expires_at.replace('Z', '+00:00'))
+        now = datetime.now(expires_at.tzinfo)
+        
+        if now > expires_at:
+            print(f"  ✗ Cart Mandateは期限切れです")
+            return False
+        
+        print(f"  ✓ 有効期限OK")
+        
+        # 2. Merchant署名チェック
+        if not self._verify_cart_mandate_signature(cart_mandate):
+            return False
+        
+        # 3. User署名チェック（存在する場合）
+        if cart_mandate.user_signature:
+            cart_dict = asdict(cart_mandate)
+            is_user_valid = self.signature_manager.verify_mandate_signature(
+                cart_dict,
+                cart_mandate.user_signature
+            )
+            
+            if not is_user_valid:
+                print(f"  ✗ User署名が無効です")
+                return False
+            
+            print(f"  ✓ User署名は有効です")
+        
+        # 4. 金額の整合性チェック
+        calculated_subtotal = sum(
+            float(item.total_price.value) for item in cart_mandate.items
+        )
+        
+        if abs(calculated_subtotal - float(cart_mandate.subtotal.value)) > 0.01:
+            print(f"  ✗ 小計の計算が一致しません")
+            return False
+        
+        calculated_total = (
+            float(cart_mandate.subtotal.value) +
+            float(cart_mandate.tax.value) +
+            float(cart_mandate.shipping.cost.value)
+        )
+        
+        if abs(calculated_total - float(cart_mandate.total.value)) > 0.01:
+            print(f"  ✗ 合計金額の計算が一致しません")
+            return False
+        
+        print(f"  ✓ 金額の整合性OK")
+        
+        print(f"  ✓✓✓ Cart Mandate検証成功 ✓✓✓")
+        return True
+
+
+# ========================================
+# 使用例
+# ========================================
+
+async def demo_secure_merchant():
+    """セキュアなMerchant Agentのデモ"""
+    
+    print("=" * 80)
+    print("AP2 Protocol - セキュアなMerchant Agentのデモ")
+    print("=" * 80)
+    
+    # Merchant Agentを初期化
+    merchant_agent = SecureMerchantAgent(
+        agent_id="merchant_agent_001",
+        merchant_name="Secure Running Shoes Store",
+        merchant_id="merchant_123",
+        passphrase="merchant_secure_passphrase"
+    )
+    
+    # ダミーのIntent Mandateを作成
+    from ap2_types import IntentConstraints
+    
+    print("\n" + "=" * 80)
+    print("ステップ1: Intent Mandateの準備（ダミー）")
+    print("=" * 80)
+    
+    intent_mandate = IntentMandate(
+        id="intent_test_001",
+        type='IntentMandate',
+        version='0.1',
+        user_id="user_123",
+        user_public_key="user_public_key_placeholder",
+        intent="新しいランニングシューズを100ドル以下で購入したい",
+        constraints=IntentConstraints(
+            max_amount=Amount(value="100.00", currency="USD"),
+            categories=["running"],
+            brands=["Nike", "Adidas"],
+            valid_until=(datetime.utcnow() + timedelta(hours=24)).isoformat() + 'Z'
+        ),
+        created_at=datetime.utcnow().isoformat() + 'Z',
+        expires_at=(datetime.utcnow() + timedelta(hours=24)).isoformat() + 'Z'
+    )
+    
+    # 商品を検索
+    print("\n" + "=" * 80)
+    print("ステップ2: 商品検索")
+    print("=" * 80)
+    
+    products = merchant_agent.search_products(intent_mandate)
+    
+    # Cart Mandateを作成（署名付き）
+    print("\n" + "=" * 80)
+    print("ステップ3: Cart Mandateの作成と署名")
+    print("=" * 80)
+    
+    cart_mandates = merchant_agent.create_signed_cart_mandate(
+        intent_mandate=intent_mandate,
+        products=products[:2]  # 最初の2商品
+    )
+    
+    # Cart Mandateを検証
+    print("\n" + "=" * 80)
+    print("ステップ4: Cart Mandateの完全検証")
+    print("=" * 80)
+    
+    for cart in cart_mandates:
+        merchant_agent.verify_complete_cart_mandate(cart)
+    
+    print("\n" + "=" * 80)
+    print("デモンストレーション完了!")
+    print("=" * 80)
+
+
+if __name__ == "__main__":
+    import asyncio
+    asyncio.run(demo_secure_merchant())
