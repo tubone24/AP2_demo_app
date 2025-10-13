@@ -18,7 +18,7 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.backends import default_backend
 from cryptography.exceptions import InvalidSignature
 
-from ap2_types import Signature
+from ap2_types import Signature, DeviceAttestation, AttestationType
 
 
 class CryptoError(Exception):
@@ -234,24 +234,45 @@ class SignatureManager:
         self.key_manager = key_manager
         self.backend = default_backend()
     
+    def _convert_enums(self, data: Any) -> Any:
+        """
+        データ内のEnumを再帰的に.valueに変換
+
+        Args:
+            data: 変換するデータ
+
+        Returns:
+            Enumが変換されたデータ
+        """
+        if isinstance(data, dict):
+            return {key: self._convert_enums(value) for key, value in data.items()}
+        elif isinstance(data, list):
+            return [self._convert_enums(item) for item in data]
+        elif hasattr(data, 'value'):  # Enumの場合
+            return data.value
+        else:
+            return data
+
     def _hash_data(self, data: Any) -> bytes:
         """
         データをハッシュ化
-        
+
         Args:
             data: ハッシュ化するデータ（辞書、文字列など）
-            
+
         Returns:
             bytes: SHA-256ハッシュ
         """
         # データをJSON文字列に変換（決定論的な順序で）
         if isinstance(data, dict):
-            json_str = json.dumps(data, sort_keys=True, ensure_ascii=False)
+            # Enumを.valueに変換
+            converted_data = self._convert_enums(data)
+            json_str = json.dumps(converted_data, sort_keys=True, ensure_ascii=False)
         elif isinstance(data, str):
             json_str = data
         else:
             json_str = str(data)
-        
+
         # SHA-256でハッシュ化
         return hashlib.sha256(json_str.encode('utf-8')).digest()
     
@@ -544,6 +565,191 @@ class SecureStorage:
             
         except Exception as e:
             raise CryptoError(f"復号化に失敗しました（パスフレーズが正しくない可能性があります）: {e}")
+
+
+class DeviceAttestationManager:
+    """
+    Device Attestation管理クラス
+
+    AP2ステップ20-23で使用される、デバイス証明の生成と検証を管理。
+    ユーザーのデバイスが信頼されており、取引が改ざんされていないことを保証する。
+    """
+
+    def __init__(self, key_manager: KeyManager):
+        """
+        Args:
+            key_manager: 鍵管理インスタンス
+        """
+        self.key_manager = key_manager
+        self.backend = default_backend()
+
+    def generate_challenge(self) -> str:
+        """
+        チャレンジ値を生成（リプレイ攻撃対策）
+
+        Returns:
+            str: ランダムなチャレンジ値（Base64）
+        """
+        challenge_bytes = os.urandom(32)  # 256ビット
+        return base64.b64encode(challenge_bytes).decode('utf-8')
+
+    def create_device_attestation(
+        self,
+        device_id: str,
+        payment_mandate: 'PaymentMandate',
+        device_key_id: str,
+        attestation_type: AttestationType = AttestationType.BIOMETRIC,
+        platform: str = "iOS",
+        os_version: Optional[str] = None,
+        app_version: Optional[str] = None
+    ) -> DeviceAttestation:
+        """
+        デバイス証明を作成
+
+        AP2ステップ21に対応：ユーザーがデバイスで取引を承認し、
+        デバイスが暗号学的証明を生成する。
+
+        Args:
+            device_id: デバイスの一意識別子
+            payment_mandate: 署名するPayment Mandate
+            device_key_id: デバイスの秘密鍵ID
+            attestation_type: 認証タイプ
+            platform: プラットフォーム（"iOS", "Android", "Web"など）
+            os_version: OSバージョン
+            app_version: アプリバージョン
+
+        Returns:
+            DeviceAttestation: デバイス証明
+        """
+        print(f"[DeviceAttestationManager] デバイス証明を作成中...")
+        print(f"  デバイスID: {device_id}")
+        print(f"  認証タイプ: {attestation_type.value}")
+        print(f"  プラットフォーム: {platform}")
+
+        # チャレンジ値を生成
+        challenge = self.generate_challenge()
+
+        # デバイスの秘密鍵を取得
+        device_private_key = self.key_manager.get_private_key(device_key_id)
+        if device_private_key is None:
+            raise CryptoError(f"デバイス秘密鍵が見つかりません: {device_key_id}")
+
+        device_public_key = device_private_key.public_key()
+        device_public_key_base64 = self.key_manager.public_key_to_base64(device_public_key)
+
+        # 署名対象データを構築
+        # Payment MandateのIDとチャレンジを含めてリプレイ攻撃を防ぐ
+        timestamp = datetime.utcnow().isoformat() + 'Z'
+        attestation_data = {
+            "device_id": device_id,
+            "payment_mandate_id": payment_mandate.id,
+            "challenge": challenge,
+            "timestamp": timestamp,
+            "attestation_type": attestation_type.value,
+            "platform": platform
+        }
+
+        # データをJSON文字列に変換してハッシュ化
+        json_str = json.dumps(attestation_data, sort_keys=True, ensure_ascii=False)
+        data_hash = hashlib.sha256(json_str.encode('utf-8')).digest()
+
+        # ECDSA署名を生成
+        attestation_signature = device_private_key.sign(
+            data_hash,
+            ec.ECDSA(hashes.SHA256())
+        )
+        attestation_value = base64.b64encode(attestation_signature).decode('utf-8')
+
+        # DeviceAttestationオブジェクトを作成
+        device_attestation = DeviceAttestation(
+            device_id=device_id,
+            attestation_type=attestation_type,
+            attestation_value=attestation_value,
+            timestamp=timestamp,
+            device_public_key=device_public_key_base64,
+            challenge=challenge,
+            platform=platform,
+            os_version=os_version,
+            app_version=app_version
+        )
+
+        print(f"  ✓ デバイス証明を作成完了")
+        print(f"  チャレンジ: {challenge[:16]}...")
+        print(f"  タイムスタンプ: {timestamp}")
+
+        return device_attestation
+
+    def verify_device_attestation(
+        self,
+        device_attestation: DeviceAttestation,
+        payment_mandate: 'PaymentMandate',
+        max_age_seconds: int = 300
+    ) -> bool:
+        """
+        デバイス証明を検証
+
+        AP2ステップ26でCredential Providerが実行する検証。
+
+        Args:
+            device_attestation: 検証するデバイス証明
+            payment_mandate: 対応するPayment Mandate
+            max_age_seconds: 証明の最大有効期間（秒）
+
+        Returns:
+            bool: 検証結果（True=有効、False=無効）
+        """
+        print(f"[DeviceAttestationManager] デバイス証明を検証中...")
+        print(f"  デバイスID: {device_attestation.device_id}")
+        print(f"  認証タイプ: {device_attestation.attestation_type.value}")
+
+        try:
+            # 1. タイムスタンプを確認（リプレイ攻撃対策）
+            attestation_time = datetime.fromisoformat(device_attestation.timestamp.replace('Z', '+00:00'))
+            now = datetime.utcnow()
+            age_seconds = (now - attestation_time.replace(tzinfo=None)).total_seconds()
+
+            if age_seconds > max_age_seconds:
+                print(f"  ✗ 証明が古すぎます（{age_seconds:.0f}秒前）")
+                return False
+
+            print(f"  ✓ タイムスタンプは有効（{age_seconds:.0f}秒前）")
+
+            # 2. Payment Mandate IDが一致するか確認
+            # 署名対象データを再構築
+            attestation_data = {
+                "device_id": device_attestation.device_id,
+                "payment_mandate_id": payment_mandate.id,
+                "challenge": device_attestation.challenge,
+                "timestamp": device_attestation.timestamp,
+                "attestation_type": device_attestation.attestation_type.value,
+                "platform": device_attestation.platform
+            }
+
+            # データをJSON文字列に変換してハッシュ化
+            json_str = json.dumps(attestation_data, sort_keys=True, ensure_ascii=False)
+            data_hash = hashlib.sha256(json_str.encode('utf-8')).digest()
+
+            # 3. デバイスの公開鍵で署名を検証
+            device_public_key = self.key_manager.public_key_from_base64(
+                device_attestation.device_public_key
+            )
+            attestation_signature = base64.b64decode(device_attestation.attestation_value.encode('utf-8'))
+
+            device_public_key.verify(
+                attestation_signature,
+                data_hash,
+                ec.ECDSA(hashes.SHA256())
+            )
+
+            print(f"  ✓ デバイス証明は有効です")
+            return True
+
+        except InvalidSignature:
+            print(f"  ✗ デバイス署名が無効です")
+            return False
+        except Exception as e:
+            print(f"  ✗ 検証エラー: {e}")
+            return False
 
 
 # ========================================

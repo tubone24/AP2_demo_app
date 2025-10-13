@@ -271,25 +271,40 @@ class SecureShoppingAgent:
         intent_mandate: IntentMandate,
         payment_method: CardPaymentMethod,
         user_id: str,
-        user_key_manager: KeyManager
+        user_key_manager: KeyManager,
+        device_attestation: Optional['DeviceAttestation'] = None,
+        payment_id: Optional[str] = None
     ) -> PaymentMandate:
         """
         Payment Mandateを作成し署名
-        
+
+        AP2プロトコル ステップ23: Device AttestationとともにPayment Mandateを作成
+
         Args:
             cart_mandate: Cart Mandate
             intent_mandate: Intent Mandate
             payment_method: 支払い方法
             user_id: ユーザーID
             user_key_manager: ユーザーの鍵管理インスタンス
-            
+            device_attestation: Device Attestation（AP2ステップ20-22で生成）
+            payment_id: Payment MandateのID（指定しない場合は自動生成）
+
         Returns:
             PaymentMandate: 署名されたPayment Mandate
         """
         print(f"\n[{self.agent_name}] Payment Mandateを作成中...")
-        
+
+        if device_attestation:
+            print(f"  ✓ Device Attestation検出: {device_attestation.device_id}")
+            print(f"    - Platform: {device_attestation.platform}")
+            print(f"    - Type: {device_attestation.attestation_type.value}")
+
+        # Payment IDが指定されていない場合は新規生成
+        if not payment_id:
+            payment_id = f"payment_{uuid.uuid4().hex}"
+
         payment_mandate = PaymentMandate(
-            id=f"payment_{uuid.uuid4().hex}",
+            id=payment_id,
             type='PaymentMandate',
             version='0.1',
             cart_mandate_id=cart_mandate.id,
@@ -300,7 +315,8 @@ class SecureShoppingAgent:
             agent_involved=True,
             payer_id=user_id,
             payee_id=cart_mandate.merchant_id,
-            created_at=datetime.utcnow().isoformat() + 'Z'
+            created_at=datetime.utcnow().isoformat() + 'Z',
+            device_attestation=device_attestation  # AP2ステップ23: Device Attestationを含める
         )
         
         # リスク評価を実行

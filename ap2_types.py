@@ -140,6 +140,39 @@ class CartMandate:
 # Payment Mandate（支払いマンデート）
 # ========================================
 
+class AttestationType(Enum):
+    """デバイス証明の種類"""
+    BIOMETRIC = "biometric"  # 生体認証（指紋、顔認証など）
+    PIN = "pin"  # PIN認証
+    PASSKEY = "passkey"  # パスキー/WebAuthn
+    DEVICE_BINDING = "device_binding"  # デバイスバインディング
+    TRUSTED_EXECUTION = "trusted_execution"  # TEE/Secure Enclave
+
+
+@dataclass
+class DeviceAttestation:
+    """
+    Device Attestation - デバイス証明
+
+    AP2プロトコルのステップ20-23で使用される、
+    ユーザーのデバイスによる暗号学的証明。
+
+    これにより、以下が保証される：
+    - ユーザーが信頼されたデバイスで取引を承認したこと
+    - デバイスが改ざんされていないこと
+    - 取引がリアルタイムで行われていること（リプレイ攻撃対策）
+    """
+    device_id: str  # デバイスの一意識別子
+    attestation_type: AttestationType  # 認証タイプ
+    attestation_value: str  # 証明値（署名、トークンなど）
+    timestamp: str  # ISO 8601形式のタイムスタンプ
+    device_public_key: str  # デバイスの公開鍵（検証用）
+    challenge: str  # チャレンジ値（リプレイ攻撃対策）
+    platform: str  # プラットフォーム情報（"iOS", "Android", "Web"など）
+    os_version: Optional[str] = None  # OSバージョン
+    app_version: Optional[str] = None  # アプリバージョン
+
+
 class PaymentMethodType(Enum):
     """支払い方法の種類"""
     CARD = "card"
@@ -191,6 +224,7 @@ class PaymentMandate:
     fraud_indicators: Optional[List[str]] = None
     user_signature: Optional[Signature] = None
     merchant_signature: Optional[Signature] = None
+    device_attestation: Optional[DeviceAttestation] = None  # AP2ステップ20-23で追加
 
 
 # ========================================

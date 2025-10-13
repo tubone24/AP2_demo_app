@@ -253,6 +253,7 @@ class CredentialProvider:
 
         AP2仕様のステップ25-27に対応：
         - MPP → CP: "request payment credentials { PaymentMandate }"
+        - CP: Device Attestation検証（AP2ステップ26）
         - CP → MPP: "{ payment credentials }"
 
         Args:
@@ -270,11 +271,39 @@ class CredentialProvider:
 
         print(f"  ✓ Payment Mandate署名を検証")
 
-        # 2. リスクスコアをチェック
+        # 2. Device Attestation検証（AP2ステップ26）
+        if payment_mandate.device_attestation:
+            print(f"  🔐 Device Attestationを検証中...")
+
+            from ap2_crypto import DeviceAttestationManager
+
+            # Device Attestation Managerを初期化
+            attestation_manager = DeviceAttestationManager(self.key_manager)
+
+            # Device Attestationを検証
+            is_attestation_valid = attestation_manager.verify_device_attestation(
+                payment_mandate.device_attestation,
+                payment_mandate,
+                max_age_seconds=300  # 5分以内
+            )
+
+            if not is_attestation_valid:
+                raise ValueError("Device Attestationの検証に失敗しました。取引を拒否します。")
+
+            print(f"  ✓ Device Attestation検証完了")
+            print(f"    - Device ID: {payment_mandate.device_attestation.device_id}")
+            print(f"    - Platform: {payment_mandate.device_attestation.platform}")
+            print(f"    - Type: {payment_mandate.device_attestation.attestation_type.value}")
+        else:
+            print(f"  ⚠️ Device Attestationが含まれていません（AP2非準拠）")
+            # 実際のシステムでは、Device Attestationがない場合は取引を拒否すべき
+            # デモ用に警告のみ表示
+
+        # 3. リスクスコアをチェック
         risk_score = payment_mandate.risk_score or 0
         print(f"  リスクスコア: {risk_score}/100")
 
-        # 3. 高リスク取引の場合、追加認証を要求
+        # 4. 高リスク取引の場合、追加認証を要求
         if risk_score >= 60:
             if not otp:
                 raise ValueError("高リスク取引です。OTPによる追加認証が必要です")
@@ -285,7 +314,7 @@ class CredentialProvider:
 
             print(f"  ✓ OTP検証完了")
 
-        # 4. トークンから実際の支払い方法を取得
+        # 5. トークンから実際の支払い方法を取得
         token = payment_mandate.payment_method.token
         if not token:
             raise ValueError("Payment Methodにトークンがありません")
@@ -294,14 +323,14 @@ class CredentialProvider:
         if not payment_method:
             raise ValueError(f"トークンに対応する支払い方法が見つかりません: {token[:16]}...")
 
-        # 5. ユーザーIDが一致するか確認
+        # 6. ユーザーIDが一致するか確認
         if not self.validate_token(token, payment_mandate.payer_id):
             raise ValueError("トークンが無効、またはユーザーIDが一致しません")
 
         print(f"  ✓ トークン検証完了")
         print(f"  支払い方法: {payment_method.brand.upper()} ****{payment_method.last4}")
 
-        # 6. Payment Credentialsを返す
+        # 7. Payment Credentialsを返す
         # 実際のシステムでは、決済ネットワークに送信するための暗号化された認証情報を返す
         payment_credentials = {
             "credential_type": "card",
@@ -312,7 +341,8 @@ class CredentialProvider:
             "holder_name": payment_method.holder_name,
             "cryptogram": self._generate_cryptogram(payment_method),  # 決済ネットワーク用
             "token": token,
-            "provider_id": self.provider_id
+            "provider_id": self.provider_id,
+            "device_attestation_verified": payment_mandate.device_attestation is not None  # 検証済みフラグ
         }
 
         print(f"[Credential Provider] Payment credentialsを返却")

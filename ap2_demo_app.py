@@ -42,6 +42,10 @@ def init_session_state():
         st.session_state.products = None
     if 'cart_mandate' not in st.session_state:
         st.session_state.cart_mandate = None
+    if 'selected_payment_method' not in st.session_state:
+        st.session_state.selected_payment_method = None
+    if 'device_attestation' not in st.session_state:
+        st.session_state.device_attestation = None
     if 'payment_mandate' not in st.session_state:
         st.session_state.payment_mandate = None
     if 'transaction_result' not in st.session_state:
@@ -627,133 +631,431 @@ def step3_cart_creation():
 
 
 def step4_payment_creation():
-    """ステップ4: Payment Mandateの作成"""
-    st.header("💳 ステップ4: 支払い方法の選択")
+    """ステップ4: Payment Mandateの作成（Device Attestation統合版）"""
+    st.header("💳 ステップ4: 支払い方法の選択とデバイス確認")
 
-    # 参加者バナー
-    show_participant_banner(
-        ["user", "credential_provider", "shopping_agent"],
-        "UserがCredential Providerから支払い方法を選択 → トークン化 → Shopping AgentがPayment Mandateを作成"
-    )
-
-    st.markdown("""
-    Credential Providerに登録済みの支払い方法から選択し、Payment Mandateを作成します。
-    支払い方法はトークン化され、実際のカード情報は含まれません。
-    """)
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        st.subheader("登録済み支払い方法")
-
-        # Credential Providerから支払い方法を取得
-        available_methods = st.session_state.credential_provider.get_payment_methods(
-            st.session_state.user_id
+    # 参加者バナーは状態に応じて変える
+    if not st.session_state.selected_payment_method:
+        # 状態4a: 支払い方法選択
+        show_participant_banner(
+            ["user", "credential_provider"],
+            "UserがCredential Providerから支払い方法を選択してトークン化"
+        )
+    elif not st.session_state.device_attestation:
+        # 状態4b: デバイス確認
+        show_participant_banner(
+            ["user"],
+            "ユーザーが信頼されたデバイスで取引を承認（AP2ステップ20-22）"
+        )
+    else:
+        # 状態4c: Payment Mandate作成
+        show_participant_banner(
+            ["shopping_agent"],
+            "Shopping AgentがDevice AttestationとともにPayment Mandateを作成（AP2ステップ23）"
         )
 
-        if not available_methods:
-            st.warning("登録済みの支払い方法がありません")
-        else:
-            # 支払い方法を表示
-            st.write("**利用可能な支払い方法：**")
+    st.markdown("""
+    **AP2プロトコル完全準拠フロー（ステップ19-23）:**
+    1. **ステップ19**: Credential Providerから支払い方法を選択してトークン化
+    2. **ステップ20-22**: ユーザーを信頼されたデバイスにリダイレクトし、取引を承認してDevice Attestationを生成
+    3. **ステップ23**: Device AttestationとともにPayment Mandateを作成
+    """)
 
-            # 支払い方法の選択肢を作成
-            payment_options = []
-            for method in available_methods:
-                pm = method.payment_method
-                default_mark = " ⭐ (デフォルト)" if method.is_default else ""
-                option_text = f"{pm.brand.upper()} ****{pm.last4} (有効期限: {pm.expiry_month:02d}/{pm.expiry_year}){default_mark}"
-                payment_options.append(option_text)
+    # --- 状態4a: 支払い方法の選択 ---
+    if not st.session_state.selected_payment_method:
+        col1, col2 = st.columns(2)
 
-            selected_idx = st.radio(
-                "支払い方法を選択",
-                range(len(available_methods)),
-                format_func=lambda i: payment_options[i],
-                key="payment_method_selection"
+        with col1:
+            st.subheader("📋 ステップ4a: 支払い方法の選択")
+
+            # Credential Providerから支払い方法を取得
+            available_methods = st.session_state.credential_provider.get_payment_methods(
+                st.session_state.user_id
             )
 
-            selected_method = available_methods[selected_idx]
+            if not available_methods:
+                st.warning("登録済みの支払い方法がありません")
+            else:
+                # 支払い方法を表示
+                st.write("**利用可能な支払い方法：**")
+
+                # 支払い方法の選択肢を作成
+                payment_options = []
+                for method in available_methods:
+                    pm = method.payment_method
+                    default_mark = " ⭐ (デフォルト)" if method.is_default else ""
+                    option_text = f"{pm.brand.upper()} ****{pm.last4} (有効期限: {pm.expiry_month:02d}/{pm.expiry_year}){default_mark}"
+                    payment_options.append(option_text)
+
+                selected_idx = st.radio(
+                    "支払い方法を選択",
+                    range(len(available_methods)),
+                    format_func=lambda i: payment_options[i],
+                    key="payment_method_selection"
+                )
+
+                selected_method = available_methods[selected_idx]
+
+                st.divider()
+                st.write("**選択された支払い方法：**")
+                st.write(f"- カードブランド: {selected_method.payment_method.brand.upper()}")
+                st.write(f"- 下4桁: ****{selected_method.payment_method.last4}")
+                st.write(f"- 有効期限: {selected_method.payment_method.expiry_month:02d}/{selected_method.payment_method.expiry_year}")
+                st.write(f"- カード名義人: {selected_method.payment_method.holder_name}")
+
+                st.divider()
+
+                if st.button("支払い方法を確定", type="primary", use_container_width=True):
+                    with st.spinner("支払い方法をトークン化中..."):
+                        # Credential Providerからトークン化された支払い方法を取得
+                        tokenized_payment_method = st.session_state.credential_provider.create_tokenized_payment_method(
+                            method_id=selected_method.method_id,
+                            user_id=st.session_state.user_id
+                        )
+
+                        # Session stateに保存
+                        st.session_state.selected_payment_method = tokenized_payment_method
+                        st.rerun()
+
+        with col2:
+            st.subheader("📌 次のステップ")
+            st.info("""
+            支払い方法を選択すると、次のステップに進みます：
+
+            **ステップ4b: デバイス確認**
+            - 信頼されたデバイス（スマートフォン、セキュリティキーなど）で取引を承認
+            - デバイスが暗号学的証明（Device Attestation）を生成
+            - これにより、取引がリアルタイムで行われていること、デバイスが改ざんされていないことを保証
+            """)
+
+    # --- 状態4b: デバイス確認 ---
+    elif not st.session_state.device_attestation:
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.subheader("📱 ステップ4b: デバイス確認")
+
+            st.info("""
+            **AP2プロトコル ステップ20-22: Device Attestation**
+
+            このステップでは、信頼されたデバイスで取引を承認します。
+            実際のシステムでは：
+            - Face ID / Touch ID（生体認証）
+            - デバイスバインディング
+            - セキュアエンクレーブによる証明
+            などが使用されます。
+            """)
 
             st.divider()
-            st.write("**選択された支払い方法：**")
-            st.write(f"- カードブランド: {selected_method.payment_method.brand.upper()}")
-            st.write(f"- 下4桁: ****{selected_method.payment_method.last4}")
-            st.write(f"- 有効期限: {selected_method.payment_method.expiry_month:02d}/{selected_method.payment_method.expiry_year}")
-            st.write(f"- カード名義人: {selected_method.payment_method.holder_name}")
+
+            # 取引情報の表示
+            st.write("**承認する取引情報:**")
+            st.write(f"- **店舗:** {st.session_state.cart_mandate.merchant_name}")
+            st.write(f"- **金額:** {st.session_state.cart_mandate.total}")
+            st.write(f"- **支払い方法:** {st.session_state.selected_payment_method.brand.upper()} ****{st.session_state.selected_payment_method.last4}")
 
             st.divider()
 
-            if st.button("Payment Mandateを作成", type="primary", use_container_width=True):
-                with st.spinner("Payment Mandateを作成中..."):
-                    # Credential Providerからトークン化された支払い方法を取得
-                    tokenized_payment_method = st.session_state.credential_provider.create_tokenized_payment_method(
-                        method_id=selected_method.method_id,
+            # デバイス確認のシミュレーション
+            st.warning("🔐 **デバイス認証が必要です**")
+
+            st.markdown("""
+            実際のシステムでは、ここでユーザーのデバイス（スマートフォンやセキュリティキー）に
+            承認リクエストが送信されます。
+            """)
+
+            # Face ID/Touch IDシミュレーション表示
+            st.markdown("---")
+
+            # Passkey認証の説明
+            st.markdown("""
+            <div style="text-align: center; padding: 30px; background-color: #f8f9fa; border-radius: 15px; margin: 20px 0;">
+                <div style="font-size: 80px; margin-bottom: 10px;">🔑</div>
+                <div style="font-size: 24px; font-weight: bold; color: #333; margin-bottom: 10px;">Passkey認証</div>
+                <div style="font-size: 14px; color: #666;">ブラウザのWeb Authentication APIを使用した実際の認証</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+            st.markdown("---")
+
+            st.info("🔑 **実際のPasskey（WebAuthn）認証を使用します**")
+            st.markdown("""
+            WebAuthnでは、まずPasskeyを登録してから認証を行います：
+            - 💻 **プラットフォーム認証**: Face ID、Touch ID、Windows Hello
+            - 🔑 **セキュリティキー**: YubiKey、Titan Keyなど
+            - 📱 **モバイルデバイス**: スマートフォンの生体認証
+            """)
+
+            # Passkey登録状態を管理
+            if 'passkey_registered' not in st.session_state:
+                st.session_state.passkey_registered = False
+
+            # WebAuthn認証の表示状態を管理
+            if 'show_webauthn' not in st.session_state:
+                st.session_state.show_webauthn = False
+
+            # --- ステップ1: Passkey登録 ---
+            if not st.session_state.passkey_registered:
+                st.warning("⚠️ **最初にPasskeyを登録してください**")
+                st.markdown("""
+                Passkeyを登録することで、このデバイスでの認証が可能になります。
+                登録は一度だけ必要です。
+                """)
+
+                if st.button("✨ Passkeyを登録", type="primary", use_container_width=True, key="register_passkey"):
+                    st.session_state.show_webauthn = True
+                    st.session_state.webauthn_mode = 'register'
+                    st.rerun()
+
+            # --- ステップ2: Passkey認証 ---
+            else:
+                st.success("✓ Passkeyが登録されています")
+
+                if not st.session_state.show_webauthn:
+                    if st.button("🔐 Passkeyで認証開始", type="primary", use_container_width=True):
+                        st.session_state.show_webauthn = True
+                        st.session_state.webauthn_mode = 'authenticate'
+                        st.rerun()
+
+            # --- WebAuthnコンポーネントの表示 ---
+            if st.session_state.show_webauthn:
+                import base64
+                import secrets
+                from webauthn_component import webauthn_register, webauthn_authenticate
+
+                # チャレンジを生成
+                challenge = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode('utf-8').rstrip('=')
+
+                mode = st.session_state.get('webauthn_mode', 'register')
+
+                if mode == 'register':
+                    # 登録モード
+                    st.write("### ✨ Passkey登録中...")
+                    st.info("ブラウザのプロンプトが表示されます。デバイスの認証（Face ID、Touch ID、PINなど）を完了してください。")
+
+                    webauthn_register(
+                        username=st.session_state.user_name,
+                        user_id=st.session_state.user_id,
+                        rp_name="AP2 Demo",
+                        rp_id="localhost"
+                    )
+
+                    st.divider()
+
+                    st.info("""
+                    **次のステップ:**
+                    1. 上記のPasskey登録プロンプトでデバイス認証を完了してください
+                    2. 登録が成功したら、下の「登録完了」ボタンをクリックしてください
+                    """)
+
+                    if st.button("✅ 登録完了", type="primary", use_container_width=True, key="register_complete"):
+                        st.session_state.passkey_registered = True
+                        st.session_state.show_webauthn = False
+                        st.success("✓ Passkeyの登録が完了しました！")
+                        st.rerun()
+
+                else:
+                    # 認証モード
+                    st.write("### 🔐 Passkey認証中...")
+                    st.info("ブラウザのプロンプトが表示されます。デバイスの認証を完了してください。")
+
+                    webauthn_authenticate(
+                        challenge=challenge,
+                        rp_id="localhost",
                         user_id=st.session_state.user_id
                     )
 
-                    # Payment Mandateを作成
-                    payment_mandate = asyncio.run(
-                        st.session_state.shopping_agent.create_payment_mandate(
-                            cart_mandate=st.session_state.cart_mandate,
-                            intent_mandate=st.session_state.intent_mandate,
-                            payment_method=tokenized_payment_method,
-                            user_id=st.session_state.user_id,
-                            user_key_manager=st.session_state.user_key_manager
-                        )
-                    )
+                    st.divider()
 
-                    st.session_state.payment_mandate = payment_mandate
-                    st.rerun()
+                    st.info("""
+                    **次のステップ:**
+                    1. 上記のPasskey認証プロンプトで認証を完了してください
+                    2. 認証が成功したら、下の「認証完了」ボタンをクリックしてください
+                    """)
 
-    with col2:
-        st.subheader("Payment Mandate")
+                    # 認証完了ボタン（WebAuthn完了後にクリック）
+                    if st.button("✅ 認証完了 - Device Attestationを生成", type="primary", use_container_width=True, key="device_approve"):
+                        with st.status("Device Attestationを生成中...", expanded=True) as status:
+                            import time
+                            from ap2_crypto import DeviceAttestationManager
+                            from ap2_types import AttestationType, PaymentMandate
 
-        if st.session_state.payment_mandate:
-            payment = st.session_state.payment_mandate
+                            st.write("🔐 **ステップ 1:** デバイスがチャレンジを生成")
+                            time.sleep(0.5)
 
-            st.success("✓ Payment Mandate作成完了")
+                            st.write("🔐 **ステップ 2:** Passkey認証完了")
+                            time.sleep(0.5)
 
-            st.write(f"**ID:** `{payment.id}`")
-            st.write(f"**金額:** {payment.amount}")
-            st.write(f"**支払い方法:** {payment.payment_method.brand.upper()} ****{payment.payment_method.last4}")
-            st.write(f"**トークン:** `{payment.payment_method.token[:20]}...`")
-            st.write(f"**取引タイプ:** {payment.transaction_type}")
-            st.write(f"**Agent関与:** {'はい' if payment.agent_involved else 'いいえ'}")
+                            st.write("🔐 **ステップ 3:** デバイスが暗号学的証明を生成")
+                            time.sleep(0.5)
 
-            # リスク評価情報を表示
-            if payment.risk_score is not None:
-                st.divider()
-                st.subheader("🔍 リスク評価")
+                            # Device Attestation Managerを初期化
+                            attestation_manager = DeviceAttestationManager(st.session_state.user_key_manager)
 
-                # リスクレベルに応じた色分け
-                if payment.risk_score < 30:
-                    risk_level = "低"
-                    risk_color = "green"
-                elif payment.risk_score < 60:
-                    risk_level = "中"
-                    risk_color = "orange"
-                else:
-                    risk_level = "高"
-                    risk_color = "red"
+                            # Payment Mandate IDを事前に生成（これによりDevice Attestationとの整合性を保つ）
+                            import uuid
+                            payment_id = f"payment_{uuid.uuid4().hex}"
 
-                st.markdown(f"**リスクスコア:** <span style='color: {risk_color}; font-size: 20px; font-weight: bold;'>{payment.risk_score}/100 ({risk_level}リスク)</span>", unsafe_allow_html=True)
+                            # Device Attestationを生成
+                            from dataclasses import dataclass
+                            @dataclass
+                            class TempPaymentMandate:
+                                id: str
 
-                if payment.fraud_indicators:
-                    st.write("**不正指標:**")
-                    for indicator in payment.fraud_indicators:
-                        st.write(f"- ⚠️ {indicator}")
+                            temp_mandate = TempPaymentMandate(id=payment_id)
 
-            show_signature_info(payment.user_signature, "User署名")
+                            device_attestation = attestation_manager.create_device_attestation(
+                                device_id="device_demo_" + st.session_state.user_id,
+                                payment_mandate=temp_mandate,
+                                device_key_id=st.session_state.user_id,
+                                attestation_type=AttestationType.PASSKEY,
+                                platform="Web",
+                                os_version=None,
+                                app_version="1.0.0"
+                            )
 
-            # JSON表示
+                            st.success("✓ Device Attestation生成完了")
+                            st.caption(f"📋 Device ID: {device_attestation.device_id}")
+                            st.caption(f"📋 Platform: {device_attestation.platform}")
+                            st.caption(f"📋 Attestation Type: {device_attestation.attestation_type.value}")
+                            st.caption(f"📋 Timestamp: {device_attestation.timestamp}")
+
+                            # Session stateに保存（Payment IDも保存）
+                            st.session_state.device_attestation = device_attestation
+                            st.session_state.payment_mandate_id = payment_id  # Payment IDを保存
+                            status.update(label="デバイス認証完了！", state="complete")
+                            time.sleep(0.5)
+                            st.rerun()
+
+        with col2:
+            st.subheader("🔒 Device Attestationとは")
+
+            st.markdown("""
+            **Device Attestation**は、AP2プロトコルの重要なセキュリティ機能です。
+
+            **目的:**
+            - ユーザーが信頼されたデバイスで取引を承認したことを証明
+            - デバイスが改ざんされていないことを保証
+            - 取引がリアルタイムで行われていることを保証（リプレイ攻撃対策）
+
+            **技術的な仕組み:**
+            1. デバイスがランダムなチャレンジ値を生成
+            2. ユーザーが生体認証などで承認
+            3. デバイスの秘密鍵で取引情報とチャレンジに署名
+            4. 署名、チャレンジ、タイムスタンプを含むAttestationを生成
+
+            **検証:**
+            - Credential ProviderがAttestationの署名を検証
+            - タイムスタンプの鮮度をチェック（5分以内）
+            - デバイスの公開鍵で署名が正しいことを確認
+            """)
+
+            st.info("""
+            💡 **セキュリティのポイント:**
+
+            Device Attestationにより、以下の攻撃を防ぎます：
+            - リプレイ攻撃（古い取引を再送信）
+            - マルウェアによるトランザクション改ざん
+            - 不正なデバイスからの取引
+            """)
+
+    # --- 状態4c: Payment Mandate作成 ---
+    else:
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.subheader("✅ デバイス確認完了")
+
+            st.success("✓ Device Attestation生成完了")
+
+            # Device Attestation情報を表示
+            attestation = st.session_state.device_attestation
+            st.write(f"**Device ID:** `{attestation.device_id}`")
+            st.write(f"**Platform:** {attestation.platform} {attestation.os_version or ''}")
+            st.write(f"**Attestation Type:** {attestation.attestation_type.value}")
+            st.write(f"**Timestamp:** {attestation.timestamp}")
+
             st.divider()
-            show_json_data(payment, "Payment Mandate JSON")
 
-            if st.button("次のステップへ →", use_container_width=True):
-                st.session_state.step = 5
-                st.rerun()
-        else:
-            st.info("左側から支払い方法を選択してPayment Mandateを作成してください")
+            # Payment Mandate作成ボタン
+            if not st.session_state.payment_mandate:
+                if st.button("Payment Mandateを作成", type="primary", use_container_width=True):
+                    with st.spinner("Payment Mandateを作成中..."):
+                        # Payment Mandateを作成（Device Attestation付き）
+                        # Session stateに保存したpayment_idを使用（Device Attestationとの整合性を保つ）
+                        payment_mandate = asyncio.run(
+                            st.session_state.shopping_agent.create_payment_mandate(
+                                cart_mandate=st.session_state.cart_mandate,
+                                intent_mandate=st.session_state.intent_mandate,
+                                payment_method=st.session_state.selected_payment_method,
+                                user_id=st.session_state.user_id,
+                                user_key_manager=st.session_state.user_key_manager,
+                                device_attestation=st.session_state.device_attestation,
+                                payment_id=st.session_state.payment_mandate_id  # Device Attestation作成時と同じIDを使用
+                            )
+                        )
+
+                        st.session_state.payment_mandate = payment_mandate
+                        st.rerun()
+
+        with col2:
+            st.subheader("Payment Mandate")
+
+            if st.session_state.payment_mandate:
+                payment = st.session_state.payment_mandate
+
+                st.success("✓ Payment Mandate作成完了")
+
+                st.write(f"**ID:** `{payment.id}`")
+                st.write(f"**金額:** {payment.amount}")
+                st.write(f"**支払い方法:** {payment.payment_method.brand.upper()} ****{payment.payment_method.last4}")
+                st.write(f"**トークン:** `{payment.payment_method.token[:20]}...`")
+                st.write(f"**取引タイプ:** {payment.transaction_type}")
+                st.write(f"**Agent関与:** {'はい' if payment.agent_involved else 'いいえ'}")
+
+                # Device Attestation情報を表示
+                if payment.device_attestation:
+                    st.divider()
+                    st.subheader("🔐 Device Attestation")
+                    st.write(f"**Device ID:** {payment.device_attestation.device_id}")
+                    st.write(f"**Platform:** {payment.device_attestation.platform}")
+                    st.write(f"**Attestation Type:** {payment.device_attestation.attestation_type.value}")
+                    st.write(f"**Timestamp:** {payment.device_attestation.timestamp}")
+
+                # リスク評価情報を表示
+                if payment.risk_score is not None:
+                    st.divider()
+                    st.subheader("🔍 リスク評価")
+
+                    # リスクレベルに応じた色分け
+                    if payment.risk_score < 30:
+                        risk_level = "低"
+                        risk_color = "green"
+                    elif payment.risk_score < 60:
+                        risk_level = "中"
+                        risk_color = "orange"
+                    else:
+                        risk_level = "高"
+                        risk_color = "red"
+
+                    st.markdown(f"**リスクスコア:** <span style='color: {risk_color}; font-size: 20px; font-weight: bold;'>{payment.risk_score}/100 ({risk_level}リスク)</span>", unsafe_allow_html=True)
+
+                    if payment.fraud_indicators:
+                        st.write("**不正指標:**")
+                        for indicator in payment.fraud_indicators:
+                            st.write(f"- ⚠️ {indicator}")
+
+                show_signature_info(payment.user_signature, "User署名")
+
+                # JSON表示
+                st.divider()
+                show_json_data(payment, "Payment Mandate JSON")
+
+                if st.button("次のステップへ →", use_container_width=True):
+                    st.session_state.step = 5
+                    st.rerun()
+            else:
+                st.info("左側のボタンからPayment Mandateを作成してください")
 
 
 def step5_payment_processing():
