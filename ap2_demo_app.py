@@ -52,6 +52,23 @@ def init_session_state():
         st.session_state.transaction_result = None
 
 
+def get_rp_id():
+    """
+    環境に応じたRelying Party IDを取得
+
+    Returns:
+        str: RP ID (localhost or streamlit.app)
+    """
+    import os
+
+    # Streamlit Cloudで実行されているかチェック
+    # Streamlit Cloudの場合、環境変数 STREAMLIT_SHARING_MODE が設定されている
+    if os.environ.get('STREAMLIT_SHARING_MODE') or os.environ.get('HOSTNAME', '').endswith('.streamlit.app'):
+        return "streamlit.app"
+    else:
+        return "localhost"
+
+
 def initialize_participants(user_passphrase: str, shopping_agent_passphrase: str, merchant_agent_passphrase: str):
     """
     参加者を初期化
@@ -815,11 +832,14 @@ def step4_payment_creation():
                     st.write("### ✨ Passkey登録中...")
                     st.info("ブラウザのプロンプトが表示されます。デバイスの認証（Face ID、Touch ID、PINなど）を完了してください。")
 
+                    # 環境に応じたRP IDを取得
+                    rp_id = get_rp_id()
+
                     webauthn_register(
                         username=st.session_state.user_name,
                         user_id=st.session_state.user_id,
                         rp_name="AP2 Demo",
-                        rp_id="localhost"
+                        rp_id=rp_id
                     )
 
                     st.divider()
@@ -843,9 +863,13 @@ def step4_payment_creation():
 
                     # WebAuthn認証コンポーネントを表示
                     from webauthn_component import webauthn_authenticate
+
+                    # 環境に応じたRP IDを取得
+                    rp_id = get_rp_id()
+
                     webauthn_authenticate(
                         challenge=challenge,
-                        rp_id="localhost",
+                        rp_id=rp_id,
                         user_id=st.session_state.user_id
                     )
 
