@@ -69,7 +69,14 @@ def get_rp_id():
         return "localhost"
 
 
-def initialize_participants(user_passphrase: str, shopping_agent_passphrase: str, merchant_agent_passphrase: str):
+def initialize_participants(
+    user_passphrase: str,
+    shopping_agent_passphrase: str,
+    merchant_agent_passphrase: str,
+    merchant_passphrase: str,
+    credential_provider_passphrase: str,
+    payment_processor_passphrase: str
+):
     """
     参加者を初期化
 
@@ -77,6 +84,9 @@ def initialize_participants(user_passphrase: str, shopping_agent_passphrase: str
         user_passphrase: ユーザーの秘密鍵を保護するパスフレーズ
         shopping_agent_passphrase: Shopping Agentの秘密鍵を保護するパスフレーズ
         merchant_agent_passphrase: Merchant Agentの秘密鍵を保護するパスフレーズ
+        merchant_passphrase: Merchantの秘密鍵を保護するパスフレーズ
+        credential_provider_passphrase: Credential Providerの秘密鍵を保護するパスフレーズ
+        payment_processor_passphrase: Payment Processorの秘密鍵を保護するパスフレーズ
     """
     if st.session_state.user_initialized:
         return
@@ -127,24 +137,27 @@ def initialize_participants(user_passphrase: str, shopping_agent_passphrase: str
         )
 
         # Merchant (実際の販売者)
+        st.session_state.merchant_passphrase = merchant_passphrase
         st.session_state.merchant = Merchant(
             merchant_id="merchant_demo_001",
             merchant_name="むぎぼーグッズショップ",
-            passphrase="merchant_secure_pass"
+            passphrase=merchant_passphrase
         )
 
         # Credential Provider
+        st.session_state.credential_provider_passphrase = credential_provider_passphrase
         st.session_state.credential_provider = CredentialProvider(
             provider_id="cp_demo_001",
             provider_name="Demo Credential Provider",
-            passphrase="cp_secure_pass_2024"
+            passphrase=credential_provider_passphrase
         )
 
         # Merchant Payment Processor (Credential Providerを渡す)
+        st.session_state.payment_processor_passphrase = payment_processor_passphrase
         st.session_state.payment_processor = MerchantPaymentProcessor(
             processor_id="processor_demo_001",
             processor_name="Demo Payment Processor",
-            passphrase="processor_secure_pass",
+            passphrase=payment_processor_passphrase,
             credential_provider=st.session_state.credential_provider
         )
 
@@ -1385,6 +1398,7 @@ def main():
             このパスフレーズは秘密鍵の暗号化に使用され、鍵を復号化する際に必要になります。
             """)
 
+            st.markdown("**第1グループ: エージェント**")
             col1, col2, col3 = st.columns(3)
 
             with col1:
@@ -1409,12 +1423,45 @@ def main():
 
             with col3:
                 st.markdown("**🏪 Merchant Agent**")
-                merchant_pass = st.text_input(
+                merchant_agent_pass = st.text_input(
                     "パスフレーズ",
                     value="merchant_agent_pass",
                     type="password",
-                    key="merchant_pass",
+                    key="merchant_agent_pass",
                     help="Merchant Agentの秘密鍵を保護するパスフレーズ（8文字以上）"
+                )
+
+            st.markdown("**第2グループ: インフラストラクチャ**")
+            col4, col5, col6 = st.columns(3)
+
+            with col4:
+                st.markdown("**🏬 Merchant**")
+                merchant_pass = st.text_input(
+                    "パスフレーズ",
+                    value="merchant_secure_pass",
+                    type="password",
+                    key="merchant_pass",
+                    help="Merchantの秘密鍵を保護するパスフレーズ（8文字以上）"
+                )
+
+            with col5:
+                st.markdown("**🔑 Credential Provider**")
+                cp_pass = st.text_input(
+                    "パスフレーズ",
+                    value="credential_provider_pass",
+                    type="password",
+                    key="cp_pass",
+                    help="Credential Providerの秘密鍵を保護するパスフレーズ（8文字以上）"
+                )
+
+            with col6:
+                st.markdown("**💳 Payment Processor**")
+                pp_pass = st.text_input(
+                    "パスフレーズ",
+                    value="payment_processor_pass",
+                    type="password",
+                    key="pp_pass",
+                    help="Payment Processorの秘密鍵を保護するパスフレーズ（8文字以上）"
                 )
 
             st.divider()
@@ -1429,15 +1476,24 @@ def main():
                 if not shopping_pass or len(shopping_pass) < 8:
                     errors.append("Shopping Agentのパスフレーズは8文字以上にしてください")
 
-                if not merchant_pass or len(merchant_pass) < 8:
+                if not merchant_agent_pass or len(merchant_agent_pass) < 8:
                     errors.append("Merchant Agentのパスフレーズは8文字以上にしてください")
+
+                if not merchant_pass or len(merchant_pass) < 8:
+                    errors.append("Merchantのパスフレーズは8文字以上にしてください")
+
+                if not cp_pass or len(cp_pass) < 8:
+                    errors.append("Credential Providerのパスフレーズは8文字以上にしてください")
+
+                if not pp_pass or len(pp_pass) < 8:
+                    errors.append("Payment Processorのパスフレーズは8文字以上にしてください")
 
                 if errors:
                     for error in errors:
                         st.error(error)
                 else:
                     # パスフレーズが正しい場合、初期化実行
-                    initialize_participants(user_pass, shopping_pass, merchant_pass)
+                    initialize_participants(user_pass, shopping_pass, merchant_agent_pass, merchant_pass, cp_pass, pp_pass)
                     st.success("✓ 参加者の初期化が完了しました")
                     st.rerun()
 
