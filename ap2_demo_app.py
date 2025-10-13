@@ -495,7 +495,7 @@ def step3_cart_creation():
 
                 with col_qty:
                     if is_selected:
-                        qty = st.number_input("数量", min_value=1, max_value=10, value=1, key=f"qty_{i}", label_visibility="collapsed")
+                        qty = st.number_input("個", min_value=1, max_value=999, value=1, step=1, key=f"qty_{i}")
                         selected_products.append(product)
                         quantities[product.id] = qty
                     else:

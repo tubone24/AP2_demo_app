@@ -40,8 +40,12 @@ class RiskAssessmentEngine:
     HIGH_RISK_THRESHOLD = 80
 
     # 金額リスクの閾値（USD基準）
-    HIGH_VALUE_THRESHOLD = 500.0
-    VERY_HIGH_VALUE_THRESHOLD = 1000.0
+    # より現実的な閾値に設定
+    MODERATE_VALUE_THRESHOLD = 100.0    # 100ドル以上
+    HIGH_VALUE_THRESHOLD = 500.0        # 500ドル以上
+    VERY_HIGH_VALUE_THRESHOLD = 1000.0  # 1,000ドル以上（非常に高額）
+    EXTREME_VALUE_THRESHOLD = 5000.0    # 5,000ドル以上（極めて高額）
+    SUSPICIOUS_VALUE_THRESHOLD = 10000.0 # 10,000ドル以上（疑わしい）
 
     def __init__(self):
         """リスク評価エンジンを初期化"""
@@ -161,21 +165,32 @@ class RiskAssessmentEngine:
         """
         取引金額のリスクを評価
 
+        より現実的なリスク評価：
+        - 1,000ドル以上: 高リスク
+        - 5,000ドル以上: 非常に高リスク
+        - 10,000ドル以上: 極めて高リスク（ほぼ拒否）
+
         Returns:
-            0-40のリスクスコア
+            0-80のリスクスコア（高額取引用に上限を引き上げ）
         """
         amount_value = float(amount.value)
         max_amount_value = float(intent_mandate.constraints.max_amount.value)
 
         risk = 0
 
-        # 絶対額によるリスク
-        if amount_value >= self.VERY_HIGH_VALUE_THRESHOLD:
-            risk += 30
-        elif amount_value >= self.HIGH_VALUE_THRESHOLD:
-            risk += 20
-        elif amount_value >= 200.0:
-            risk += 10
+        # 絶対額によるリスク（段階的に評価）
+        if amount_value >= self.SUSPICIOUS_VALUE_THRESHOLD:  # 10,000ドル以上
+            risk += 60  # 極めて高リスク
+        elif amount_value >= self.EXTREME_VALUE_THRESHOLD:  # 5,000ドル以上
+            risk += 45  # 非常に高リスク
+        elif amount_value >= self.VERY_HIGH_VALUE_THRESHOLD:  # 1,000ドル以上
+            risk += 35  # 高リスク
+        elif amount_value >= self.HIGH_VALUE_THRESHOLD:  # 500ドル以上
+            risk += 25  # 中リスク
+        elif amount_value >= self.MODERATE_VALUE_THRESHOLD:  # 100ドル以上
+            risk += 10  # 低〜中リスク
+        elif amount_value >= 50.0:  # 50ドル以上
+            risk += 5   # 低リスク
 
         # Intent制約上限との比率
         ratio = amount_value / max_amount_value if max_amount_value > 0 else 0
@@ -184,7 +199,7 @@ class RiskAssessmentEngine:
         elif ratio >= 0.80:  # 上限の80%以上
             risk += 5
 
-        return min(risk, 40)
+        return min(risk, 80)  # 上限を40から80に引き上げ
 
     def _assess_constraint_compliance(
         self,
@@ -385,8 +400,9 @@ class RiskAssessmentEngine:
             0-100のリスクスコア
         """
         # 各要因の重み
+        # 金額リスクの重みを引き上げて、高額取引をより厳格に評価
         weights = {
-            "amount_risk": 1.5,
+            "amount_risk": 2.5,          # 金額リスクの重みを大幅に引き上げ（1.5 → 2.5）
             "constraint_risk": 2.0,
             "agent_risk": 0.5,
             "transaction_type_risk": 1.0,
