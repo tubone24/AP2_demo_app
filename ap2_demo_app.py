@@ -112,18 +112,19 @@ def initialize_participants(user_passphrase: str, shopping_agent_passphrase: str
             passphrase="merchant_secure_pass"
         )
 
-        # Merchant Payment Processor
-        st.session_state.payment_processor = MerchantPaymentProcessor(
-            processor_id="processor_demo_001",
-            processor_name="Demo Payment Processor",
-            passphrase="processor_secure_pass"
-        )
-
         # Credential Provider
         st.session_state.credential_provider = CredentialProvider(
             provider_id="cp_demo_001",
             provider_name="Demo Credential Provider",
             passphrase="cp_secure_pass_2024"
+        )
+
+        # Merchant Payment Processor (Credential Providerを渡す)
+        st.session_state.payment_processor = MerchantPaymentProcessor(
+            processor_id="processor_demo_001",
+            processor_name="Demo Payment Processor",
+            passphrase="processor_secure_pass",
+            credential_provider=st.session_state.credential_provider
         )
 
         # デモ用の支払い方法を事前登録
@@ -662,6 +663,29 @@ def step4_payment_creation():
             st.write(f"**取引タイプ:** {payment.transaction_type}")
             st.write(f"**Agent関与:** {'はい' if payment.agent_involved else 'いいえ'}")
 
+            # リスク評価情報を表示
+            if payment.risk_score is not None:
+                st.divider()
+                st.subheader("🔍 リスク評価")
+
+                # リスクレベルに応じた色分け
+                if payment.risk_score < 30:
+                    risk_level = "低"
+                    risk_color = "green"
+                elif payment.risk_score < 60:
+                    risk_level = "中"
+                    risk_color = "orange"
+                else:
+                    risk_level = "高"
+                    risk_color = "red"
+
+                st.markdown(f"**リスクスコア:** <span style='color: {risk_color}; font-size: 20px; font-weight: bold;'>{payment.risk_score}/100 ({risk_level}リスク)</span>", unsafe_allow_html=True)
+
+                if payment.fraud_indicators:
+                    st.write("**不正指標:**")
+                    for indicator in payment.fraud_indicators:
+                        st.write(f"- ⚠️ {indicator}")
+
             show_signature_info(payment.user_signature, "User署名")
 
             # JSON表示
@@ -681,13 +705,17 @@ def step5_payment_processing():
 
     # 参加者バナー
     show_participant_banner(
-        ["shopping_agent", "payment_processor"],
-        "Shopping Agentが全署名を検証し、Payment Processorが支払いを実行"
+        ["shopping_agent", "payment_processor", "credential_provider"],
+        "Shopping Agentが全署名を検証 → Payment ProcessorがCredential Providerに payment credentials をリクエスト → 決済実行"
     )
 
     st.markdown("""
-    Payment Mandateの署名を検証してから支払いを実行します。
-    すべての署名が有効であることを確認します。
+    **AP2仕様準拠の支払いフロー（ステップ25-27）:**
+    1. **Shopping Agent** がすべての Mandate 署名を検証
+    2. **Payment Processor** が **Credential Provider** に payment credentials をリクエスト
+    3. **Credential Provider** がリスク評価を実施し、高リスク取引の場合は OTP による追加認証を要求
+    4. **Payment Processor** が取得した credentials で決済ネットワークに送信
+    5. トランザクション完了
     """)
 
     col1, col2 = st.columns(2)

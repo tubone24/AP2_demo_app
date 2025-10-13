@@ -243,6 +243,122 @@ class CredentialProvider:
 
         return tokenized_method
 
+    def request_payment_credentials(
+        self,
+        payment_mandate: 'PaymentMandate',
+        otp: Optional[str] = None
+    ) -> Dict:
+        """
+        Payment Processorからのpayment credentialsリクエストを処理
+
+        AP2仕様のステップ25-27に対応：
+        - MPP → CP: "request payment credentials { PaymentMandate }"
+        - CP → MPP: "{ payment credentials }"
+
+        Args:
+            payment_mandate: Payment Mandate
+            otp: ワンタイムパスワード（高リスク取引で必要）
+
+        Returns:
+            payment credentials（実際の支払い情報）
+        """
+        print(f"[Credential Provider] Payment credentialsのリクエストを受信")
+
+        # 1. Payment Mandateの署名を検証
+        if not payment_mandate.user_signature:
+            raise ValueError("Payment MandateにUser署名がありません")
+
+        # 署名検証はここで実施（簡易版では省略）
+        print(f"  ✓ Payment Mandate署名を検証")
+
+        # 2. リスクスコアをチェック
+        risk_score = payment_mandate.risk_score or 0
+        print(f"  リスクスコア: {risk_score}/100")
+
+        # 3. 高リスク取引の場合、追加認証を要求
+        if risk_score >= 60:
+            if not otp:
+                raise ValueError("高リスク取引です。OTPによる追加認証が必要です")
+
+            # OTP検証（簡易版：固定値チェック）
+            if not self._verify_otp(payment_mandate.payer_id, otp):
+                raise ValueError("OTPが無効です")
+
+            print(f"  ✓ OTP検証完了")
+
+        # 4. トークンから実際の支払い方法を取得
+        token = payment_mandate.payment_method.token
+        if not token:
+            raise ValueError("Payment Methodにトークンがありません")
+
+        payment_method = self.get_payment_method_by_token(token)
+        if not payment_method:
+            raise ValueError(f"トークンに対応する支払い方法が見つかりません: {token[:16]}...")
+
+        # 5. ユーザーIDが一致するか確認
+        if not self.validate_token(token, payment_mandate.payer_id):
+            raise ValueError("トークンが無効、またはユーザーIDが一致しません")
+
+        print(f"  ✓ トークン検証完了")
+        print(f"  支払い方法: {payment_method.brand.upper()} ****{payment_method.last4}")
+
+        # 6. Payment Credentialsを返す
+        # 実際のシステムでは、決済ネットワークに送信するための暗号化された認証情報を返す
+        payment_credentials = {
+            "credential_type": "card",
+            "card_number": f"****{payment_method.last4}",  # 実際は完全な番号
+            "brand": payment_method.brand,
+            "expiry_month": payment_method.expiry_month,
+            "expiry_year": payment_method.expiry_year,
+            "holder_name": payment_method.holder_name,
+            "cryptogram": self._generate_cryptogram(payment_method),  # 決済ネットワーク用
+            "token": token,
+            "provider_id": self.provider_id
+        }
+
+        print(f"[Credential Provider] Payment credentialsを返却")
+
+        return payment_credentials
+
+    def _verify_otp(self, user_id: str, otp: str) -> bool:
+        """
+        OTPを検証
+
+        実際のシステムでは：
+        - Time-based OTP (TOTP)
+        - SMS OTP
+        - Email OTP
+        などを使用
+
+        Args:
+            user_id: ユーザーID
+            otp: ワンタイムパスワード
+
+        Returns:
+            OTPが有効かどうか
+        """
+        # デモ用：固定値チェック
+        DEMO_OTP = "123456"
+        return otp == DEMO_OTP
+
+    def _generate_cryptogram(self, payment_method: PaymentMethod) -> str:
+        """
+        決済ネットワーク用のクリプトグラムを生成
+
+        実際のシステムでは：
+        - EMV 3DS 2.0クリプトグラム
+        - Apple Pay/Google Pay暗号化
+        などを使用
+
+        Args:
+            payment_method: 支払い方法
+
+        Returns:
+            クリプトグラム
+        """
+        # デモ用：ランダムな文字列
+        return secrets.token_hex(16)
+
 
 def demo_credential_provider():
     """Credential Providerのデモ"""

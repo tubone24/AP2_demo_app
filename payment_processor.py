@@ -5,7 +5,7 @@ Credential Providerと連携して実際の決済を実行
 """
 
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Dict
 import uuid
 import time
 
@@ -17,6 +17,22 @@ from ap2_types import (
     Amount
 )
 from ap2_crypto import KeyManager, SignatureManager
+
+
+class TransactionChallengeRequired(Exception):
+    """
+    高リスク取引でOTP認証が必要な場合に発生する例外
+
+    Attributes:
+        transaction_id: チャレンジ待ちのトランザクションID
+        risk_score: リスクスコア
+        message: エラーメッセージ
+    """
+    def __init__(self, transaction_id: str, risk_score: int, message: str):
+        self.transaction_id = transaction_id
+        self.risk_score = risk_score
+        self.message = message
+        super().__init__(message)
 
 
 class MerchantPaymentProcessor:
@@ -35,7 +51,7 @@ class MerchantPaymentProcessor:
     - トランザクション状態の管理
     """
 
-    def __init__(self, processor_id: str, processor_name: str, passphrase: str):
+    def __init__(self, processor_id: str, processor_name: str, passphrase: str, credential_provider=None):
         """
         Payment Processorを初期化
 
@@ -43,9 +59,11 @@ class MerchantPaymentProcessor:
             processor_id: 決済処理業者ID
             processor_name: 決済処理業者名
             passphrase: 秘密鍵を保護するパスフレーズ
+            credential_provider: Credential Providerのインスタンス（オプション）
         """
         self.processor_id = processor_id
         self.processor_name = processor_name
+        self.credential_provider = credential_provider
 
         # 鍵管理
         self.key_manager = KeyManager()
@@ -64,6 +82,9 @@ class MerchantPaymentProcessor:
 
         # トランザクション履歴
         self.transactions = {}
+
+        # OTPチャレンジ待ちのトランザクション
+        self.pending_challenges = {}
 
         print(f"[Payment Processor] 初期化完了: {processor_name} (ID: {processor_id})")
 
@@ -106,17 +127,27 @@ class MerchantPaymentProcessor:
     def authorize_transaction(
         self,
         payment_mandate: PaymentMandate,
-        cart_mandate: CartMandate
+        cart_mandate: CartMandate,
+        otp: Optional[str] = None
     ) -> TransactionResult:
         """
         トランザクションを承認（Authorization）
 
+        AP2仕様のステップ25-27に対応：
+        - MPP → CP: "request payment credentials { PaymentMandate }"
+        - CP → MPP: "{ payment credentials }"
+        - 高リスク取引の場合はOTPチャレンジを要求
+
         Args:
             payment_mandate: Payment Mandate
             cart_mandate: Cart Mandate
+            otp: ワンタイムパスワード（高リスク取引で必要）
 
         Returns:
             トランザクション結果
+
+        Raises:
+            TransactionChallengeRequired: 高リスク取引でOTPが必要な場合
         """
         print(f"[Payment Processor] トランザクションの承認を開始...")
 
@@ -127,8 +158,65 @@ class MerchantPaymentProcessor:
         # トランザクションIDを生成
         transaction_id = f"txn_{uuid.uuid4().hex[:12]}"
 
+        # === AP2仕様ステップ25-27: Credential Providerから payment credentials を取得 ===
+        payment_credentials = None
+
+        if self.credential_provider:
+            print(f"[Payment Processor] Credential Providerに payment credentials をリクエスト...")
+            print(f"  AP2仕様ステップ25-27: MPP → CP 通信")
+
+            try:
+                # Credential Provider に payment credentials をリクエスト
+                payment_credentials = self.credential_provider.request_payment_credentials(
+                    payment_mandate,
+                    otp=otp
+                )
+
+                print(f"[Payment Processor] ✓ Payment credentials を取得しました")
+                print(f"  Brand: {payment_credentials['brand'].upper()}")
+                print(f"  Last4: ****{payment_credentials['card_number'][-4:]}")
+                print(f"  Cryptogram: {payment_credentials['cryptogram'][:16]}...")
+
+            except ValueError as e:
+                error_msg = str(e)
+
+                # 高リスク取引でOTPが必要な場合
+                if "OTP" in error_msg or "追加認証" in error_msg:
+                    # トランザクションをペンディング状態として保存
+                    self.pending_challenges[transaction_id] = {
+                        "payment_mandate": payment_mandate,
+                        "cart_mandate": cart_mandate,
+                        "risk_score": payment_mandate.risk_score or 0,
+                        "created_at": datetime.utcnow().isoformat() + "Z"
+                    }
+
+                    risk_score = payment_mandate.risk_score or 0
+                    print(f"[Payment Processor] ⚠ 高リスク取引検出 (リスクスコア: {risk_score}/100)")
+                    print(f"[Payment Processor] OTPによる追加認証が必要です")
+
+                    raise TransactionChallengeRequired(
+                        transaction_id=transaction_id,
+                        risk_score=risk_score,
+                        message=f"高リスク取引です。OTPによる追加認証が必要です。(取引ID: {transaction_id})"
+                    )
+                else:
+                    # その他のエラー
+                    raise
+        else:
+            # Credential Providerが設定されていない場合は、従来の方法
+            print(f"[Payment Processor] ⚠ Credential Providerが設定されていません")
+            print(f"[Payment Processor] Payment Mandateから直接支払い情報を使用します")
+
         # 決済ネットワークとの通信をシミュレート
         print(f"[Payment Processor] 決済ネットワークに承認リクエストを送信中...")
+
+        if payment_credentials:
+            # Credential Providerから取得した credentials を使用
+            print(f"  Cryptogram: {payment_credentials['cryptogram'][:16]}...")
+        else:
+            # 従来の方法（Payment Mandateから直接）
+            print(f"  Payment Method: {payment_mandate.payment_method.brand} ****{payment_mandate.payment_method.last4}")
+
         time.sleep(0.5)  # シミュレート用の遅延
 
         # 承認処理をシミュレート（常に成功）
@@ -149,11 +237,71 @@ class MerchantPaymentProcessor:
         # トランザクションを保存
         self.transactions[transaction_id] = transaction_result
 
-        print(f"[Payment Processor] トランザクション承認完了: {transaction_id}")
-        print(f"[Payment Processor] 金額: {payment_mandate.amount.currency} {payment_mandate.amount.value}")
-        print(f"[Payment Processor] 支払い方法: {payment_mandate.payment_method.brand.upper()} ****{payment_mandate.payment_method.last4}")
+        print(f"[Payment Processor] ✓ トランザクション承認完了: {transaction_id}")
+        print(f"  金額: {payment_mandate.amount.currency} {payment_mandate.amount.value}")
+
+        if payment_credentials:
+            print(f"  支払い方法: {payment_credentials['brand'].upper()} {payment_credentials['card_number']}")
+        else:
+            print(f"  支払い方法: {payment_mandate.payment_method.brand.upper()} ****{payment_mandate.payment_method.last4}")
 
         return transaction_result
+
+    def complete_challenge(
+        self,
+        transaction_id: str,
+        otp: str
+    ) -> TransactionResult:
+        """
+        OTPチャレンジを完了してトランザクションを承認
+
+        高リスク取引で TransactionChallengeRequired 例外が発生した後、
+        ユーザーがOTPを入力した場合にこのメソッドを呼び出します。
+
+        Args:
+            transaction_id: チャレンジ待ちのトランザクションID
+            otp: ワンタイムパスワード
+
+        Returns:
+            トランザクション結果
+
+        Raises:
+            ValueError: トランザクションが見つからないか、OTPが無効な場合
+        """
+        print(f"[Payment Processor] OTPチャレンジを完了中: {transaction_id}")
+
+        # ペンディング中のトランザクションを取得
+        if transaction_id not in self.pending_challenges:
+            raise ValueError(f"ペンディング中のトランザクションが見つかりません: {transaction_id}")
+
+        challenge_data = self.pending_challenges[transaction_id]
+        payment_mandate = challenge_data["payment_mandate"]
+        cart_mandate = challenge_data["cart_mandate"]
+
+        print(f"  リスクスコア: {challenge_data['risk_score']}/100")
+        print(f"  OTPを検証中...")
+
+        # OTPを使ってトランザクションを再実行
+        try:
+            transaction_result = self.authorize_transaction(
+                payment_mandate,
+                cart_mandate,
+                otp=otp
+            )
+
+            # 成功したらペンディングリストから削除
+            del self.pending_challenges[transaction_id]
+
+            print(f"[Payment Processor] ✓ OTPチャレンジ完了")
+            return transaction_result
+
+        except TransactionChallengeRequired:
+            # まだチャレンジが必要（OTPが無効など）
+            raise ValueError(f"OTPが無効です")
+
+        except Exception as e:
+            # その他のエラー
+            raise ValueError(f"トランザクションの処理に失敗しました: {str(e)}")
 
     def capture_transaction(self, transaction_id: str) -> TransactionResult:
         """
