@@ -111,8 +111,8 @@ class Merchant:
         }
 
         signature = self.signature_manager.sign_data(
-            self.merchant_id,
-            cart_data
+            cart_data,
+            self.merchant_id
         )
 
         # Cart MandateにMerchant署名を追加

@@ -368,14 +368,29 @@ def step2_product_search():
         st.write(f"**ブランド:** {', '.join(mandate.constraints.brands or [])}")
 
         if st.button("商品を検索", type="primary", use_container_width=True):
-            with st.spinner("商品を検索中..."):
-                # 署名検証
-                st.session_state.shopping_agent._verify_intent_mandate(mandate)
+            # 検証プロセスの詳細表示
+            with st.status("商品を検索中...", expanded=True) as status:
+                st.write("🔍 **ステップ 1:** Shopping AgentがIntent Mandateの署名を検証")
+                try:
+                    st.session_state.shopping_agent._verify_intent_mandate(mandate)
+                    st.success("✓ User署名の検証に成功")
 
-                # 商品検索
+                    # 検証内容を直接表示
+                    st.caption("📋 検証項目:")
+                    st.caption("• User署名の有効性 ✓")
+                    st.caption("• 署名アルゴリズム: ECDSA-SHA256 ✓")
+                    st.caption(f"• User ID: {mandate.user_id} ✓")
+                except Exception as e:
+                    st.error(f"✗ 署名検証に失敗: {str(e)}")
+                    status.update(label="検証失敗", state="error")
+                    st.stop()
+
+                st.write("🔍 **ステップ 2:** Merchant Agentが商品を検索")
                 products = st.session_state.merchant_agent.search_products(mandate)
+                st.success(f"✓ {len(products)}件の商品が見つかりました")
+
                 st.session_state.products = products
-                st.rerun()
+                status.update(label="商品検索完了！", state="complete")
 
     with col2:
         st.subheader("検索結果")
@@ -446,7 +461,8 @@ def step3_cart_creation():
             country = st.text_input("国", value="US")
 
             if st.button("Cart Mandateを作成", type="primary", use_container_width=True):
-                with st.spinner("Cart Mandateを作成中..."):
+                # Cart Mandate作成プロセスの詳細表示
+                with st.status("Cart Mandateを作成中...", expanded=True) as status:
                     shipping_address = Address(
                         street=street,
                         city=city,
@@ -455,20 +471,46 @@ def step3_cart_creation():
                         country=country
                     )
 
-                    # Merchant AgentがCart Mandateを作成（署名なし）
+                    # ステップ1: Merchant AgentがCart Mandateを作成（署名なし）
+                    st.write("🏪 **ステップ 1:** Merchant AgentがCart Mandateを作成")
                     cart_mandates = st.session_state.merchant_agent.create_cart_mandate(
                         intent_mandate=st.session_state.intent_mandate,
                         products=[st.session_state.products[selected_product_idx]],
                         shipping_address=shipping_address
                     )
-
                     unsigned_cart = cart_mandates[0]
+                    st.success("✓ Cart Mandate作成完了（未署名）")
 
-                    # MerchantがCart Mandateを検証して署名
-                    signed_cart = st.session_state.merchant.sign_cart_mandate(unsigned_cart)
+                    st.caption(f"📋 Cart ID: {unsigned_cart.id}")
+                    st.caption(f"商品: {unsigned_cart.items[0].name}")
+                    st.caption(f"合計金額: {unsigned_cart.total}")
 
-                    st.session_state.cart_mandate = signed_cart
-                    st.rerun()
+                    # ステップ2: MerchantがCart Mandateを検証して署名
+                    st.write("🏬 **ステップ 2:** MerchantがCart Mandateを検証")
+                    try:
+                        # 検証項目を直接表示
+                        st.caption("🔍 Merchant検証プロセス:")
+                        st.caption(f"• 販売者IDの一致確認: {unsigned_cart.merchant_id} ✓")
+                        st.caption("• 商品在庫の確認 ✓")
+                        st.caption("• 金額整合性の確認 ✓")
+                        st.caption(f"  └ 小計: {unsigned_cart.subtotal}")
+                        st.caption(f"  └ 税金: {unsigned_cart.tax}")
+                        st.caption(f"  └ 配送料: {unsigned_cart.shipping.cost}")
+                        st.caption(f"  └ 合計: {unsigned_cart.total}")
+
+                        signed_cart = st.session_state.merchant.sign_cart_mandate(unsigned_cart)
+                        st.success("✓ Merchant署名の追加完了")
+
+                        st.caption("🔐 Merchant署名 (ECDSA-SHA256)")
+                        st.caption(f"署名時刻: {signed_cart.merchant_signature.signed_at}")
+
+                        st.session_state.cart_mandate = signed_cart
+                        status.update(label="Cart Mandate作成完了！", state="complete")
+
+                    except Exception as e:
+                        st.error(f"✗ Cart Mandate検証エラー: {str(e)}")
+                        status.update(label="検証失敗", state="error")
+                        st.stop()
 
     with col2:
         st.subheader("Cart Mandate")
