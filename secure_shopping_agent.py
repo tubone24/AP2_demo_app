@@ -22,6 +22,7 @@ from ap2_types import (
 )
 
 from ap2_crypto import KeyManager, SignatureManager
+from risk_assessment import RiskAssessmentEngine
 
 
 class SecureShoppingAgent:
@@ -58,6 +59,9 @@ class SecureShoppingAgent:
             type=AgentType.SHOPPING,
             public_key=self.key_manager.public_key_to_base64(self.public_key)
         )
+
+        # リスク評価エンジン
+        self.risk_engine = RiskAssessmentEngine()
     
     def _initialize_agent_keys(self, passphrase: str):
         """エージェントの鍵ペアを初期化"""
@@ -299,6 +303,24 @@ class SecureShoppingAgent:
             created_at=datetime.utcnow().isoformat() + 'Z'
         )
         
+        # リスク評価を実行
+        print(f"  リスク評価を実行中...")
+        risk_result = self.risk_engine.assess_payment_mandate(
+            payment_mandate,
+            cart_mandate,
+            intent_mandate
+        )
+
+        # リスクスコアと不正指標を設定
+        payment_mandate.risk_score = risk_result.risk_score
+        payment_mandate.fraud_indicators = risk_result.fraud_indicators
+
+        print(f"  ✓ リスク評価完了")
+        print(f"    - リスクスコア: {risk_result.risk_score}/100")
+        print(f"    - 推奨アクション: {risk_result.recommendation}")
+        if risk_result.fraud_indicators:
+            print(f"    - 不正指標: {', '.join(risk_result.fraud_indicators)}")
+
         # ユーザーの署名を追加
         # 注: Payment Mandateはユーザーのみが署名します
         # Cart Mandateで既にマーチャントの同意は得られているため、
@@ -311,7 +333,7 @@ class SecureShoppingAgent:
 
         print(f"  ✓ Payment Mandate作成完了: {payment_mandate.id}")
         print(f"  ✓ ユーザー署名追加")
-        
+
         return payment_mandate
     
     async def process_payment(
