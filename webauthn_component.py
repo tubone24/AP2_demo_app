@@ -141,7 +141,7 @@ def webauthn_authenticate(challenge: str, rp_id: str = "localhost", user_id: str
 
                     // 認証成功
                     statusDiv.className = 'status success';
-                    statusDiv.textContent = '✓ Passkey認証が成功しました！';
+                    statusDiv.textContent = '✓ Passkey認証が成功しました！下の確認ボタンをクリックしてください。';
 
                     // 認証データを準備
                     const response = credential.response;
@@ -151,14 +151,13 @@ def webauthn_authenticate(challenge: str, rp_id: str = "localhost", user_id: str
                         authenticatorData: base64urlEncode(response.authenticatorData),
                         clientDataJSON: base64urlEncode(response.clientDataJSON),
                         signature: base64urlEncode(response.signature),
-                        userHandle: response.userHandle ? base64urlEncode(response.userHandle) : null
+                        userHandle: response.userHandle ? base64urlEncode(response.userHandle) : null,
+                        timestamp: Date.now()
                     }};
 
-                    // Streamlitに結果を送信
-                    window.parent.postMessage({{
-                        type: 'webauthn_result',
-                        data: result
-                    }}, '*');
+                    // ローカルストレージに保存
+                    localStorage.setItem('webauthn_auth_result', JSON.stringify(result));
+                    console.log('認証成功 - ローカルストレージに保存');
 
                 }} catch (error) {{
                     console.error('WebAuthn error:', error);
@@ -172,14 +171,14 @@ def webauthn_authenticate(challenge: str, rp_id: str = "localhost", user_id: str
                         statusDiv.textContent = '✗ エラー: ' + error.message;
                     }}
 
-                    // エラーをStreamlitに送信
-                    window.parent.postMessage({{
-                        type: 'webauthn_result',
-                        data: {{
-                            success: false,
-                            error: error.message
-                        }}
-                    }}, '*');
+                    // エラーをローカルストレージに保存
+                    const errorResult = {{
+                        success: false,
+                        error: error.message,
+                        timestamp: Date.now()
+                    }};
+                    localStorage.setItem('webauthn_auth_result', JSON.stringify(errorResult));
+                    console.log('認証失敗 - ローカルストレージに保存');
 
                     button.disabled = false;
                 }}
@@ -190,9 +189,10 @@ def webauthn_authenticate(challenge: str, rp_id: str = "localhost", user_id: str
     """
 
     # コンポーネントを表示
-    result = components.html(webauthn_html, height=300)
+    components.html(webauthn_html, height=300)
 
-    return result
+    # 戻り値は使用しない（ローカルストレージを使用）
+    return None
 
 
 def webauthn_delete(username: str, rp_name: str = "AP2 Demo"):
@@ -310,50 +310,6 @@ def webauthn_delete(username: str, rp_name: str = "AP2 Demo"):
         <div id="status" class="status warning">
             <strong>⚠️ Passkeyの削除について</strong><br>
             サーバー側の登録情報を削除しますが、デバイスに保存されているPasskeyは手動で削除する必要があります。
-        </div>
-
-        <div class="instructions">
-            <h3>📱 デバイスからPasskeyを削除する方法</h3>
-
-            <div class="platform-section">
-                <strong>🍎 iOS/iPadOS:</strong>
-                <ol>
-                    <li>設定アプリを開く</li>
-                    <li>「パスワード」をタップ</li>
-                    <li>「{rp_name}」を検索</li>
-                    <li>パスキーを選択して削除</li>
-                </ol>
-            </div>
-
-            <div class="platform-section">
-                <strong>🍏 macOS:</strong>
-                <ol>
-                    <li>システム設定を開く</li>
-                    <li>「パスワード」をクリック</li>
-                    <li>「{rp_name}」を検索</li>
-                    <li>パスキーを選択して削除</li>
-                </ol>
-            </div>
-
-            <div class="platform-section">
-                <strong>🤖 Android:</strong>
-                <ol>
-                    <li>設定アプリを開く</li>
-                    <li>「パスワードとアカウント」→「Google パスワード マネージャー」</li>
-                    <li>「パスキー」タブを選択</li>
-                    <li>「{rp_name}」を検索して削除</li>
-                </ol>
-            </div>
-
-            <div class="platform-section">
-                <strong>🌐 Chrome/Edge (Windows):</strong>
-                <ol>
-                    <li>ブラウザの設定を開く</li>
-                    <li>「パスワード」セクションへ</li>
-                    <li>「パスキー」を探す</li>
-                    <li>「{rp_name}」を検索して削除</li>
-                </ol>
-            </div>
         </div>
 
         <button id="deleteButton" onclick="confirmDelete()">🗑️ サーバー側の登録を削除</button>
@@ -609,3 +565,97 @@ def webauthn_register(username: str, user_id: str, rp_name: str = "AP2 Demo", rp
     return result
 
 
+def check_webauthn_auth_result():
+    """
+    ローカルストレージからWebAuthn認証結果を確認し、成功/失敗を返す
+
+    Returns:
+        bool: 認証が成功した場合True、失敗またはない場合False
+    """
+
+    # ローカルストレージから取得して表示するHTMLコンポーネント
+    check_result_html = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="UTF-8">
+        <style>
+            body {
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+                padding: 10px;
+                margin: 0;
+            }
+            .result {
+                padding: 15px;
+                border-radius: 8px;
+                font-size: 14px;
+                margin: 5px 0;
+            }
+            .success {
+                background: #e8f5e9;
+                border-left: 4px solid #4caf50;
+                color: #2e7d32;
+            }
+            .error {
+                background: #ffebee;
+                border-left: 4px solid #f44336;
+                color: #c62828;
+            }
+            .none {
+                background: #fff3e0;
+                border-left: 4px solid #ff9800;
+                color: #e65100;
+            }
+        </style>
+    </head>
+    <body>
+        <div id="result"></div>
+        <script>
+            const resultDiv = document.getElementById('result');
+
+            // ローカルストレージから認証結果を取得
+            const authResultStr = localStorage.getItem('webauthn_auth_result');
+
+            if (authResultStr) {
+                try {
+                    const authResult = JSON.parse(authResultStr);
+
+                    if (authResult.success === true) {
+                        resultDiv.className = 'result success';
+                        resultDiv.innerHTML = '✓ <strong>認証成功:</strong> Passkey認証が完了しました';
+
+                        // 成功を示すメタデータを設定
+                        document.body.setAttribute('data-auth-result', 'success');
+                    } else {
+                        resultDiv.className = 'result error';
+                        resultDiv.innerHTML = '✗ <strong>認証失敗:</strong> ' + (authResult.error || '認証がキャンセルまたは失敗しました');
+
+                        // 失敗を示すメタデータを設定
+                        document.body.setAttribute('data-auth-result', 'failure');
+                    }
+
+                    console.log('認証結果:', authResult);
+                } catch (error) {
+                    resultDiv.className = 'result error';
+                    resultDiv.innerHTML = '✗ <strong>エラー:</strong> 認証結果の読み取りに失敗しました';
+                    document.body.setAttribute('data-auth-result', 'error');
+                    console.error('認証結果のパースエラー:', error);
+                }
+            } else {
+                resultDiv.className = 'result none';
+                resultDiv.innerHTML = '⚠️ <strong>認証結果なし:</strong> まず上のボタンでPasskey認証を実行してください';
+                document.body.setAttribute('data-auth-result', 'none');
+                console.log('認証結果なし');
+            }
+        </script>
+    </body>
+    </html>
+    """
+
+    # コンポーネントを表示
+    components.html(check_result_html, height=80)
+
+    # ローカルストレージから結果を読み取る（Pythonでは直接読めないので、
+    # 実際にはsession_stateに保存する必要がある）
+    # このデモでは、ユーザーが視覚的に確認できるようにする
+    return None

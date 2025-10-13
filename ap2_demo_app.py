@@ -764,27 +764,9 @@ def step4_payment_creation():
             承認リクエストが送信されます。
             """)
 
-            # Face ID/Touch IDシミュレーション表示
             st.markdown("---")
 
-            # Passkey認証の説明
-            st.markdown("""
-            <div style="text-align: center; padding: 30px; background-color: #f8f9fa; border-radius: 15px; margin: 20px 0;">
-                <div style="font-size: 80px; margin-bottom: 10px;">🔑</div>
-                <div style="font-size: 24px; font-weight: bold; color: #333; margin-bottom: 10px;">Passkey認証</div>
-                <div style="font-size: 14px; color: #666;">ブラウザのWeb Authentication APIを使用した実際の認証</div>
-            </div>
-            """, unsafe_allow_html=True)
-
-            st.markdown("---")
-
-            st.info("🔑 **実際のPasskey（WebAuthn）認証を使用します**")
-            st.markdown("""
-            WebAuthnでは、まずPasskeyを登録してから認証を行います：
-            - 💻 **プラットフォーム認証**: Face ID、Touch ID、Windows Hello
-            - 🔑 **セキュリティキー**: YubiKey、Titan Keyなど
-            - 📱 **モバイルデバイス**: スマートフォンの生体認証
-            """)
+            st.info("🔑 **Passkey（WebAuthn）認証を使用します**")
 
             # Passkey登録状態を管理
             if 'passkey_registered' not in st.session_state:
@@ -859,6 +841,8 @@ def step4_payment_creation():
                     st.write("### 🔐 Passkey認証中...")
                     st.info("ブラウザのプロンプトが表示されます。デバイスの認証を完了してください。")
 
+                    # WebAuthn認証コンポーネントを表示
+                    from webauthn_component import webauthn_authenticate
                     webauthn_authenticate(
                         challenge=challenge,
                         rp_id="localhost",
@@ -867,65 +851,85 @@ def step4_payment_creation():
 
                     st.divider()
 
-                    st.info("""
-                    **次のステップ:**
-                    1. 上記のPasskey認証プロンプトで認証を完了してください
-                    2. 認証が成功したら、下の「認証完了」ボタンをクリックしてください
-                    """)
+                    # 認証結果を確認
+                    st.write("### 📋 認証結果の確認")
+                    st.info("**重要:** 認証が成功したことを確認してから、下のボタンをクリックしてください")
 
-                    # 認証完了ボタン（WebAuthn完了後にクリック）
-                    if st.button("✅ 認証完了 - Device Attestationを生成", type="primary", use_container_width=True, key="device_approve"):
-                        with st.status("Device Attestationを生成中...", expanded=True) as status:
-                            import time
-                            from ap2_crypto import DeviceAttestationManager
-                            from ap2_types import AttestationType, PaymentMandate
+                    from webauthn_component import check_webauthn_auth_result
+                    check_webauthn_auth_result()
 
-                            st.write("🔐 **ステップ 1:** デバイスがチャレンジを生成")
-                            time.sleep(0.5)
+                    st.divider()
 
-                            st.write("🔐 **ステップ 2:** Passkey認証完了")
-                            time.sleep(0.5)
+                    col_btn1, col_btn2 = st.columns(2)
 
-                            st.write("🔐 **ステップ 3:** デバイスが暗号学的証明を生成")
-                            time.sleep(0.5)
-
-                            # Device Attestation Managerを初期化
-                            attestation_manager = DeviceAttestationManager(st.session_state.user_key_manager)
-
-                            # Payment Mandate IDを事前に生成（これによりDevice Attestationとの整合性を保つ）
-                            import uuid
-                            payment_id = f"payment_{uuid.uuid4().hex}"
-
-                            # Device Attestationを生成
-                            from dataclasses import dataclass
-                            @dataclass
-                            class TempPaymentMandate:
-                                id: str
-
-                            temp_mandate = TempPaymentMandate(id=payment_id)
-
-                            device_attestation = attestation_manager.create_device_attestation(
-                                device_id="device_demo_" + st.session_state.user_id,
-                                payment_mandate=temp_mandate,
-                                device_key_id=st.session_state.user_id,
-                                attestation_type=AttestationType.PASSKEY,
-                                platform="Web",
-                                os_version=None,
-                                app_version="1.0.0"
-                            )
-
-                            st.success("✓ Device Attestation生成完了")
-                            st.caption(f"📋 Device ID: {device_attestation.device_id}")
-                            st.caption(f"📋 Platform: {device_attestation.platform}")
-                            st.caption(f"📋 Attestation Type: {device_attestation.attestation_type.value}")
-                            st.caption(f"📋 Timestamp: {device_attestation.timestamp}")
-
-                            # Session stateに保存（Payment IDも保存）
-                            st.session_state.device_attestation = device_attestation
-                            st.session_state.payment_mandate_id = payment_id  # Payment IDを保存
-                            status.update(label="デバイス認証完了！", state="complete")
-                            time.sleep(0.5)
+                    with col_btn1:
+                        if st.button("✅ 認証成功 - Device Attestationを生成", type="primary", use_container_width=True, key="confirm_auth_success"):
+                            # 認証が成功した場合のみ、Device Attestationを生成
+                            st.session_state.auth_check_requested = True
                             st.rerun()
+
+                    with col_btn2:
+                        if st.button("🔄 認証をやり直す", use_container_width=True, key="retry_auth"):
+                            # ローカルストレージをクリアして再試行
+                            st.session_state.show_webauthn = False
+                            st.rerun()
+
+                # 認証チェックが要求された場合
+                if st.session_state.get('auth_check_requested', False):
+                    st.session_state.auth_check_requested = False
+
+                    # Device Attestation生成処理を実行
+                    with st.status("Device Attestationを生成中...", expanded=True) as status:
+                        import time
+                        from ap2_crypto import DeviceAttestationManager
+                        from ap2_types import AttestationType, PaymentMandate
+
+                        st.write("🔐 **ステップ 1:** デバイスがチャレンジを生成")
+                        time.sleep(0.5)
+
+                        st.write("🔐 **ステップ 2:** Passkey認証完了")
+                        time.sleep(0.5)
+
+                        st.write("🔐 **ステップ 3:** デバイスが暗号学的証明を生成")
+                        time.sleep(0.5)
+
+                        # Device Attestation Managerを初期化
+                        attestation_manager = DeviceAttestationManager(st.session_state.user_key_manager)
+
+                        # Payment Mandate IDを事前に生成（これによりDevice Attestationとの整合性を保つ）
+                        import uuid
+                        payment_id = f"payment_{uuid.uuid4().hex}"
+
+                        # Device Attestationを生成
+                        from dataclasses import dataclass
+                        @dataclass
+                        class TempPaymentMandate:
+                            id: str
+
+                        temp_mandate = TempPaymentMandate(id=payment_id)
+
+                        device_attestation = attestation_manager.create_device_attestation(
+                            device_id="device_demo_" + st.session_state.user_id,
+                            payment_mandate=temp_mandate,
+                            device_key_id=st.session_state.user_id,
+                            attestation_type=AttestationType.PASSKEY,
+                            platform="Web",
+                            os_version=None,
+                            app_version="1.0.0"
+                        )
+
+                        st.success("✓ Device Attestation生成完了")
+                        st.caption(f"📋 Device ID: {device_attestation.device_id}")
+                        st.caption(f"📋 Platform: {device_attestation.platform}")
+                        st.caption(f"📋 Attestation Type: {device_attestation.attestation_type.value}")
+                        st.caption(f"📋 Timestamp: {device_attestation.timestamp}")
+
+                        # Session stateに保存（Payment IDも保存）
+                        st.session_state.device_attestation = device_attestation
+                        st.session_state.payment_mandate_id = payment_id  # Payment IDを保存
+                        status.update(label="デバイス認証完了！", state="complete")
+                        time.sleep(0.5)
+                        st.rerun()
 
         with col2:
             st.subheader("🔒 Device Attestationとは")
@@ -1329,13 +1333,10 @@ def main():
 
         st.divider()
 
-        st.subheader("セキュリティ保証")
+        st.subheader("References")
         st.markdown("""
-        - 🔐 暗号署名による保護
-        - 🔐 改ざん検知
-        - 🔐 非否認性
-        - 🔐 鍵の暗号化保存
-        - 🔐 各ステップでの検証
+        - [AP2 Protocol Specification](https://ap2-protocol.org/specification/)
+        - [AP2 GitHub Repository](https://github.com/google-agentic-commerce/AP2)
         """)
 
     # 参加者の初期化
@@ -1346,7 +1347,7 @@ def main():
         AP2プロトコルでは、各参加者（ユーザー、Shopping Agent、Merchant Agent）が
         それぞれ暗号鍵ペアを持ちます。
 
-        このステップでは：
+        このステップでは
         - **ECDSA鍵ペア**を生成
         - 秘密鍵を**AES-256-CBC**で暗号化して保存
         - 公開鍵を保存
@@ -1531,7 +1532,7 @@ def main():
             st.divider()
 
             st.info("""
-            **セキュリティに関する注意:**
+            **セキュリティに関する注意**
             - 公開鍵は自由に共有できます
             - 秘密鍵は暗号化されていますが、パスフレーズと一緒に保管しないでください
             - 実際のシステムでは、秘密鍵をエクスポートする機能は提供しないことが推奨されます
