@@ -148,6 +148,17 @@ def initialize_participants(user_passphrase: str, shopping_agent_passphrase: str
             holder_name='デモユーザー'
         )
 
+        # テスト用：オーソリ失敗するカード（残高不足）
+        demo_card_fail = CardPaymentMethod(
+            type='card',
+            token='',
+            last4='0001',
+            brand='visa',
+            expiry_month=12,
+            expiry_year=2026,
+            holder_name='デモユーザー（残高不足テスト）'
+        )
+
         # 支払い方法をCredential Providerに登録
         st.session_state.credential_provider.register_payment_method(
             user_id=st.session_state.user_id,
@@ -158,6 +169,12 @@ def initialize_participants(user_passphrase: str, shopping_agent_passphrase: str
         st.session_state.credential_provider.register_payment_method(
             user_id=st.session_state.user_id,
             payment_method=demo_card2,
+            is_default=False
+        )
+
+        st.session_state.credential_provider.register_payment_method(
+            user_id=st.session_state.user_id,
+            payment_method=demo_card_fail,
             is_default=False
         )
 
@@ -737,15 +754,24 @@ def step5_payment_processing():
         if st.button("支払いを実行", type="primary", use_container_width=True):
             with st.spinner("支払いを処理中..."):
                 try:
-                    result = asyncio.run(
-                        st.session_state.shopping_agent.process_payment(
-                            payment_mandate=payment,
-                            payment_processor_id="payment_processor_demo",
-                            otp=otp
-                        )
+                    # Payment Processorを直接使用してトランザクションを処理
+                    from ap2_types import TransactionStatus
+
+                    # 1. トランザクションを承認（Authorization）
+                    transaction_result = st.session_state.payment_processor.authorize_transaction(
+                        payment_mandate=payment,
+                        cart_mandate=cart,
+                        otp=otp
                     )
 
-                    st.session_state.transaction_result = result
+                    # 2. 承認が成功した場合のみキャプチャ（Capture）
+                    if transaction_result.status == TransactionStatus.AUTHORIZED:
+                        transaction_result = st.session_state.payment_processor.capture_transaction(
+                            transaction_result.id
+                        )
+                    # 3. 失敗した場合はそのまま失敗結果を使用
+
+                    st.session_state.transaction_result = transaction_result
                     st.session_state.step = 6
                     st.rerun()
 
@@ -765,6 +791,81 @@ def step5_payment_processing():
 
 def step6_completion():
     """ステップ6: 完了"""
+    result = st.session_state.transaction_result
+
+    # トランザクションが失敗した場合の処理
+    from ap2_types import TransactionStatus
+    if result.status == TransactionStatus.FAILED:
+        st.header("❌ ステップ6: トランザクション失敗")
+
+        # 参加者バナー
+        show_participant_banner(
+            ["payment_processor", "user"],
+            "Payment Processorでトランザクションが拒否されました"
+        )
+
+        st.error("✗✗✗ 支払いが失敗しました ✗✗✗")
+
+        # エラー情報の表示
+        st.subheader("❌ エラー詳細")
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.write(f"**トランザクションID:** `{result.id}`")
+            st.write(f"**ステータス:** {result.status.value.upper()}")
+
+            st.divider()
+
+            st.error(f"**エラーコード:** {result.error_code}")
+            st.error(f"**エラーメッセージ:** {result.error_message}")
+
+            st.divider()
+
+            st.info("""
+            **よくある失敗理由:**
+            - 残高不足
+            - カードの有効期限切れ
+            - カード発行会社による拒否
+            - セキュリティコード不一致
+            - 不正利用の疑い
+            """)
+
+        with col2:
+            st.subheader("💡 対処方法")
+
+            if result.error_code == "insufficient_funds":
+                st.write("- カードの利用可能額を確認してください")
+                st.write("- 別の支払い方法を試してください")
+            elif result.error_code == "card_declined":
+                st.write("- カード発行会社にお問い合わせください")
+                st.write("- 別のカードで再試行してください")
+            elif result.error_code == "expired_card":
+                st.write("- カードの有効期限を確認してください")
+                st.write("- 有効なカードで再試行してください")
+            elif result.error_code == "fraud_suspected":
+                st.write("- カード発行会社に連絡して、取引を承認してください")
+                st.write("- 本人確認が必要な場合があります")
+            else:
+                st.write("- カード発行会社にお問い合わせください")
+                st.write("- しばらくしてから再試行してください")
+
+        # トランザクション結果のJSON表示
+        st.divider()
+        st.subheader("📄 トランザクション結果")
+        show_json_data(result, "Transaction Result JSON", expand=True)
+
+        st.divider()
+
+        if st.button("最初からやり直す", use_container_width=True):
+            # セッション状態を完全にクリア
+            for key in list(st.session_state.keys()):
+                del st.session_state[key]
+            st.rerun()
+
+        return
+
+    # 成功した場合の処理
     st.header("🎉 ステップ6: トランザクション完了")
 
     # 参加者バナー
@@ -772,8 +873,6 @@ def step6_completion():
         ["payment_processor", "user"],
         "Payment Processorが取引を完了し、Userに領収書を発行"
     )
-
-    result = st.session_state.transaction_result
 
     st.success("✓✓✓ 支払いが正常に完了しました！ ✓✓✓")
 
@@ -1095,7 +1194,6 @@ def main():
             - 秘密鍵は暗号化されていますが、パスフレーズと一緒に保管しないでください
             - 実際のシステムでは、秘密鍵をエクスポートする機能は提供しないことが推奨されます
             """)
-
             if st.button("次のステップへ →", type="primary", use_container_width=True):
                 st.session_state.step = 1
                 st.rerun()

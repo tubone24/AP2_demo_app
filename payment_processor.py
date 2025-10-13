@@ -213,37 +213,41 @@ class MerchantPaymentProcessor:
         if payment_credentials:
             # Credential Providerから取得した credentials を使用
             print(f"  Cryptogram: {payment_credentials['cryptogram'][:16]}...")
+            card_last4 = payment_credentials['card_number'][-4:]
+            card_brand = payment_credentials['brand']
         else:
             # 従来の方法（Payment Mandateから直接）
             print(f"  Payment Method: {payment_mandate.payment_method.brand} ****{payment_mandate.payment_method.last4}")
+            card_last4 = payment_mandate.payment_method.last4
+            card_brand = payment_mandate.payment_method.brand
 
         time.sleep(0.5)  # シミュレート用の遅延
 
-        # 承認処理をシミュレート（常に成功）
-        authorized_at = datetime.utcnow().isoformat() + "Z"
-
-        # トランザクション結果を作成
-        transaction_result = TransactionResult(
-            id=transaction_id,
-            status=TransactionStatus.AUTHORIZED,
-            cart_mandate_id=cart_mandate.id,
-            payment_mandate_id=payment_mandate.id,
-            amount=payment_mandate.amount,
-            authorized_at=authorized_at,
-            captured_at=None,
-            receipt_url=None
+        # === オーソリ処理のシミュレーション ===
+        # カードの下4桁に基づいて失敗パターンをシミュレート（テスト用）
+        transaction_result = self._simulate_authorization(
+            transaction_id,
+            payment_mandate,
+            cart_mandate,
+            card_last4,
+            card_brand
         )
 
         # トランザクションを保存
         self.transactions[transaction_id] = transaction_result
 
-        print(f"[Payment Processor] ✓ トランザクション承認完了: {transaction_id}")
-        print(f"  金額: {payment_mandate.amount.currency} {payment_mandate.amount.value}")
-
-        if payment_credentials:
-            print(f"  支払い方法: {payment_credentials['brand'].upper()} {payment_credentials['card_number']}")
+        # 結果を表示
+        if transaction_result.status == TransactionStatus.AUTHORIZED:
+            print(f"[Payment Processor] ✓ トランザクション承認完了: {transaction_id}")
+            print(f"  金額: {payment_mandate.amount.currency} {payment_mandate.amount.value}")
+            if payment_credentials:
+                print(f"  支払い方法: {card_brand.upper()} {payment_credentials['card_number']}")
+            else:
+                print(f"  支払い方法: {card_brand.upper()} ****{card_last4}")
         else:
-            print(f"  支払い方法: {payment_mandate.payment_method.brand.upper()} ****{payment_mandate.payment_method.last4}")
+            print(f"[Payment Processor] ✗ トランザクション承認失敗: {transaction_id}")
+            print(f"  エラーコード: {transaction_result.error_code}")
+            print(f"  エラーメッセージ: {transaction_result.error_message}")
 
         return transaction_result
 
@@ -387,6 +391,73 @@ class MerchantPaymentProcessor:
         print(f"[Payment Processor] 返金日時: {refunded_at}")
 
         return transaction
+
+    def _simulate_authorization(
+        self,
+        transaction_id: str,
+        payment_mandate: PaymentMandate,
+        cart_mandate: CartMandate,
+        card_last4: str,
+        card_brand: str
+    ) -> TransactionResult:
+        """
+        オーソリ処理をシミュレート
+
+        テスト用：カードの下4桁に基づいて失敗パターンを決定
+        実際のシステムでは、決済ネットワーク（Visa/Mastercard等）からのレスポンスに基づく
+
+        Args:
+            transaction_id: トランザクションID
+            payment_mandate: Payment Mandate
+            cart_mandate: Cart Mandate
+            card_last4: カード番号の下4桁
+            card_brand: カードブランド
+
+        Returns:
+            TransactionResult: トランザクション結果（成功または失敗）
+        """
+        # テスト用のエラーパターン（カード下4桁に基づく）
+        error_patterns = {
+            "0001": ("insufficient_funds", "残高不足です。カードの利用可能額を確認してください。"),
+            "0002": ("card_declined", "カードが拒否されました。カード発行会社にお問い合わせください。"),
+            "0003": ("expired_card", "カードの有効期限が切れています。"),
+            "0004": ("incorrect_cvc", "セキュリティコード（CVV/CVC）が正しくありません。"),
+            "0005": ("fraud_suspected", "不正利用の疑いがあるため、取引がブロックされました。"),
+            "0006": ("lost_card", "紛失カードとして登録されているため、使用できません。"),
+            "0007": ("stolen_card", "盗難カードとして登録されているため、使用できません。"),
+            "0008": ("invalid_account", "カード番号が無効です。"),
+            "0009": ("do_not_honor", "カード発行会社により取引が拒否されました。"),
+            "0010": ("card_velocity_exceeded", "短時間に複数回の取引が行われたため、ブロックされました。"),
+        }
+
+        # カードの下4桁をチェック
+        if card_last4 in error_patterns:
+            error_code, error_message = error_patterns[card_last4]
+
+            print(f"[Payment Processor] ✗ オーソリ失敗（テストモード）")
+            print(f"  カード: {card_brand.upper()} ****{card_last4}")
+            print(f"  エラーコード: {error_code}")
+            print(f"  エラーメッセージ: {error_message}")
+
+            return TransactionResult(
+                id=transaction_id,
+                status=TransactionStatus.FAILED,
+                payment_mandate_id=payment_mandate.id,
+                error_code=error_code,
+                error_message=error_message
+            )
+
+        # それ以外のカードは成功
+        authorized_at = datetime.utcnow().isoformat() + "Z"
+
+        return TransactionResult(
+            id=transaction_id,
+            status=TransactionStatus.AUTHORIZED,
+            payment_mandate_id=payment_mandate.id,
+            authorized_at=authorized_at,
+            captured_at=None,
+            receipt_url=None
+        )
 
     def get_transaction(self, transaction_id: str) -> Optional[TransactionResult]:
         """
