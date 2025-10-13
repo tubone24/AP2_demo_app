@@ -63,7 +63,7 @@ def get_rp_id():
 
     # Streamlit Cloudで実行されているかチェック
     # Streamlit Cloudの場合、secrets STREAMLIT_SHARING_MODE が設定されている
-    if st.secrets["settings"]["STREAMLIT_SHARING_MODE"]:
+    if st.secrets["settings"]["STREAMLIT_SHARING_MODE"] == "true" or os.getenv("STREAMLIT_SHARING_MODE") == "true":
         return "streamlit.app"
     else:
         return "localhost"
