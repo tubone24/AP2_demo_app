@@ -124,30 +124,53 @@ class SecureMerchantAgent:
         return [
             Product(
                 id="prod_001",
-                name="Nike Air Zoom Pegasus 40",
-                description="軽量で快適なランニングシューズ。クッション性に優れています。",
-                price=Amount(value="89.99", currency="USD"),
-                category="running",
-                brand="Nike",
-                image_url="https://example.com/images/nike-pegasus.jpg"
+                name="むぎぼーステッカー",
+                description="かわいいむぎぼーのステッカー。スマホやノートPCに貼れます！",
+                price=Amount(value="5.99", currency="USD"),
+                category="stationery",
+                brand="むぎぼーオフィシャル",
+                image_url="assets/むぎぼーステッカー.png",
+                stock=100
             ),
             Product(
                 id="prod_002",
-                name="Adidas Ultraboost 22",
-                description="エネルギーリターンに優れた、人気のランニングシューズ。",
-                price=Amount(value="95.00", currency="USD"),
-                category="running",
-                brand="Adidas",
-                image_url="https://example.com/images/adidas-ultraboost.jpg"
+                name="むぎぼーマグカップ",
+                description="毎日の生活をむぎぼーと一緒に。耐熱性に優れた陶器製マグカップ。",
+                price=Amount(value="18.99", currency="USD"),
+                category="tableware",
+                brand="むぎぼーオフィシャル",
+                image_url="assets/むぎぼーマグカップ.png",
+                stock=50
             ),
             Product(
                 id="prod_003",
-                name="Asics Gel-Nimbus 25",
-                description="長距離ランに最適。優れたクッション性と安定性。",
-                price=Amount(value="99.00", currency="USD"),
-                category="running",
-                brand="Asics",
-                image_url="https://example.com/images/asics-nimbus.jpg"
+                name="むぎぼーカレンダー",
+                description="2025年版むぎぼーカレンダー。毎月違うむぎぼーの表情を楽しめます。",
+                price=Amount(value="24.99", currency="USD"),
+                category="calendar",
+                brand="むぎぼーオフィシャル",
+                image_url="assets/むぎぼーカレンダー.png",
+                stock=30
+            ),
+            Product(
+                id="prod_004",
+                name="むぎぼー時計",
+                description="むぎぼーの可愛い壁掛け時計。お部屋のアクセントに最適。",
+                price=Amount(value="35.99", currency="USD"),
+                category="interior",
+                brand="むぎぼーオフィシャル",
+                image_url="assets/むぎぼー時計.png",
+                stock=20
+            ),
+            Product(
+                id="prod_005",
+                name="むぎぼーアクリルキーホルダー",
+                description="バッグや鍵につけられる、丈夫なアクリル製キーホルダー。",
+                price=Amount(value="12.99", currency="USD"),
+                category="accessories",
+                brand="むぎぼーオフィシャル",
+                image_url="assets/むぎぼーアクリルキーホルダー.png",
+                stock=80
             ),
         ]
     
@@ -199,33 +222,44 @@ class SecureMerchantAgent:
         products: List[Product],
         quantities: Optional[Dict[str, int]] = None,
         shipping_address: Optional[Address] = None
-    ) -> List[CartMandate]:
+    ) -> CartMandate:
         """
         Cart Mandateを作成（署名なし）
+
+        複数商品を1つのCart Mandateにまとめます。
 
         注意: Merchant Agentは Cart Mandate を作成するのみで、
         署名は Merchant エンティティが別途行います。
 
         Args:
             intent_mandate: Intent Mandate
-            products: 選択された商品
-            quantities: 商品ごとの数量
+            products: 選択された商品リスト
+            quantities: 商品ごとの数量 {product_id: quantity}
             shipping_address: 配送先住所
 
         Returns:
-            List[CartMandate]: 未署名のCart Mandateのリスト
+            CartMandate: 未署名のCart Mandate（複数商品を含む）
         """
         print(f"\n[Merchant Agent: {self.merchant_name}] Cart Mandateを作成中...")
 
-        cart_mandates = []
+        if not products:
+            raise ValueError("商品が選択されていません")
+
+        # すべてのCart Itemを作成
+        cart_items = []
+        subtotal_value = 0.0
 
         for product in products:
             quantity = quantities.get(product.id, 1) if quantities else 1
 
+            if quantity <= 0:
+                continue  # 数量が0以下の商品はスキップ
+
             # Cart Itemを作成
             unit_price = product.price
+            item_total_value = float(unit_price.value) * quantity
             total_price = Amount(
-                value=str(float(unit_price.value) * quantity),
+                value=f"{item_total_value:.2f}",
                 currency=unit_price.currency
             )
 
@@ -239,61 +273,70 @@ class SecureMerchantAgent:
                 image_url=product.image_url
             )
 
-            # 金額計算
-            subtotal = total_price
-            tax_amount = float(subtotal.value) * self.default_tax_rate
-            tax = Amount(value=f"{tax_amount:.2f}", currency=subtotal.currency)
+            cart_items.append(cart_item)
+            subtotal_value += item_total_value
 
-            # 配送情報
-            shipping_info = ShippingInfo(
-                address=shipping_address or Address(
-                    street="123 Main St",
-                    city="San Francisco",
-                    state="CA",
-                    postal_code="94105",
-                    country="US"
-                ),
-                method="Standard Shipping",
-                cost=self.default_shipping_cost,
-                estimated_delivery=(datetime.utcnow() + timedelta(days=5)).isoformat() + 'Z'
-            )
+            print(f"  ✓ 商品追加: {cart_item.name} x {quantity} = ${item_total_value:.2f}")
 
-            # 合計金額
-            total_value = (
-                float(subtotal.value) +
-                float(tax.value) +
-                float(shipping_info.cost.value)
-            )
-            total = Amount(value=f"{total_value:.2f}", currency=subtotal.currency)
+        if not cart_items:
+            raise ValueError("有効な商品がありません")
 
-            # Cart Mandateを作成（署名なし）
-            now = datetime.utcnow()
-            expires_at = now + timedelta(hours=1)
+        # 金額計算
+        subtotal = Amount(value=f"{subtotal_value:.2f}", currency="USD")
+        tax_amount = subtotal_value * self.default_tax_rate
+        tax = Amount(value=f"{tax_amount:.2f}", currency="USD")
 
-            cart_mandate = CartMandate(
-                id=f"cart_{uuid.uuid4().hex}",
-                type='CartMandate',
-                version='0.1',
-                intent_mandate_id=intent_mandate.id,
-                items=[cart_item],
-                subtotal=subtotal,
-                tax=tax,
-                shipping=shipping_info,
-                total=total,
-                merchant_id=self.merchant_id,
-                merchant_name=self.merchant_name,
-                created_at=now.isoformat() + 'Z',
-                expires_at=expires_at.isoformat() + 'Z'
-            )
+        # 配送情報
+        shipping_info = ShippingInfo(
+            address=shipping_address or Address(
+                street="123 Main St",
+                city="San Francisco",
+                state="CA",
+                postal_code="94105",
+                country="US"
+            ),
+            method="Standard Shipping",
+            cost=self.default_shipping_cost,
+            estimated_delivery=(datetime.utcnow() + timedelta(days=5)).isoformat() + 'Z'
+        )
 
-            print(f"  ✓ Cart Mandate作成: {cart_mandate.id}")
-            print(f"    商品: {cart_item.name}")
-            print(f"    合計: {cart_mandate.total}")
-            print(f"    ※ Merchant署名は Merchant エンティティが追加します")
+        # 合計金額
+        total_value = (
+            subtotal_value +
+            tax_amount +
+            float(shipping_info.cost.value)
+        )
+        total = Amount(value=f"{total_value:.2f}", currency="USD")
 
-            cart_mandates.append(cart_mandate)
+        # Cart Mandateを作成（署名なし）
+        now = datetime.utcnow()
+        expires_at = now + timedelta(hours=1)
 
-        return cart_mandates
+        cart_mandate = CartMandate(
+            id=f"cart_{uuid.uuid4().hex}",
+            type='CartMandate',
+            version='0.1',
+            intent_mandate_id=intent_mandate.id,
+            items=cart_items,  # 複数のアイテムを含む
+            subtotal=subtotal,
+            tax=tax,
+            shipping=shipping_info,
+            total=total,
+            merchant_id=self.merchant_id,
+            merchant_name=self.merchant_name,
+            created_at=now.isoformat() + 'Z',
+            expires_at=expires_at.isoformat() + 'Z'
+        )
+
+        print(f"\n  ✓ Cart Mandate作成完了: {cart_mandate.id}")
+        print(f"    商品数: {len(cart_items)}点")
+        print(f"    小計: ${subtotal_value:.2f}")
+        print(f"    税金: ${tax_amount:.2f}")
+        print(f"    配送料: ${float(shipping_info.cost.value):.2f}")
+        print(f"    合計: ${total_value:.2f}")
+        print(f"    ※ Merchant署名は Merchant エンティティが追加します")
+
+        return cart_mandate
     
     def _verify_cart_mandate_signature(self, cart_mandate: CartMandate) -> bool:
         """Cart Mandateの署名を検証"""

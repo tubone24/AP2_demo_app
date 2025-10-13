@@ -100,7 +100,7 @@ def initialize_participants(user_passphrase: str, shopping_agent_passphrase: str
         st.session_state.merchant_agent_passphrase = merchant_agent_passphrase
         st.session_state.merchant_agent = SecureMerchantAgent(
             agent_id="merchant_agent_demo",
-            merchant_name="Demo Running Shoes Store",
+            merchant_name="むぎぼーグッズショップ",
             merchant_id="merchant_demo_001",
             passphrase=merchant_agent_passphrase
         )
@@ -108,7 +108,7 @@ def initialize_participants(user_passphrase: str, shopping_agent_passphrase: str
         # Merchant (実際の販売者)
         st.session_state.merchant = Merchant(
             merchant_id="merchant_demo_001",
-            merchant_name="Demo Running Shoes Store",
+            merchant_name="むぎぼーグッズショップ",
             passphrase="merchant_secure_pass"
         )
 
@@ -303,22 +303,22 @@ def step1_intent_creation():
 
         intent = st.text_area(
             "購買意図",
-            value="新しいランニングシューズを購入したい",
+            value="むぎぼーグッズを購入したい",
             height=100
         )
 
         max_amount = st.number_input(
             "最大予算 (USD)",
             min_value=10.0,
-            max_value=1000.0,
-            value=100.0,
+            max_value=200.0,
+            value=50.0,
             step=10.0
         )
 
-        brands = st.multiselect(
-            "希望ブランド",
-            ["Nike", "Adidas", "Asics", "New Balance", "Brooks"],
-            default=["Nike", "Adidas", "Asics"]
+        categories = st.multiselect(
+            "希望カテゴリ",
+            ["stationery", "tableware", "calendar", "interior", "accessories"],
+            default=["stationery", "tableware", "accessories"]
         )
 
         if st.button("Intent Mandateを作成", type="primary", use_container_width=True):
@@ -328,8 +328,8 @@ def step1_intent_creation():
                     user_key_manager=st.session_state.user_key_manager,
                     intent=intent,
                     max_amount=Amount(value=f"{max_amount:.2f}", currency="USD"),
-                    categories=["running"],
-                    brands=brands
+                    categories=categories,
+                    brands=["むぎぼーオフィシャル"]
                 )
                 st.session_state.intent_mandate = intent_mandate
                 st.session_state.step = 1
@@ -418,12 +418,18 @@ def step2_product_search():
 
             for i, product in enumerate(st.session_state.products):
                 with st.container():
-                    col_a, col_b = st.columns([3, 1])
-                    with col_a:
+                    col_img, col_info = st.columns([1, 3])
+                    with col_img:
+                        # 商品画像を表示
+                        try:
+                            st.image(product.image_url, use_container_width=True)
+                        except:
+                            st.write("🖼️")
+                    with col_info:
                         st.write(f"**{product.name}**")
-                        st.write(f"{product.brand} - {product.description}")
-                    with col_b:
-                        st.write(f"**{product.price}**")
+                        st.write(f"{product.brand}")
+                        st.write(f"{product.description}")
+                        st.write(f"**価格:** {product.price}")
                     st.divider()
 
             if st.button("次のステップへ →", use_container_width=True):
@@ -464,11 +470,41 @@ def step3_cart_creation():
         st.subheader("商品選択")
 
         if st.session_state.products:
-            selected_product_idx = st.radio(
-                "購入する商品を選択",
-                range(len(st.session_state.products)),
-                format_func=lambda i: f"{st.session_state.products[i].name} - {st.session_state.products[i].price}"
-            )
+            st.write("購入する商品を選択してください（複数選択可）")
+
+            # 各商品の選択状態と数量を管理
+            selected_products = []
+            quantities = {}
+
+            for i, product in enumerate(st.session_state.products):
+                col_check, col_img, col_info, col_qty = st.columns([0.5, 1, 2, 1])
+
+                with col_check:
+                    is_selected = st.checkbox("", key=f"product_{i}", label_visibility="collapsed")
+
+                with col_img:
+                    try:
+                        st.image(product.image_url, use_container_width=True)
+                    except:
+                        st.write("🖼️")
+
+                with col_info:
+                    st.write(f"**{product.name}**")
+                    st.write(f"{product.price}")
+                    st.caption(product.description)
+
+                with col_qty:
+                    if is_selected:
+                        qty = st.number_input("数量", min_value=1, max_value=10, value=1, key=f"qty_{i}", label_visibility="collapsed")
+                        selected_products.append(product)
+                        quantities[product.id] = qty
+                    else:
+                        st.write("")  # スペーサー
+
+                st.divider()
+
+            if not selected_products:
+                st.warning("商品を1つ以上選択してください")
 
             st.subheader("配送先情報")
 
@@ -479,29 +515,33 @@ def step3_cart_creation():
             country = st.text_input("国", value="US")
 
             if st.button("Cart Mandateを作成", type="primary", use_container_width=True):
-                # Cart Mandate作成プロセスの詳細表示
-                with st.status("Cart Mandateを作成中...", expanded=True) as status:
-                    shipping_address = Address(
-                        street=street,
-                        city=city,
-                        state=state,
-                        postal_code=postal_code,
-                        country=country
-                    )
+                # 商品が選択されているか確認
+                if not selected_products:
+                    st.error("商品を1つ以上選択してください")
+                else:
+                    # Cart Mandate作成プロセスの詳細表示
+                    with st.status("Cart Mandateを作成中...", expanded=True) as status:
+                        shipping_address = Address(
+                            street=street,
+                            city=city,
+                            state=state,
+                            postal_code=postal_code,
+                            country=country
+                        )
 
-                    # ステップ1: Merchant AgentがCart Mandateを作成（署名なし）
-                    st.write("🏪 **ステップ 1:** Merchant AgentがCart Mandateを作成")
-                    cart_mandates = st.session_state.merchant_agent.create_cart_mandate(
-                        intent_mandate=st.session_state.intent_mandate,
-                        products=[st.session_state.products[selected_product_idx]],
-                        shipping_address=shipping_address
-                    )
-                    unsigned_cart = cart_mandates[0]
-                    st.success("✓ Cart Mandate作成完了（未署名）")
+                        # ステップ1: Merchant AgentがCart Mandateを作成（署名なし）
+                        st.write("🏪 **ステップ 1:** Merchant AgentがCart Mandateを作成")
+                        unsigned_cart = st.session_state.merchant_agent.create_cart_mandate(
+                            intent_mandate=st.session_state.intent_mandate,
+                            products=selected_products,
+                            quantities=quantities,
+                            shipping_address=shipping_address
+                        )
+                        st.success("✓ Cart Mandate作成完了（未署名）")
 
-                    st.caption(f"📋 Cart ID: {unsigned_cart.id}")
-                    st.caption(f"商品: {unsigned_cart.items[0].name}")
-                    st.caption(f"合計金額: {unsigned_cart.total}")
+                        st.caption(f"📋 Cart ID: {unsigned_cart.id}")
+                        st.caption(f"商品数: {len(unsigned_cart.items)}点")
+                        st.caption(f"合計金額: {unsigned_cart.total}")
 
                     # ステップ2: MerchantがCart Mandateを検証して署名
                     st.write("🏬 **ステップ 2:** MerchantがCart Mandateを検証")
