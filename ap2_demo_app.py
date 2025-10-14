@@ -4,6 +4,7 @@ AP2 Protocol - Streamlitデモアプリケーション
 """
 
 import streamlit as st
+import streamlit.components.v1 as components
 import asyncio
 from datetime import datetime
 import json
@@ -835,8 +836,13 @@ def step4_payment_creation():
                 import secrets
                 from webauthn_component import webauthn_register, webauthn_authenticate
 
-                # チャレンジを生成
-                challenge = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode('utf-8').rstrip('=')
+                # チャレンジを生成（まだ生成されていない場合のみ）
+                if 'webauthn_challenge' not in st.session_state or not st.session_state.webauthn_challenge:
+                    challenge = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode('utf-8').rstrip('=')
+                    st.session_state.webauthn_challenge = challenge
+                else:
+                    # 既存のchallengeを再利用
+                    challenge = st.session_state.webauthn_challenge
 
                 mode = st.session_state.get('webauthn_mode', 'register')
 
@@ -872,6 +878,12 @@ def step4_payment_creation():
                 else:
                     # 認証モード
                     st.write("### 🔐 Passkey認証中...")
+
+                    # セキュリティ: 古い認証結果をクリア（リプレイ攻撃対策）
+                    from webauthn_component import clear_webauthn_auth_result
+                    st.info("🔒 **セキュリティチェック:** 古い認証結果をクリアしています...")
+                    clear_webauthn_auth_result()
+
                     st.info("ブラウザのプロンプトが表示されます。デバイスの認証を完了してください。")
 
                     # WebAuthn認証コンポーネントを表示
@@ -879,6 +891,8 @@ def step4_payment_creation():
 
                     # 環境に応じたRP IDを取得
                     rp_id = get_rp_id()
+                    # WebAuthn検証用にrp_idを保存
+                    st.session_state.webauthn_rp_id = rp_id
 
                     webauthn_authenticate(
                         challenge=challenge,
@@ -888,27 +902,67 @@ def step4_payment_creation():
 
                     st.divider()
 
-                    # 認証結果を確認
-                    st.write("### 📋 認証結果の確認")
-                    st.info("**重要:** 認証が成功したことを確認してから、下のボタンをクリックしてください")
+                    # ユーザーが認証結果を入力するフォーム
+                    st.write("### 📋 認証結果の取得と送信")
+                    st.info("**次のステップ:** 上記のWebAuthn認証ボックスに表示されたJSON（グレーの背景）をコピーして、下のテキストエリアに貼り付けてください。")
 
-                    from webauthn_component import check_webauthn_auth_result
-                    check_webauthn_auth_result()
+                    # 初期値として空の文字列を設定（session_stateから取得可能にする）
+                    if 'webauthn_json_input' not in st.session_state:
+                        st.session_state.webauthn_json_input = ""
 
-                    st.divider()
+                    webauthn_json = st.text_area(
+                        "認証結果JSON（上記のボックスから自動入力されます）",
+                        value=st.session_state.webauthn_json_input,
+                        height=100,
+                        key="webauthn_input",
+                        help="上記に表示されたJSONが自動的に入力されます。表示されない場合は、ブラウザのコンソールログからコピーしてください。"
+                    )
 
                     col_btn1, col_btn2 = st.columns(2)
 
                     with col_btn1:
-                        if st.button("✅ 認証成功 - Device Attestationを生成", type="primary", use_container_width=True, key="confirm_auth_success"):
-                            # 認証が成功した場合のみ、Device Attestationを生成
-                            st.session_state.auth_check_requested = True
-                            st.rerun()
+                        if st.button("✅ 認証結果を送信してDevice Attestation生成", type="primary", use_container_width=True, key="confirm_auth_success"):
+                            # 認証結果のJSONをパース
+                            if webauthn_json:
+                                try:
+                                    auth_result = json.loads(webauthn_json)
+
+                                    # WebAuthn署名を検証
+                                    from ap2_crypto import DeviceAttestationManager
+                                    temp_manager = DeviceAttestationManager(st.session_state.user_key_manager)
+
+                                    st.info("🔍 WebAuthn署名を検証しています...")
+                                    webauthn_valid = temp_manager.verify_webauthn_signature_simplified(
+                                        webauthn_auth_result=auth_result,
+                                        challenge=st.session_state.webauthn_challenge,
+                                        rp_id=st.session_state.webauthn_rp_id
+                                    )
+
+                                    if not webauthn_valid:
+                                        st.error("❌ WebAuthn署名の検証に失敗しました")
+                                        st.error("認証データが改ざんされているか、チャレンジが一致しません")
+                                        st.stop()
+
+                                    st.success("✓ WebAuthn署名を検証しました")
+
+                                    st.session_state.webauthn_auth_result = auth_result
+                                    st.session_state.auth_check_requested = True
+                                    st.rerun()
+                                except json.JSONDecodeError as e:
+                                    st.error(f"❌ JSONのパースに失敗しました: {str(e)}")
+                            else:
+                                st.error("❌ 認証結果が入力されていません")
 
                     with col_btn2:
                         if st.button("🔄 認証をやり直す", use_container_width=True, key="retry_auth"):
                             # ローカルストレージをクリアして再試行
                             st.session_state.show_webauthn = False
+                            st.session_state.webauthn_json_input = ""
+                            # 新しい認証用にchallengeをクリア（再生成させる）
+                            if 'webauthn_challenge' in st.session_state:
+                                del st.session_state.webauthn_challenge
+                            if 'webauthn_auth_result' in st.session_state:
+                                del st.session_state.webauthn_auth_result
                             st.rerun()
 
                 # 認証チェックが要求された場合
@@ -945,6 +999,17 @@ def step4_payment_creation():
 
                         temp_mandate = TempPaymentMandate(id=payment_id)
 
+                        # WebAuthn認証結果からタイムスタンプを取得（リプレイ攻撃対策）
+                        webauthn_timestamp = None
+                        if st.session_state.get('webauthn_auth_result'):
+                            # JavaScriptのミリ秒タイムスタンプをISO 8601形式に変換
+                            timestamp_ms = st.session_state.webauthn_auth_result.get('timestamp')
+                            if timestamp_ms:
+                                from datetime import datetime
+                                dt = datetime.utcfromtimestamp(timestamp_ms / 1000.0)
+                                webauthn_timestamp = dt.isoformat() + 'Z'
+                                st.caption(f"🔒 WebAuthn認証タイムスタンプを使用: {webauthn_timestamp}")
+
                         device_attestation = attestation_manager.create_device_attestation(
                             device_id="device_demo_" + st.session_state.user_id,
                             payment_mandate=temp_mandate,
@@ -952,7 +1017,8 @@ def step4_payment_creation():
                             attestation_type=AttestationType.PASSKEY,
                             platform="Web",
                             os_version=None,
-                            app_version="1.0.0"
+                            app_version="1.0.0",
+                            timestamp=webauthn_timestamp  # WebAuthn認証の実際のタイムスタンプを使用
                         )
 
                         st.success("✓ Device Attestation生成完了")

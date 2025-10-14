@@ -167,3 +167,5 @@ keys
 demo_receipt.pdf
 
 .streamlit/secrets.toml
+
+transaction_history_*.json

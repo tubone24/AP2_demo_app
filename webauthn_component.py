@@ -155,9 +155,47 @@ def webauthn_authenticate(challenge: str, rp_id: str = "localhost", user_id: str
                         timestamp: Date.now()
                     }};
 
-                    // ローカルストレージに保存
-                    localStorage.setItem('webauthn_auth_result', JSON.stringify(result));
-                    console.log('認証成功 - ローカルストレージに保存');
+                    // 結果をJSONとして画面に表示
+                    const resultJson = JSON.stringify(result, null, 2);
+
+                    // コンテナを作成
+                    const container = document.createElement('div');
+                    container.style.cssText = 'margin-top: 15px;';
+
+                    // JSON表示エリア
+                    const resultDiv = document.createElement('div');
+                    resultDiv.style.cssText = 'padding: 15px; background: #f5f5f5; border: 1px solid #ddd; border-radius: 5px; font-family: monospace; font-size: 12px; white-space: pre-wrap; word-wrap: break-word; max-height: 100px; overflow-y: auto;';
+                    resultDiv.textContent = resultJson;
+                    resultDiv.id = 'authResultJson';
+
+                    // コピーボタン
+                    const copyButton = document.createElement('button');
+                    copyButton.textContent = '📋 クリップボードにコピー';
+                    copyButton.style.cssText = 'margin-top: 10px; padding: 10px 20px; background: #4caf50; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 14px; width: 100%;';
+                    copyButton.onclick = async function() {{
+                        try {{
+                            await navigator.clipboard.writeText(resultJson);
+                            copyButton.textContent = '✓ コピーしました！';
+                            copyButton.style.background = '#2e7d32';
+                            setTimeout(() => {{
+                                copyButton.textContent = '📋 クリップボードにコピー';
+                                copyButton.style.background = '#4caf50';
+                            }}, 2000);
+                        }} catch (err) {{
+                            copyButton.textContent = '✗ コピー失敗';
+                            copyButton.style.background = '#f44336';
+                            setTimeout(() => {{
+                                copyButton.textContent = '📋 クリップボードにコピー';
+                                copyButton.style.background = '#4caf50';
+                            }}, 2000);
+                        }}
+                    }};
+
+                    container.appendChild(resultDiv);
+                    container.appendChild(copyButton);
+                    document.body.appendChild(container);
+
+                    console.log('認証成功 - 結果を画面に表示:', result);
 
                 }} catch (error) {{
                     console.error('WebAuthn error:', error);
@@ -171,14 +209,52 @@ def webauthn_authenticate(challenge: str, rp_id: str = "localhost", user_id: str
                         statusDiv.textContent = '✗ エラー: ' + error.message;
                     }}
 
-                    // エラーをローカルストレージに保存
+                    // エラー結果をJSONとして画面に表示
                     const errorResult = {{
                         success: false,
                         error: error.message,
                         timestamp: Date.now()
                     }};
-                    localStorage.setItem('webauthn_auth_result', JSON.stringify(errorResult));
-                    console.log('認証失敗 - ローカルストレージに保存');
+                    const resultJson = JSON.stringify(errorResult, null, 2);
+
+                    // コンテナを作成
+                    const container = document.createElement('div');
+                    container.style.cssText = 'margin-top: 15px;';
+
+                    // JSON表示エリア
+                    const resultDiv = document.createElement('div');
+                    resultDiv.style.cssText = 'padding: 15px; background: #ffebee; border: 1px solid #f44336; border-radius: 5px; font-family: monospace; font-size: 12px; white-space: pre-wrap; word-wrap: break-word; max-height: 100px; overflow-y: auto;';
+                    resultDiv.textContent = resultJson;
+                    resultDiv.id = 'authResultJson';
+
+                    // コピーボタン
+                    const copyButton = document.createElement('button');
+                    copyButton.textContent = '📋 クリップボードにコピー';
+                    copyButton.style.cssText = 'margin-top: 10px; padding: 10px 20px; background: #f44336; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 14px; width: 100%;';
+                    copyButton.onclick = async function() {{
+                        try {{
+                            await navigator.clipboard.writeText(resultJson);
+                            copyButton.textContent = '✓ コピーしました！';
+                            copyButton.style.background = '#d32f2f';
+                            setTimeout(() => {{
+                                copyButton.textContent = '📋 クリップボードにコピー';
+                                copyButton.style.background = '#f44336';
+                            }}, 2000);
+                        }} catch (err) {{
+                            copyButton.textContent = '✗ コピー失敗';
+                            copyButton.style.background = '#b71c1c';
+                            setTimeout(() => {{
+                                copyButton.textContent = '📋 クリップボードにコピー';
+                                copyButton.style.background = '#f44336';
+                            }}, 2000);
+                        }}
+                    }};
+
+                    container.appendChild(resultDiv);
+                    container.appendChild(copyButton);
+                    document.body.appendChild(container);
+
+                    console.log('認証失敗 - 結果を画面に表示:', errorResult);
 
                     button.disabled = false;
                 }}
@@ -188,10 +264,10 @@ def webauthn_authenticate(challenge: str, rp_id: str = "localhost", user_id: str
     </html>
     """
 
-    # コンポーネントを表示
-    components.html(webauthn_html, height=300)
+    # コンポーネントを表示（認証結果JSON表示用に高さを確保）
+    components.html(webauthn_html, height=550)
 
-    # 戻り値は使用しない（ローカルストレージを使用）
+    # 戻り値は使用しない
     return None
 
 
@@ -659,3 +735,119 @@ def check_webauthn_auth_result():
     # 実際にはsession_stateに保存する必要がある）
     # このデモでは、ユーザーが視覚的に確認できるようにする
     return None
+
+
+def get_webauthn_auth_result():
+    """
+    ローカルストレージからWebAuthn認証結果（JSON）を取得してStreamlitに返す
+
+    Returns:
+        dict or None: 認証結果のJSON（タイムスタンプ、署名データなど）
+    """
+    import streamlit as st
+    import time
+
+    # 一意のタイムスタンプを生成（Streamlitに異なるコンテンツとして認識させるため）
+    timestamp = int(time.time() * 1000)
+
+    # ローカルストレージから取得してStreamlitに返すHTMLコンポーネント
+    # HTMLコメントにタイムスタンプを含めることで、毎回異なるコンテンツとして認識される
+    get_result_html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="UTF-8">
+        <!-- Unique timestamp: {timestamp} -->
+        <script>
+            // Streamlit.setComponentValueを使ってデータを返す
+            function setStreamlitValue(value) {{
+                // iframeからparentにpostMessageで送信
+                window.parent.postMessage({{
+                    isStreamlitMessage: true,
+                    type: "streamlit:setComponentValue",
+                    value: value
+                }}, "*");
+            }}
+
+            // ページロード時に実行
+            window.addEventListener('load', function() {{
+                // ローカルストレージから認証結果を取得
+                const authResultStr = localStorage.getItem('webauthn_auth_result');
+
+                if (authResultStr) {{
+                    try {{
+                        const authResult = JSON.parse(authResultStr);
+                        console.log('[get_webauthn_auth_result] 認証結果を取得:', authResult);
+
+                        // Streamlitに送信
+                        setStreamlitValue(authResult);
+
+                        // 視覚的フィードバック
+                        document.body.innerHTML = '<div style="padding: 10px; background: #e8f5e9; border-left: 4px solid #4caf50; color: #2e7d32; border-radius: 5px; font-size: 13px;">✓ WebAuthn認証結果を取得しました</div>';
+                    }} catch (error) {{
+                        console.error('[get_webauthn_auth_result] パースエラー:', error);
+                        setStreamlitValue(null);
+                        document.body.innerHTML = '<div style="padding: 10px; background: #ffebee; border-left: 4px solid #f44336; color: #c62828; border-radius: 5px; font-size: 13px;">✗ 認証結果の読み取りに失敗</div>';
+                    }}
+                }} else {{
+                    console.log('[get_webauthn_auth_result] 認証結果が見つかりません');
+                    setStreamlitValue(null);
+                    document.body.innerHTML = '<div style="padding: 10px; background: #fff3e0; border-left: 4px solid #ff9800; color: #e65100; border-radius: 5px; font-size: 13px;">⚠️ 認証結果が見つかりません</div>';
+                }}
+            }});
+        </script>
+    </head>
+    <body>
+        <div style="padding: 10px; color: #666;">読み込み中...</div>
+    </body>
+    </html>
+    """
+
+    # コンポーネントを表示して結果を取得（keyパラメータは不要）
+    result = components.html(get_result_html, height=60)
+
+    return result
+
+
+def clear_webauthn_auth_result():
+    """
+    ローカルストレージのWebAuthn認証結果をクリアする
+
+    古い認証結果がリプレイ攻撃に使われるのを防ぐため、
+    新しい認証を開始する前に必ず呼び出すべき。
+    """
+    # ローカルストレージをクリアするHTMLコンポーネント
+    clear_html = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="UTF-8">
+        <style>
+            body {
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+                padding: 10px;
+                margin: 0;
+            }
+            .status {
+                padding: 10px;
+                background: #e8f5e9;
+                border-left: 4px solid #4caf50;
+                color: #2e7d32;
+                border-radius: 5px;
+                font-size: 13px;
+            }
+        </style>
+    </head>
+    <body>
+        <div id="status" class="status">🗑️ 古い認証結果をクリアしました</div>
+        <script>
+            // ローカルストレージから認証結果を削除
+            localStorage.removeItem('webauthn_auth_result');
+            console.log('[WebAuthn] ローカルストレージの認証結果をクリアしました');
+        </script>
+    </body>
+    </html>
+    """
+
+    # コンポーネントを表示
+    components.html(clear_html, height=60)

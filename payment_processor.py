@@ -19,6 +19,7 @@ from ap2_types import (
     MandateError
 )
 from ap2_crypto import KeyManager, SignatureManager
+from transaction_store import TransactionStore
 
 
 class TransactionChallengeRequired(Exception):
@@ -82,8 +83,11 @@ class MerchantPaymentProcessor:
 
         self.signature_manager = SignatureManager(self.key_manager)
 
-        # トランザクション履歴
+        # トランザクション履歴（メモリ内）
         self.transactions = {}
+
+        # トランザクション永続化ストア
+        self.transaction_store = TransactionStore(f"./transaction_history_{processor_id}.json")
 
         # OTPチャレンジ待ちのトランザクション
         self.pending_challenges = {}
@@ -255,8 +259,15 @@ class MerchantPaymentProcessor:
             card_brand
         )
 
-        # トランザクションを保存
+        # トランザクションを保存（メモリ内）
         self.transactions[transaction_id] = transaction_result
+
+        # トランザクションを永続化
+        self.transaction_store.save_transaction(
+            transaction_result,
+            payment_mandate,
+            cart_mandate=cart_mandate
+        )
 
         # 結果を表示
         if transaction_result.status == TransactionStatus.AUTHORIZED:

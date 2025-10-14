@@ -611,6 +611,134 @@ class DeviceAttestationManager:
         challenge_bytes = os.urandom(32)  # 256ビット
         return base64.b64encode(challenge_bytes).decode('utf-8')
 
+    def verify_webauthn_signature_simplified(
+        self,
+        webauthn_auth_result: Dict[str, Any],
+        challenge: str,
+        rp_id: str = "localhost"
+    ) -> bool:
+        """
+        WebAuthn認証結果の簡易検証
+
+        注意: これは教育デモ用の簡易実装です。
+        本番環境では以下の完全な検証が必要です：
+        - Passkey登録時の公開鍵保存
+        - credential_id → public_key のマッピング
+        - CBOR形式のauthenticatorDataパース
+        - 暗号学的な署名検証（公開鍵による）
+
+        現在の実装では以下のみをチェックします：
+        - clientDataJSONのchallenge検証
+        - タイムスタンプの鮮度
+        - 署名データの存在確認
+
+        Args:
+            webauthn_auth_result: WebAuthn認証結果のJSON
+            challenge: サーバーが発行したchallenge（Base64）
+            rp_id: Relying Party ID
+
+        Returns:
+            bool: 基本検証をパスした場合True
+        """
+        print(f"[DeviceAttestationManager] WebAuthn認証結果を簡易検証中...")
+
+        try:
+            # 1. 成功フラグの確認
+            if not webauthn_auth_result.get('success'):
+                print(f"  ✗ 認証が成功していません")
+                return False
+
+            # 2. clientDataJSONをデコードしてパース
+            client_data_json_b64 = webauthn_auth_result.get('clientDataJSON')
+            if not client_data_json_b64:
+                print(f"  ✗ clientDataJSONがありません")
+                return False
+
+            # WebAuthnはBase64URLを使用するため、パディングを追加してデコード
+            # パディングが不足している場合に備えて追加
+            padding_needed = len(client_data_json_b64) % 4
+            if padding_needed:
+                client_data_json_b64 += '=' * (4 - padding_needed)
+
+            try:
+                # Base64URLデコードを試みる
+                client_data_json = base64.urlsafe_b64decode(client_data_json_b64)
+            except Exception as e:
+                print(f"  ✗ clientDataJSONのデコードに失敗: {e}")
+                return False
+
+            client_data = json.loads(client_data_json)
+
+            print(f"  - Client Data Type: {client_data.get('type')}")
+            print(f"  - Origin: {client_data.get('origin')}")
+
+            # 3. Challenge検証（リプレイ攻撃対策）
+            received_challenge = client_data.get('challenge')
+            if not received_challenge:
+                print(f"  ✗ clientDataJSONにchallengeがありません")
+                return False
+
+            # challengeを正規化（Base64URL → Base64への変換を考慮）
+            # WebAuthnはBase64URLを使用するが、比較のため正規化
+            if received_challenge != challenge:
+                print(f"  ✗ Challenge不一致")
+                print(f"    期待値: {challenge[:20]}...")
+                print(f"    受信値: {received_challenge[:20]}...")
+                return False
+
+            print(f"  ✓ Challenge一致: {challenge[:20]}...")
+
+            # 4. タイプ検証
+            if client_data.get('type') != 'webauthn.get':
+                print(f"  ✗ 認証タイプが正しくありません: {client_data.get('type')}")
+                return False
+
+            print(f"  ✓ 認証タイプ: webauthn.get")
+
+            # 5. 署名データの存在確認
+            signature = webauthn_auth_result.get('signature')
+            if not signature:
+                print(f"  ✗ 署名データがありません")
+                return False
+
+            authenticator_data = webauthn_auth_result.get('authenticatorData')
+            if not authenticator_data:
+                print(f"  ✗ authenticatorDataがありません")
+                return False
+
+            print(f"  ✓ 署名データ存在確認: {len(signature)} chars")
+            print(f"  ✓ AuthenticatorData存在確認: {len(authenticator_data)} chars")
+
+            # 6. タイムスタンプの鮮度チェック
+            timestamp_ms = webauthn_auth_result.get('timestamp')
+            if timestamp_ms:
+                # time.time()を使用してUTC時刻を取得（タイムゾーンの問題を回避）
+                import time
+                current_time_ms = time.time() * 1000
+
+                age_ms = abs(current_time_ms - timestamp_ms)
+                age_seconds = age_ms / 1000
+                max_age_seconds = 300  # 5分
+
+                if age_seconds > max_age_seconds:
+                    print(f"  ✗ タイムスタンプが古すぎます: {age_seconds:.0f}秒前")
+                    return False
+
+                print(f"  ✓ タイムスタンプの鮮度: {age_seconds:.0f}秒前（最大{max_age_seconds}秒）")
+
+            print(f"  ✓ WebAuthn基本検証をパスしました")
+            print(f"  ⚠️  注意: 公開鍵による暗号学的な署名検証は未実装")
+            print(f"       本番環境では完全な検証が必要です")
+
+            return True
+
+        except json.JSONDecodeError as e:
+            print(f"  ✗ clientDataJSONのパースに失敗: {e}")
+            return False
+        except Exception as e:
+            print(f"  ✗ WebAuthn検証エラー: {e}")
+            return False
+
     def create_device_attestation(
         self,
         device_id: str,
@@ -619,7 +747,12 @@ class DeviceAttestationManager:
         attestation_type: AttestationType = AttestationType.BIOMETRIC,
         platform: str = "iOS",
         os_version: Optional[str] = None,
-        app_version: Optional[str] = None
+        app_version: Optional[str] = None,
+        timestamp: Optional[str] = None,
+        challenge: Optional[str] = None,
+        webauthn_signature: Optional[str] = None,
+        webauthn_authenticator_data: Optional[str] = None,
+        webauthn_client_data_json: Optional[str] = None
     ) -> DeviceAttestation:
         """
         デバイス証明を作成
@@ -635,6 +768,11 @@ class DeviceAttestationManager:
             platform: プラットフォーム（"iOS", "Android", "Web"など）
             os_version: OSバージョン
             app_version: アプリバージョン
+            timestamp: タイムスタンプ（ISO 8601形式、Noneの場合は現在時刻）
+            challenge: チャレンジ値（Noneの場合は自動生成）
+            webauthn_signature: WebAuthn署名データ（オプション）
+            webauthn_authenticator_data: WebAuthn Authenticator Data（オプション）
+            webauthn_client_data_json: WebAuthn Client Data JSON（オプション）
 
         Returns:
             DeviceAttestation: デバイス証明
@@ -644,8 +782,9 @@ class DeviceAttestationManager:
         print(f"  認証タイプ: {attestation_type.value}")
         print(f"  プラットフォーム: {platform}")
 
-        # チャレンジ値を生成
-        challenge = self.generate_challenge()
+        # チャレンジ値を生成（または指定されたものを使用）
+        if challenge is None:
+            challenge = self.generate_challenge()
 
         # デバイスの秘密鍵を取得
         device_private_key = self.key_manager.get_private_key(device_key_id)
@@ -655,9 +794,12 @@ class DeviceAttestationManager:
         device_public_key = device_private_key.public_key()
         device_public_key_base64 = self.key_manager.public_key_to_base64(device_public_key)
 
-        # 署名対象データを構築
-        # Payment MandateのIDとチャレンジを含めてリプレイ攻撃を防ぐ
-        timestamp = datetime.utcnow().isoformat() + 'Z'
+        # タイムスタンプを設定（指定されたものを使用、またはデフォルトで現在時刻）
+        if timestamp is None:
+            timestamp = datetime.utcnow().isoformat() + 'Z'
+            print(f"  タイムスタンプを生成: {timestamp}")
+        else:
+            print(f"  指定されたタイムスタンプを使用: {timestamp}")
         attestation_data = {
             "device_id": device_id,
             "payment_mandate_id": payment_mandate.id,
@@ -726,11 +868,21 @@ class DeviceAttestationManager:
             now = datetime.utcnow()
             age_seconds = (now - attestation_time.replace(tzinfo=None)).total_seconds()
 
-            if age_seconds > max_age_seconds:
-                print(f"  ✗ 証明が古すぎます（{age_seconds:.0f}秒前）")
+            # 未来のタイムスタンプを拒否（リプレイ攻撃対策）
+            if age_seconds < 0:
+                print(f"  ✗ 証明のタイムスタンプが未来です（{abs(age_seconds):.0f}秒後）")
+                print(f"    - Device Attestation: {device_attestation.timestamp}")
+                print(f"    - 現在時刻: {now.isoformat()}Z")
                 return False
 
-            print(f"  ✓ タイムスタンプは有効（{age_seconds:.0f}秒前）")
+            # タイムスタンプが古すぎる場合を拒否
+            if age_seconds > max_age_seconds:
+                print(f"  ✗ 証明が古すぎます（{age_seconds:.0f}秒前、最大{max_age_seconds}秒）")
+                print(f"    - Device Attestation: {device_attestation.timestamp}")
+                print(f"    - 現在時刻: {now.isoformat()}Z")
+                return False
+
+            print(f"  ✓ タイムスタンプは有効（{age_seconds:.0f}秒前、最大{max_age_seconds}秒）")
 
             # 2. Payment Mandate IDが一致するか確認
             # 署名対象データを再構築
