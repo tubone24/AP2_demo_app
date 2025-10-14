@@ -120,6 +120,79 @@ class AgentIdentity:
 
 
 # ========================================
+# Risk Payload（リスクペイロード）
+# ========================================
+
+@dataclass
+class RiskPayload:
+    """
+    Risk Payload - リスク評価に関する情報
+
+    AP2プロトコルでは、Intent→Cart→Paymentと連鎖して渡される。
+    各エンティティ（Merchant, Payment Processor, Issuer）が
+    独自のリスク評価モデルに使用できる柔軟な構造。
+    """
+    # デバイス情報
+    device_fingerprint: Optional[str] = None  # デバイスのフィンガープリント
+    device_id: Optional[str] = None  # デバイス識別子
+    ip_address: Optional[str] = None  # IPアドレス
+    user_agent: Optional[str] = None  # ユーザーエージェント文字列
+    platform: Optional[str] = None  # プラットフォーム（iOS, Android, Web等）
+
+    # 位置情報
+    geolocation: Optional[Dict[str, Any]] = None  # 位置情報（緯度経度等）
+
+    # 行動パターン
+    session_id: Optional[str] = None  # セッションID
+    time_on_site: Optional[int] = None  # サイト滞在時間（秒）
+    pages_viewed: Optional[int] = None  # 閲覧ページ数
+
+    # 取引履歴
+    previous_transactions: Optional[int] = None  # 過去の取引回数
+    account_age_days: Optional[int] = None  # アカウント作成からの日数
+
+    # 詐欺シグナル
+    velocity_checks: Optional[Dict[str, Any]] = None  # 速度チェック結果
+    anomaly_score: Optional[float] = None  # 異常スコア（0.0-1.0）
+
+    # カスタムフィールド（各エンティティが自由に追加）
+    custom_fields: Optional[Dict[str, Any]] = None
+
+
+@dataclass
+class AgentSignal:
+    """
+    Agent Signal - エージェント関与のシグナル
+
+    A2A Extensionで定義される、AI Agent関与の詳細情報。
+    """
+    agent_id: str  # エージェントの一意識別子
+    agent_name: str  # エージェント名
+    agent_version: Optional[str] = None  # エージェントバージョン
+    agent_provider: Optional[str] = None  # エージェント提供者
+    model_name: Optional[str] = None  # 使用AIモデル名（例: "Gemini 2.5 Flash"）
+    confidence_score: Optional[float] = None  # エージェントの信頼度スコア（0.0-1.0）
+    human_oversight: bool = False  # 人間による監視の有無
+    autonomous_level: Optional[Literal['fully_autonomous', 'semi_autonomous', 'human_in_loop']] = None
+
+
+@dataclass
+class MandateMetadata:
+    """
+    Mandate Metadata - Mandateのメタデータ
+
+    Mandateの再利用・検証・監査に使用される情報。
+    """
+    mandate_hash: str  # Mandateのcanonical JSONのSHA-256ハッシュ
+    schema_version: str  # スキーマバージョン
+    issuer: str  # 発行者
+    issued_at: str  # 発行日時（ISO 8601）
+    previous_mandate_hash: Optional[str] = None  # 前のMandateのハッシュ（連鎖用）
+    nonce: Optional[str] = None  # リプレイ攻撃防止用ノンス
+    audit_trail: Optional[List[Dict[str, Any]]] = None  # 監査証跡
+
+
+# ========================================
 # Intent Mandate（意図マンデート）
 # ========================================
 
@@ -129,7 +202,7 @@ class IntentConstraints:
     valid_until: str  # ISO 8601形式
     max_amount: Optional[Amount] = None
     categories: Optional[List[str]] = None
-    merchants: Optional[List[str]] = None
+    merchants: Optional[List[str]] = field(default_factory=list)  # nullではなく空配列をデフォルトに
     brands: Optional[List[str]] = None
     valid_from: Optional[str] = None
     max_transactions: Optional[int] = None
@@ -148,6 +221,10 @@ class IntentMandate:
     created_at: str  # ISO 8601
     expires_at: str  # ISO 8601
     user_signature: Optional[Signature] = None
+    # A2A Extension拡張フィールド
+    agent_signal: Optional[AgentSignal] = None  # エージェント関与シグナル
+    mandate_metadata: Optional[MandateMetadata] = None  # メタデータ
+    risk_payload: Optional[RiskPayload] = None  # リスク情報
 
 
 # ========================================
@@ -165,6 +242,11 @@ class CartItem:
     total_price: Amount
     image_url: Optional[str] = None
     metadata: Optional[Dict[str, Any]] = None
+    # AP2仕様推奨フィールド
+    sku: Optional[str] = None  # Stock Keeping Unit
+    category: Optional[str] = None  # 商品カテゴリー
+    tax_rate: Optional[str] = None  # 税率（例: "0.10" = 10%）
+    risk_payload: Optional[RiskPayload] = None  # 商品レベルのリスク情報
 
 
 @dataclass
@@ -204,6 +286,10 @@ class CartMandate:
     expires_at: str  # ISO 8601
     merchant_signature: Optional[Signature] = None
     user_signature: Optional[Signature] = None
+    # A2A Extension拡張フィールド
+    intent_mandate_hash: Optional[str] = None  # IntentMandateのSHA-256ハッシュ
+    mandate_metadata: Optional[MandateMetadata] = None  # メタデータ
+    risk_payload: Optional[RiskPayload] = None  # リスク情報（IntentMandateから引き継ぎ＋追加）
 
 
 # ========================================
@@ -296,6 +382,11 @@ class PaymentMandate:
     user_signature: Optional[Signature] = None
     merchant_signature: Optional[Signature] = None
     device_attestation: Optional[DeviceAttestation] = None  # AP2ステップ20-23で追加
+    # A2A Extension拡張フィールド
+    cart_mandate_hash: Optional[str] = None  # CartMandateのSHA-256ハッシュ
+    intent_mandate_hash: Optional[str] = None  # IntentMandateのSHA-256ハッシュ
+    mandate_metadata: Optional[MandateMetadata] = None  # メタデータ
+    risk_payload: Optional[RiskPayload] = None  # リスク情報（Intent→Cartから連鎖＋追加）
 
 
 # ========================================
@@ -531,6 +622,68 @@ class A2AMessage:
     timestamp: str  # ISO 8601
     payload: Any
     signature: Optional[Signature] = None
+
+
+# ========================================
+# A2A Extension メッセージ
+# ========================================
+
+@dataclass
+class A2AExtensionHeader:
+    """
+    A2A Extension Message Header
+
+    AP2プロトコルのA2A Extensionで使用されるヘッダー情報。
+    メッセージの署名とメタデータを含む。
+    """
+    message_id: str  # メッセージID
+    schema: str  # スキーマURI（例: "a2a://intentmandate", "a2a://cartmandate"）
+    version: str  # プロトコルバージョン
+    timestamp: str  # ISO 8601タイムスタンプ
+    sender: str  # 送信者エージェントID
+    recipient: str  # 受信者エージェントID
+    signature: Optional[Signature] = None  # メッセージ全体の署名
+
+
+@dataclass
+class A2AIntentMandateMessage:
+    """
+    A2A IntentMandate Message (a2a://intentmandate)
+
+    AP2のA2A Extensionで定義される、IntentMandateを包装したメッセージ。
+    """
+    header: A2AExtensionHeader
+    intent_mandate: IntentMandate
+    risk_data: Optional[RiskPayload] = None  # 追加のリスクデータ
+
+
+@dataclass
+class A2ACartMandateMessage:
+    """
+    A2A CartMandate Message (a2a://cartmandate)
+
+    AP2のA2A Extensionで定義される、CartMandateを包装したメッセージ。
+    IntentMandateへの参照を含む。
+    """
+    header: A2AExtensionHeader
+    cart_mandate: CartMandate
+    intent_mandate_reference: str  # IntentMandateのID or ハッシュ
+    risk_data: Optional[RiskPayload] = None  # 追加のリスクデータ
+
+
+@dataclass
+class A2APaymentMandateMessage:
+    """
+    A2A PaymentMandate Message (a2a://paymentmandate)
+
+    AP2のA2A Extensionで定義される、PaymentMandateを包装したメッセージ。
+    Cart/IntentMandateへの参照を含む。
+    """
+    header: A2AExtensionHeader
+    payment_mandate: PaymentMandate
+    cart_mandate_reference: str  # CartMandateのID or ハッシュ
+    intent_mandate_reference: str  # IntentMandateのID or ハッシュ
+    risk_data: Optional[RiskPayload] = None  # 追加のリスクデータ
 
 
 @dataclass

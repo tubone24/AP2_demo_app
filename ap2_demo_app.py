@@ -316,6 +316,93 @@ def show_signature_info(signature, title="署名情報"):
             st.code(f"公開鍵: {signature.public_key[:64]}...", language="text")
 
 
+def show_a2a_extension_fields(mandate, mandate_type="Mandate"):
+    """A2A Extension拡張フィールドを表示"""
+    st.subheader("🌐 A2A Extension拡張フィールド")
+
+    # Agent Signal
+    if hasattr(mandate, 'agent_signal') and mandate.agent_signal:
+        with st.expander("🤖 Agent Signal", expanded=False):
+            agent = mandate.agent_signal
+            st.write(f"**Agent ID:** `{agent.agent_id}`")
+            st.write(f"**Agent Name:** {agent.agent_name}")
+            if agent.agent_version:
+                st.write(f"**Version:** {agent.agent_version}")
+            if agent.agent_provider:
+                st.write(f"**Provider:** {agent.agent_provider}")
+            if agent.model_name:
+                st.write(f"**AI Model:** {agent.model_name}")
+            if agent.confidence_score is not None:
+                st.write(f"**Confidence Score:** {agent.confidence_score:.2f}")
+            if agent.autonomous_level:
+                st.write(f"**Autonomous Level:** {agent.autonomous_level}")
+            st.write(f"**Human Oversight:** {'はい' if agent.human_oversight else 'いいえ'}")
+
+    # Mandate Metadata
+    if hasattr(mandate, 'mandate_metadata') and mandate.mandate_metadata:
+        with st.expander("📋 Mandate Metadata", expanded=False):
+            meta = mandate.mandate_metadata
+            st.write(f"**Mandate Hash (SHA-256):** `{meta.mandate_hash[:32]}...`")
+            st.caption(f"完全なハッシュ: {meta.mandate_hash}")
+            st.write(f"**Schema Version:** {meta.schema_version}")
+            st.write(f"**Issuer:** {meta.issuer}")
+            st.write(f"**Issued At:** {meta.issued_at}")
+            if meta.previous_mandate_hash:
+                st.write(f"**Previous Mandate Hash:** `{meta.previous_mandate_hash[:32]}...`")
+                st.caption("⛓️ このフィールドによりMandate連鎖が実現されます")
+            if meta.nonce:
+                st.write(f"**Nonce:** `{meta.nonce[:16]}...`")
+
+    # Hash参照（CartMandateとPaymentMandate用）
+    if hasattr(mandate, 'intent_mandate_hash') and mandate.intent_mandate_hash:
+        with st.expander("🔗 IntentMandate Hash参照", expanded=False):
+            st.write(f"**Intent Mandate Hash:** `{mandate.intent_mandate_hash[:32]}...`")
+            st.caption(f"完全なハッシュ: {mandate.intent_mandate_hash}")
+            st.caption("✅ AP2仕様：ハッシュ参照により整合性を保証")
+
+    if hasattr(mandate, 'cart_mandate_hash') and mandate.cart_mandate_hash:
+        with st.expander("🔗 CartMandate Hash参照", expanded=False):
+            st.write(f"**Cart Mandate Hash:** `{mandate.cart_mandate_hash[:32]}...`")
+            st.caption(f"完全なハッシュ: {mandate.cart_mandate_hash}")
+            st.caption("✅ AP2仕様：ハッシュ参照により整合性を保証")
+
+    # Risk Payload
+    if hasattr(mandate, 'risk_payload') and mandate.risk_payload:
+        with st.expander("🛡️ Risk Payload", expanded=False):
+            risk = mandate.risk_payload
+            st.write("**デバイス情報:**")
+            if risk.device_fingerprint:
+                st.caption(f"• Device Fingerprint: {risk.device_fingerprint}")
+            if risk.device_id:
+                st.caption(f"• Device ID: {risk.device_id}")
+            if risk.platform:
+                st.caption(f"• Platform: {risk.platform}")
+            if risk.ip_address:
+                st.caption(f"• IP Address: {risk.ip_address}")
+
+            st.write("**セッション情報:**")
+            if risk.session_id:
+                st.caption(f"• Session ID: {risk.session_id}")
+            if risk.time_on_site:
+                st.caption(f"• Time on Site: {risk.time_on_site}秒")
+            if risk.pages_viewed:
+                st.caption(f"• Pages Viewed: {risk.pages_viewed}")
+
+            st.write("**ユーザー履歴:**")
+            if risk.account_age_days:
+                st.caption(f"• Account Age: {risk.account_age_days}日")
+            if risk.previous_transactions:
+                st.caption(f"• Previous Transactions: {risk.previous_transactions}件")
+
+            if risk.anomaly_score is not None:
+                st.write(f"**異常スコア:** {risk.anomaly_score:.2f}")
+
+            if risk.custom_fields:
+                st.write("**カスタムフィールド:**")
+                for key, value in risk.custom_fields.items():
+                    st.caption(f"• {key}: {value}")
+
+
 def step1_intent_creation():
     """ステップ1: Intent Mandateの作成"""
     st.header("📝 ステップ1: 購買意図の表明")
@@ -383,6 +470,10 @@ def step1_intent_creation():
             st.write(f"**有効期限:** {mandate.expires_at}")
 
             show_signature_info(mandate.user_signature, "ユーザー署名")
+
+            # A2A Extension拡張フィールドを表示
+            st.divider()
+            show_a2a_extension_fields(mandate, "IntentMandate")
 
             # JSON表示
             st.divider()
@@ -631,6 +722,10 @@ def step3_cart_creation():
 
             if cart.user_signature:
                 show_signature_info(cart.user_signature, "User署名")
+
+                # A2A Extension拡張フィールドを表示
+                st.divider()
+                show_a2a_extension_fields(cart, "CartMandate")
 
                 # JSON表示
                 st.divider()
@@ -1169,6 +1264,10 @@ def step4_payment_creation():
 
                 show_signature_info(payment.user_signature, "User署名")
 
+                # A2A Extension拡張フィールドを表示
+                st.divider()
+                show_a2a_extension_fields(payment, "PaymentMandate")
+
                 # JSON表示
                 st.divider()
                 show_json_data(payment, "Payment Mandate JSON")
@@ -1397,12 +1496,18 @@ def step6_completion():
     ])
 
     with tab1:
+        show_a2a_extension_fields(st.session_state.intent_mandate, "IntentMandate")
+        st.divider()
         show_json_data(st.session_state.intent_mandate, "Intent Mandate JSON", expand=True)
 
     with tab2:
+        show_a2a_extension_fields(st.session_state.cart_mandate, "CartMandate")
+        st.divider()
         show_json_data(st.session_state.cart_mandate, "Cart Mandate JSON", expand=True)
 
     with tab3:
+        show_a2a_extension_fields(st.session_state.payment_mandate, "PaymentMandate")
+        st.divider()
         show_json_data(st.session_state.payment_mandate, "Payment Mandate JSON", expand=True)
 
     with tab4:

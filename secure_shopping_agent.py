@@ -23,10 +23,14 @@ from ap2_types import (
     MandateError,
     VersionError,
     validate_mandate_version,
-    DEFAULT_AP2_VERSION
+    DEFAULT_AP2_VERSION,
+    # A2A Extension拡張型
+    AgentSignal,
+    MandateMetadata,
+    RiskPayload
 )
 
-from ap2_crypto import KeyManager, SignatureManager
+from ap2_crypto import KeyManager, SignatureManager, compute_mandate_hash
 from risk_assessment import RiskAssessmentEngine
 
 
@@ -126,19 +130,44 @@ class SecureShoppingAgent:
         now = datetime.utcnow()
         expires_at = now + timedelta(hours=valid_hours)
         
+        # merchants制約を空リストで明示（AP2仕様準拠）
+        merchants_constraint = []  # nullではなく空配列
+
         constraints = IntentConstraints(
             max_amount=max_amount,
             categories=categories,
             brands=brands,
+            merchants=merchants_constraint,  # AP2仕様：空リストを明示
             valid_until=expires_at.isoformat() + 'Z',
             valid_from=now.isoformat() + 'Z',
             max_transactions=1
         )
-        
+
         # ユーザーの公開鍵を取得
         user_public_key = user_key_manager.get_private_key(user_id).public_key()
         user_public_key_base64 = user_key_manager.public_key_to_base64(user_public_key)
-        
+
+        # A2A Extension: Agent Signalを作成
+        agent_signal = AgentSignal(
+            agent_id=self.agent_id,
+            agent_name=self.agent_name,
+            agent_version="1.0",
+            agent_provider="AP2 Demo",
+            model_name="Gemini 2.5 Flash",
+            confidence_score=0.95,
+            human_oversight=True,
+            autonomous_level='human_in_loop'
+        )
+
+        # A2A Extension: 初期Risk Payloadを作成
+        risk_payload = RiskPayload(
+            device_fingerprint=f"device_{uuid.uuid4().hex[:16]}",
+            platform="Web",
+            session_id=f"session_{uuid.uuid4().hex[:16]}",
+            account_age_days=30,  # サンプル値
+            previous_transactions=5  # サンプル値
+        )
+
         intent_mandate = IntentMandate(
             id=f"intent_{uuid.uuid4().hex}",
             type='IntentMandate',
@@ -148,18 +177,35 @@ class SecureShoppingAgent:
             intent=intent,
             constraints=constraints,
             created_at=now.isoformat() + 'Z',
-            expires_at=expires_at.isoformat() + 'Z'
+            expires_at=expires_at.isoformat() + 'Z',
+            # A2A Extension拡張フィールド
+            agent_signal=agent_signal,
+            risk_payload=risk_payload
         )
-        
-        # ユーザーの秘密鍵で署名
+
+        # ユーザーの秘密鍵で署名（mandate_metadataは署名後に追加）
         user_signature_manager = SignatureManager(user_key_manager)
         intent_mandate.user_signature = user_signature_manager.sign_mandate(
             asdict(intent_mandate),
             user_id
         )
-        
+
+        # A2A Extension: Mandate Hashを計算してMandate Metadataを追加
+        mandate_dict = asdict(intent_mandate)
+        mandate_hash = compute_mandate_hash(mandate_dict, hash_format='hex')
+
+        intent_mandate.mandate_metadata = MandateMetadata(
+            mandate_hash=mandate_hash,
+            schema_version='0.1',
+            issuer=self.agent_id,
+            issued_at=now.isoformat() + 'Z',
+            nonce=uuid.uuid4().hex
+        )
+
         print(f"  ✓ Intent Mandate作成完了: {intent_mandate.id}")
         print(f"  ✓ ユーザー署名追加")
+        print(f"  ✓ Mandate Hash: {mandate_hash[:16]}...")
+        print(f"  ✓ Agent Signal: {agent_signal.agent_name}")
         
         # 署名を検証
         self._verify_intent_mandate(intent_mandate)
@@ -340,6 +386,29 @@ class SecureShoppingAgent:
         now = datetime.utcnow()
         expires_at = now + timedelta(minutes=15)
 
+        # A2A Extension: IntentMandateとCartMandateのハッシュを計算
+        intent_mandate_dict = asdict(intent_mandate)
+        intent_mandate_hash = compute_mandate_hash(intent_mandate_dict, hash_format='hex')
+
+        cart_mandate_dict = asdict(cart_mandate)
+        cart_mandate_hash = compute_mandate_hash(cart_mandate_dict, hash_format='hex')
+
+        # A2A Extension: Risk Payloadの連鎖
+        # IntentMandate→CartMandate→PaymentMandateとリスク情報を引き継ぐ
+        combined_risk_payload = RiskPayload(
+            # IntentMandateから引き継ぐ
+            device_fingerprint=intent_mandate.risk_payload.device_fingerprint if intent_mandate.risk_payload else None,
+            platform=intent_mandate.risk_payload.platform if intent_mandate.risk_payload else None,
+            session_id=intent_mandate.risk_payload.session_id if intent_mandate.risk_payload else None,
+            account_age_days=intent_mandate.risk_payload.account_age_days if intent_mandate.risk_payload else None,
+            previous_transactions=intent_mandate.risk_payload.previous_transactions if intent_mandate.risk_payload else None,
+            # CartMandateから追加情報を引き継ぐ（存在する場合）
+            ip_address=cart_mandate.risk_payload.ip_address if cart_mandate.risk_payload else None,
+            # Payment段階で追加情報を設定
+            time_on_site=180,  # サンプル値：3分
+            pages_viewed=5  # サンプル値
+        )
+
         payment_mandate = PaymentMandate(
             id=payment_id,
             type='PaymentMandate',
@@ -354,7 +423,11 @@ class SecureShoppingAgent:
             payee_id=cart_mandate.merchant_id,
             created_at=now.isoformat() + 'Z',
             expires_at=expires_at.isoformat() + 'Z',
-            device_attestation=device_attestation  # AP2ステップ23: Device Attestationを含める
+            device_attestation=device_attestation,  # AP2ステップ23: Device Attestationを含める
+            # A2A Extension拡張フィールド
+            cart_mandate_hash=cart_mandate_hash,
+            intent_mandate_hash=intent_mandate_hash,
+            risk_payload=combined_risk_payload
         )
         
         # リスク評価を実行
@@ -385,8 +458,24 @@ class SecureShoppingAgent:
             user_id
         )
 
+        # A2A Extension: Mandate Hashを計算してMandate Metadataを追加
+        payment_mandate_dict = asdict(payment_mandate)
+        payment_mandate_hash = compute_mandate_hash(payment_mandate_dict, hash_format='hex')
+
+        payment_mandate.mandate_metadata = MandateMetadata(
+            mandate_hash=payment_mandate_hash,
+            schema_version='0.1',
+            issuer=self.agent_id,
+            issued_at=now.isoformat() + 'Z',
+            previous_mandate_hash=cart_mandate_hash,  # CartMandateから連鎖
+            nonce=uuid.uuid4().hex
+        )
+
         print(f"  ✓ Payment Mandate作成完了: {payment_mandate.id}")
         print(f"  ✓ ユーザー署名追加")
+        print(f"  ✓ Mandate Hash: {payment_mandate_hash[:16]}...")
+        print(f"  ✓ IntentMandate Hash参照: {intent_mandate_hash[:16]}...")
+        print(f"  ✓ CartMandate Hash参照: {cart_mandate_hash[:16]}...")
 
         return payment_mandate
     

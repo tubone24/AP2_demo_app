@@ -22,10 +22,13 @@ from ap2_types import (
     MandateError,
     AmountError,
     DEFAULT_AP2_VERSION,
-    SUPPORTED_AP2_VERSIONS
+    SUPPORTED_AP2_VERSIONS,
+    # A2A Extension拡張型
+    RiskPayload,
+    MandateMetadata
 )
 
-from ap2_crypto import KeyManager, SignatureManager
+from ap2_crypto import KeyManager, SignatureManager, compute_mandate_hash
 
 
 class Product:
@@ -305,6 +308,15 @@ class SecureMerchantAgent:
 
             total_price = Amount.from_decimal(item_total_decimal, unit_price.currency)
 
+            # A2A Extension: 商品レベルのRisk Payloadを作成
+            item_risk_payload = RiskPayload(
+                custom_fields={
+                    "product_category": product.category,
+                    "product_brand": product.brand,
+                    "stock_level": product.stock
+                }
+            )
+
             cart_item = CartItem(
                 id=product.id,
                 name=product.name,
@@ -312,7 +324,12 @@ class SecureMerchantAgent:
                 quantity=quantity,
                 unit_price=unit_price,
                 total_price=total_price,
-                image_url=product.image_url
+                image_url=product.image_url,
+                # AP2仕様推奨フィールド
+                sku=f"SKU-{product.id}",
+                category=product.category,
+                tax_rate=str(self.default_tax_rate),  # 例: "0.08"
+                risk_payload=item_risk_payload
             )
 
             cart_items.append(cart_item)
@@ -354,6 +371,26 @@ class SecureMerchantAgent:
         now = datetime.utcnow()
         expires_at = now + timedelta(hours=1)
 
+        # A2A Extension: IntentMandateのハッシュを計算
+        intent_mandate_dict = asdict(intent_mandate)
+        intent_mandate_hash = compute_mandate_hash(intent_mandate_dict, hash_format='hex')
+
+        # A2A Extension: Risk PayloadをIntentMandateから引き継ぐ
+        cart_risk_payload = RiskPayload(
+            # IntentMandateから引き継ぐ
+            device_fingerprint=intent_mandate.risk_payload.device_fingerprint if intent_mandate.risk_payload else None,
+            platform=intent_mandate.risk_payload.platform if intent_mandate.risk_payload else None,
+            session_id=intent_mandate.risk_payload.session_id if intent_mandate.risk_payload else None,
+            account_age_days=intent_mandate.risk_payload.account_age_days if intent_mandate.risk_payload else None,
+            previous_transactions=intent_mandate.risk_payload.previous_transactions if intent_mandate.risk_payload else None,
+            # Cart段階で追加情報を設定
+            ip_address="192.168.1.100",  # サンプル値
+            custom_fields={
+                "cart_total_items": len(cart_items),
+                "merchant_id": self.merchant_id
+            }
+        )
+
         cart_mandate = CartMandate(
             id=f"cart_{uuid.uuid4().hex}",
             type='CartMandate',
@@ -367,7 +404,10 @@ class SecureMerchantAgent:
             merchant_id=self.merchant_id,
             merchant_name=self.merchant_name,
             created_at=now.isoformat() + 'Z',
-            expires_at=expires_at.isoformat() + 'Z'
+            expires_at=expires_at.isoformat() + 'Z',
+            # A2A Extension拡張フィールド
+            intent_mandate_hash=intent_mandate_hash,
+            risk_payload=cart_risk_payload
         )
 
         print(f"\n  ✓ Cart Mandate作成完了: {cart_mandate.id}")
@@ -376,7 +416,8 @@ class SecureMerchantAgent:
         print(f"    税金: ${tax_amount_decimal:.2f}")
         print(f"    配送料: ${shipping_cost_decimal:.2f}")
         print(f"    合計: ${total_value_decimal:.2f}")
-        print(f"    ※ Merchant署名は Merchant エンティティが追加します")
+        print(f"    ✓ IntentMandate Hash参照: {intent_mandate_hash[:16]}...")
+        print(f"    ※ Merchant署名とMandate Metadataは Merchant エンティティが追加します")
 
         return cart_mandate
     

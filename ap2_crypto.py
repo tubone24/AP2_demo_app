@@ -26,6 +26,89 @@ class CryptoError(Exception):
     pass
 
 
+# ========================================
+# Mandate Hash計算ユーティリティ
+# ========================================
+
+def compute_mandate_hash(
+    mandate: Dict[str, Any],
+    hash_format: str = 'hex'
+) -> str:
+    """
+    MandateのCanonical JSONからSHA-256ハッシュを計算
+
+    AP2仕様では、Mandateの整合性検証のために
+    canonicalized JSON（正規化されたJSON）のハッシュを使用する。
+
+    Args:
+        mandate: Mandateの辞書表現
+        hash_format: ハッシュの出力形式 ('hex' or 'base64')
+
+    Returns:
+        str: SHA-256ハッシュ（hex形式またはbase64形式）
+    """
+    # 1. 署名フィールドを除外（署名前の状態でハッシュ化）
+    mandate_copy = mandate.copy()
+    mandate_copy.pop('user_signature', None)
+    mandate_copy.pop('merchant_signature', None)
+    mandate_copy.pop('mandate_metadata', None)  # メタデータも除外（ハッシュ自体を含むため）
+
+    # 2. Enumを.valueに変換
+    def convert_enums(data: Any) -> Any:
+        if isinstance(data, dict):
+            return {key: convert_enums(value) for key, value in data.items()}
+        elif isinstance(data, list):
+            return [convert_enums(item) for item in data]
+        elif hasattr(data, 'value'):  # Enumの場合
+            return data.value
+        else:
+            return data
+
+    converted_mandate = convert_enums(mandate_copy)
+
+    # 3. Canonical JSON文字列を生成
+    # - キーをアルファベット順にソート
+    # - 余分なスペースを削除
+    # - UTF-8エンコーディング
+    canonical_json = json.dumps(
+        converted_mandate,
+        sort_keys=True,
+        separators=(',', ':'),
+        ensure_ascii=False
+    )
+
+    # 4. SHA-256ハッシュを計算
+    hash_bytes = hashlib.sha256(canonical_json.encode('utf-8')).digest()
+
+    # 5. 指定された形式で返す
+    if hash_format == 'base64':
+        return base64.b64encode(hash_bytes).decode('utf-8')
+    elif hash_format == 'hex':
+        return hash_bytes.hex()
+    else:
+        raise ValueError(f"Unsupported hash format: {hash_format}. Use 'hex' or 'base64'.")
+
+
+def verify_mandate_hash(
+    mandate: Dict[str, Any],
+    expected_hash: str,
+    hash_format: str = 'hex'
+) -> bool:
+    """
+    Mandateのハッシュを検証
+
+    Args:
+        mandate: 検証するMandateの辞書表現
+        expected_hash: 期待されるハッシュ値
+        hash_format: ハッシュの形式 ('hex' or 'base64')
+
+    Returns:
+        bool: ハッシュが一致する場合True
+    """
+    actual_hash = compute_mandate_hash(mandate, hash_format)
+    return actual_hash == expected_hash
+
+
 class KeyManager:
     """
     鍵管理クラス

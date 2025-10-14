@@ -4,8 +4,10 @@ AP2 Protocol - Merchant
 Merchant Agentとは別のエンティティとして、Cart Mandateを検証・署名する
 """
 
-from ap2_crypto import KeyManager, SignatureManager
-from ap2_types import CartMandate
+from ap2_crypto import KeyManager, SignatureManager, compute_mandate_hash
+from ap2_types import CartMandate, MandateMetadata
+import uuid
+from datetime import datetime
 
 
 class Merchant:
@@ -111,7 +113,22 @@ class Merchant:
         # Cart MandateにMerchant署名を追加
         cart_mandate.merchant_signature = signature
 
+        # A2A Extension: Mandate Hashを計算してMandate Metadataを追加
+        cart_dict_signed = asdict(cart_mandate)
+        cart_mandate_hash = compute_mandate_hash(cart_dict_signed, hash_format='hex')
+
+        now = datetime.utcnow()
+        cart_mandate.mandate_metadata = MandateMetadata(
+            mandate_hash=cart_mandate_hash,
+            schema_version='0.1',
+            issuer=self.merchant_id,
+            issued_at=now.isoformat() + 'Z',
+            previous_mandate_hash=cart_mandate.intent_mandate_hash,  # IntentMandateから連鎖
+            nonce=uuid.uuid4().hex
+        )
+
         print(f"[Merchant] Merchant署名を追加完了")
+        print(f"[Merchant] Mandate Hash: {cart_mandate_hash[:16]}...")
         print(f"[Merchant] 注文確定: {cart_mandate.id}")
 
         return cart_mandate
