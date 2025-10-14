@@ -640,10 +640,55 @@ class A2AExtensionHeader:
     schema: str  # スキーマURI（例: "a2a://intentmandate", "a2a://cartmandate"）
     version: str  # プロトコルバージョン
     timestamp: str  # ISO 8601タイムスタンプ
-    sender: str  # 送信者エージェントID
-    recipient: str  # 受信者エージェントID
+    sender: str  # 送信者エージェントID（AgentCard URI: did:ap2:agent:id）
+    recipient: str  # 受信者エージェントID（AgentCard URI: did:ap2:agent:id）
     signature: Optional[Signature] = None  # メッセージ全体の署名
 
+
+@dataclass
+class A2ADataPart:
+    """
+    A2A DataPart Structure
+
+    A2A仕様準拠のDataPart構造。構造化データ（JSON）を含む。
+    kind="data"を識別子として使用し、dataフィールドにキーと値のペアを含む。
+
+    Example:
+        {
+            "kind": "data",
+            "data": {
+                "ap2.mandates.IntentMandate": {...},
+                "risk_data": {...}
+            }
+        }
+    """
+    kind: Literal["data"] = "data"
+    data: Dict[str, Any] = field(default_factory=dict)  # キーはap2.mandates.X形式
+
+
+@dataclass
+class A2AMessageStandard:
+    """
+    統一されたA2A Message構造（DataPart形式）- A2A仕様準拠
+
+    A2A Extension仕様に準拠した標準メッセージ構造。
+    すべてのMandate型（Intent/Cart/Payment）に対応。
+
+    DataPartの"data"フィールドには以下のキーを含む：
+    - "ap2.mandates.IntentMandate": IntentMandateオブジェクト
+    - "ap2.mandates.CartMandate": CartMandateオブジェクト
+    - "ap2.mandates.PaymentMandate": PaymentMandateオブジェクト
+    - "risk_data": RiskPayloadオブジェクト（オプション）
+    """
+    header: A2AExtensionHeader
+    dataPart: A2ADataPart
+
+
+# ========================================
+# 後方互換性のための旧メッセージ型（非推奨）
+# これらの型は将来的に削除される予定です。
+# 新しいコードではA2AMessageStandardを使用してください。
+# ========================================
 
 @dataclass
 class A2AIntentMandateMessage:

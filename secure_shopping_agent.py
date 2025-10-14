@@ -423,6 +423,7 @@ class SecureShoppingAgent:
             payee_id=cart_mandate.merchant_id,
             created_at=now.isoformat() + 'Z',
             expires_at=expires_at.isoformat() + 'Z',
+            merchant_signature=cart_mandate.merchant_signature,  # Cart MandateのMerchant署名を継承
             device_attestation=device_attestation,  # AP2ステップ23: Device Attestationを含める
             # A2A Extension拡張フィールド
             cart_mandate_hash=cart_mandate_hash,
@@ -449,9 +450,8 @@ class SecureShoppingAgent:
             print(f"    - 不正指標: {', '.join(risk_result.fraud_indicators)}")
 
         # ユーザーの署名を追加
-        # 注: Payment Mandateはユーザーのみが署名します
-        # Cart Mandateで既にマーチャントの同意は得られているため、
-        # マーチャント署名は不要です
+        # 注: Payment MandateにはCart MandateのMerchant署名を継承し、
+        # さらにユーザーが最終承認の署名を追加します
         user_signature_manager = SignatureManager(user_key_manager)
         payment_mandate.user_signature = user_signature_manager.sign_mandate(
             asdict(payment_mandate),

@@ -513,6 +513,77 @@ class SignatureManager:
 
         return self.verify_signature(mandate_copy, signature)
 
+    def sign_a2a_message(
+        self,
+        a2a_message_dict: Dict[str, Any],
+        sender_key_id: str
+    ) -> Signature:
+        """
+        A2Aメッセージ全体に署名（メッセージレベル署名）
+
+        A2A Extension仕様に準拠したメッセージレベル署名を生成。
+        header.signatureフィールドを除外してCanonical JSONから署名を作成。
+
+        Args:
+            a2a_message_dict: A2Aメッセージの辞書表現（headerを含む）
+            sender_key_id: 送信者の秘密鍵ID
+
+        Returns:
+            Signature: メッセージ署名
+        """
+        print(f"[SignatureManager] A2Aメッセージに署名中（送信者: {sender_key_id}）")
+
+        # メッセージのコピーを作成
+        message_copy = {}
+        for key, value in a2a_message_dict.items():
+            if isinstance(value, dict):
+                message_copy[key] = value.copy()
+            else:
+                message_copy[key] = value
+
+        # header.signatureフィールドを除外（署名前の状態）
+        if 'header' in message_copy and isinstance(message_copy['header'], dict):
+            header_copy = message_copy['header'].copy()
+            header_copy.pop('signature', None)
+            message_copy['header'] = header_copy
+
+        # 署名を作成
+        return self.sign_data(message_copy, sender_key_id)
+
+    def verify_a2a_message_signature(
+        self,
+        a2a_message_dict: Dict[str, Any],
+        signature: Signature
+    ) -> bool:
+        """
+        A2Aメッセージの署名を検証
+
+        Args:
+            a2a_message_dict: A2Aメッセージの辞書表現
+            signature: 検証する署名
+
+        Returns:
+            bool: 検証結果
+        """
+        print(f"[SignatureManager] A2Aメッセージ署名を検証中...")
+
+        # メッセージのコピーを作成
+        message_copy = {}
+        for key, value in a2a_message_dict.items():
+            if isinstance(value, dict):
+                message_copy[key] = value.copy()
+            else:
+                message_copy[key] = value
+
+        # header.signatureフィールドを除外（署名時と同じ状態にする）
+        if 'header' in message_copy and isinstance(message_copy['header'], dict):
+            header_copy = message_copy['header'].copy()
+            header_copy.pop('signature', None)
+            message_copy['header'] = header_copy
+
+        # 署名を検証
+        return self.verify_signature(message_copy, signature)
+
 
 class SecureStorage:
     """

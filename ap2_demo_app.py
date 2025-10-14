@@ -316,91 +316,432 @@ def show_signature_info(signature, title="署名情報"):
             st.code(f"公開鍵: {signature.public_key[:64]}...", language="text")
 
 
-def show_a2a_extension_fields(mandate, mandate_type="Mandate"):
-    """A2A Extension拡張フィールドを表示"""
-    st.subheader("🌐 A2A Extension拡張フィールド")
+def create_a2a_message(
+    mandate,
+    mandate_type: str,
+    sender: str = None,
+    recipient: str = None,
+    sender_signature_manager = None,
+    sender_key_id: str = None
+):
+    """
+    MandateからA2Aメッセージを構築
 
-    # Agent Signal
-    if hasattr(mandate, 'agent_signal') and mandate.agent_signal:
-        with st.expander("🤖 Agent Signal", expanded=False):
-            agent = mandate.agent_signal
-            st.write(f"**Agent ID:** `{agent.agent_id}`")
-            st.write(f"**Agent Name:** {agent.agent_name}")
-            if agent.agent_version:
-                st.write(f"**Version:** {agent.agent_version}")
-            if agent.agent_provider:
-                st.write(f"**Provider:** {agent.agent_provider}")
-            if agent.model_name:
-                st.write(f"**AI Model:** {agent.model_name}")
-            if agent.confidence_score is not None:
-                st.write(f"**Confidence Score:** {agent.confidence_score:.2f}")
-            if agent.autonomous_level:
-                st.write(f"**Autonomous Level:** {agent.autonomous_level}")
-            st.write(f"**Human Oversight:** {'はい' if agent.human_oversight else 'いいえ'}")
+    Args:
+        mandate: Mandateオブジェクト
+        mandate_type: "IntentMandate", "CartMandate", "PaymentMandate"
+        sender: 送信者名（AgentCard URI形式に自動変換）
+        recipient: 受信者名（AgentCard URI形式に自動変換）
+        sender_signature_manager: 送信者のSignatureManagerインスタンス（オプション）
+        sender_key_id: 送信者の鍵ID（オプション、署名時に必要）
 
-    # Mandate Metadata
-    if hasattr(mandate, 'mandate_metadata') and mandate.mandate_metadata:
-        with st.expander("📋 Mandate Metadata", expanded=False):
-            meta = mandate.mandate_metadata
-            st.write(f"**Mandate Hash (SHA-256):** `{meta.mandate_hash[:32]}...`")
-            st.caption(f"完全なハッシュ: {meta.mandate_hash}")
-            st.write(f"**Schema Version:** {meta.schema_version}")
-            st.write(f"**Issuer:** {meta.issuer}")
-            st.write(f"**Issued At:** {meta.issued_at}")
-            if meta.previous_mandate_hash:
-                st.write(f"**Previous Mandate Hash:** `{meta.previous_mandate_hash[:32]}...`")
-                st.caption("⛓️ このフィールドによりMandate連鎖が実現されます")
-            if meta.nonce:
-                st.write(f"**Nonce:** `{meta.nonce[:16]}...`")
+    Returns:
+        A2Aメッセージオブジェクト（署名付きまたは署名なし）
+    """
+    from ap2_types import (
+        A2AExtensionHeader,
+        A2AIntentMandateMessage,
+        A2ACartMandateMessage,
+        A2APaymentMandateMessage,
+        Signature
+    )
+    from datetime import datetime
+    import uuid
 
-    # Hash参照（CartMandateとPaymentMandate用）
-    if hasattr(mandate, 'intent_mandate_hash') and mandate.intent_mandate_hash:
-        with st.expander("🔗 IntentMandate Hash参照", expanded=False):
-            st.write(f"**Intent Mandate Hash:** `{mandate.intent_mandate_hash[:32]}...`")
-            st.caption(f"完全なハッシュ: {mandate.intent_mandate_hash}")
-            st.caption("✅ AP2仕様：ハッシュ参照により整合性を保証")
+    # デフォルトのsender/recipientを設定（AgentCard URI形式）
+    if sender is None:
+        user_id = getattr(mandate, 'user_id', 'agent_sender')
+        sender = f"did:ap2:agent:{user_id}"
+    else:
+        # Agent名をURI形式に変換
+        sender = f"did:ap2:agent:{sender.lower().replace(' ', '_')}"
 
-    if hasattr(mandate, 'cart_mandate_hash') and mandate.cart_mandate_hash:
-        with st.expander("🔗 CartMandate Hash参照", expanded=False):
-            st.write(f"**Cart Mandate Hash:** `{mandate.cart_mandate_hash[:32]}...`")
-            st.caption(f"完全なハッシュ: {mandate.cart_mandate_hash}")
-            st.caption("✅ AP2仕様：ハッシュ参照により整合性を保証")
+    if recipient is None:
+        recipient = "did:ap2:agent:recipient"
+    else:
+        # Agent名をURI形式に変換
+        recipient = f"did:ap2:agent:{recipient.lower().replace(' ', '_')}"
 
-    # Risk Payload
-    if hasattr(mandate, 'risk_payload') and mandate.risk_payload:
-        with st.expander("🛡️ Risk Payload", expanded=False):
-            risk = mandate.risk_payload
-            st.write("**デバイス情報:**")
-            if risk.device_fingerprint:
-                st.caption(f"• Device Fingerprint: {risk.device_fingerprint}")
-            if risk.device_id:
-                st.caption(f"• Device ID: {risk.device_id}")
-            if risk.platform:
-                st.caption(f"• Platform: {risk.platform}")
-            if risk.ip_address:
-                st.caption(f"• IP Address: {risk.ip_address}")
+    # A2A Extension Headerを作成
+    header = A2AExtensionHeader(
+        message_id=f"msg_{uuid.uuid4().hex[:16]}",
+        schema="",  # メッセージごとに設定
+        version="0.1",
+        timestamp=datetime.utcnow().isoformat() + 'Z',
+        sender=sender,
+        recipient=recipient,
+        signature=None  # 署名は後で追加
+    )
 
-            st.write("**セッション情報:**")
-            if risk.session_id:
-                st.caption(f"• Session ID: {risk.session_id}")
-            if risk.time_on_site:
-                st.caption(f"• Time on Site: {risk.time_on_site}秒")
-            if risk.pages_viewed:
-                st.caption(f"• Pages Viewed: {risk.pages_viewed}")
+    # Mandate typeに応じてA2Aメッセージを構築
+    if mandate_type == "IntentMandate":
+        header.schema = "a2a://intentmandate/v0.1"  # 仕様準拠：ハイフンなし
+        a2a_message = A2AIntentMandateMessage(
+            header=header,
+            intent_mandate=mandate,
+            risk_data=None  # 冗長性削減：risk_payloadはintent_mandate内にあるためnull
+        )
+    elif mandate_type == "CartMandate":
+        header.schema = "a2a://cartmandate/v0.1"  # 仕様準拠：ハイフンなし
+        a2a_message = A2ACartMandateMessage(
+            header=header,
+            cart_mandate=mandate,
+            intent_mandate_reference=getattr(mandate, 'intent_mandate_hash', ''),
+            risk_data=None  # 冗長性削減：risk_payloadはcart_mandate内にあるためnull
+        )
+    elif mandate_type == "PaymentMandate":
+        header.schema = "a2a://paymentmandate/v0.1"  # 仕様準拠：ハイフンなし
+        a2a_message = A2APaymentMandateMessage(
+            header=header,
+            payment_mandate=mandate,
+            cart_mandate_reference=getattr(mandate, 'cart_mandate_hash', ''),
+            intent_mandate_reference=getattr(mandate, 'intent_mandate_hash', '')
+        )
+    else:
+        return None
 
-            st.write("**ユーザー履歴:**")
-            if risk.account_age_days:
-                st.caption(f"• Account Age: {risk.account_age_days}日")
-            if risk.previous_transactions:
-                st.caption(f"• Previous Transactions: {risk.previous_transactions}件")
+    # オプション：メッセージレベル署名を追加
+    if sender_signature_manager and sender_key_id:
+        try:
+            # A2Aメッセージを辞書に変換
+            a2a_dict = dataclass_to_dict(a2a_message)
 
-            if risk.anomaly_score is not None:
-                st.write(f"**異常スコア:** {risk.anomaly_score:.2f}")
+            # メッセージ全体に署名
+            message_signature = sender_signature_manager.sign_a2a_message(
+                a2a_dict,
+                sender_key_id
+            )
 
-            if risk.custom_fields:
-                st.write("**カスタムフィールド:**")
-                for key, value in risk.custom_fields.items():
-                    st.caption(f"• {key}: {value}")
+            # headerに署名を追加
+            header.signature = message_signature
+
+            # A2Aメッセージを再構築（署名付き）
+            if mandate_type == "IntentMandate":
+                a2a_message = A2AIntentMandateMessage(
+                    header=header,
+                    intent_mandate=mandate,
+                    risk_data=None
+                )
+            elif mandate_type == "CartMandate":
+                a2a_message = A2ACartMandateMessage(
+                    header=header,
+                    cart_mandate=mandate,
+                    intent_mandate_reference=getattr(mandate, 'intent_mandate_hash', ''),
+                    risk_data=None
+                )
+            elif mandate_type == "PaymentMandate":
+                a2a_message = A2APaymentMandateMessage(
+                    header=header,
+                    payment_mandate=mandate,
+                    cart_mandate_reference=getattr(mandate, 'cart_mandate_hash', ''),
+                    intent_mandate_reference=getattr(mandate, 'intent_mandate_hash', '')
+                )
+        except Exception as e:
+            print(f"[Warning] A2Aメッセージ署名に失敗: {e}")
+            # 署名失敗しても、署名なしのメッセージを返す
+
+    return a2a_message
+
+
+def create_a2a_message_standard(
+    mandate,
+    mandate_type: str,
+    sender: str = None,
+    recipient: str = None,
+    sender_signature_manager = None,
+    sender_key_id: str = None
+):
+    """
+    DataPart形式のA2Aメッセージを構築（A2A仕様準拠）
+
+    Args:
+        mandate: Mandateオブジェクト
+        mandate_type: "IntentMandate", "CartMandate", "PaymentMandate"
+        sender: 送信者名（AgentCard URI形式に自動変換）
+        recipient: 受信者名（AgentCard URI形式に自動変換）
+        sender_signature_manager: 送信者のSignatureManagerインスタンス（オプション）
+        sender_key_id: 送信者の鍵ID（オプション、署名時に必要）
+
+    Returns:
+        A2AMessageStandardオブジェクト（DataPart形式）
+    """
+    from ap2_types import (
+        A2AExtensionHeader,
+        A2ADataPart,
+        A2AMessageStandard
+    )
+    from datetime import datetime
+    import uuid
+
+    # デフォルトのsender/recipientを設定（AgentCard URI形式）
+    if sender is None:
+        user_id = getattr(mandate, 'user_id', 'agent_sender')
+        sender = f"did:ap2:agent:{user_id}"
+    else:
+        # Agent名をURI形式に変換
+        sender = f"did:ap2:agent:{sender.lower().replace(' ', '_')}"
+
+    if recipient is None:
+        recipient = "did:ap2:agent:recipient"
+    else:
+        # Agent名をURI形式に変換
+        recipient = f"did:ap2:agent:{recipient.lower().replace(' ', '_')}"
+
+    # Mandate typeに応じてスキーマURIとDataPartキーを設定
+    if mandate_type == "IntentMandate":
+        schema = "a2a://intentmandate/v0.1"
+        data_key = "ap2.mandates.IntentMandate"
+    elif mandate_type == "CartMandate":
+        schema = "a2a://cartmandate/v0.1"
+        data_key = "ap2.mandates.CartMandate"
+    elif mandate_type == "PaymentMandate":
+        schema = "a2a://paymentmandate/v0.1"
+        data_key = "ap2.mandates.PaymentMandate"
+    else:
+        return None
+
+    # A2A Extension Headerを作成
+    header = A2AExtensionHeader(
+        message_id=f"msg_{uuid.uuid4().hex[:16]}",
+        schema=schema,
+        version="0.1",
+        timestamp=datetime.utcnow().isoformat() + 'Z',
+        sender=sender,
+        recipient=recipient,
+        signature=None  # 署名は後で追加
+    )
+
+    # DataPartを作成
+    dataPart = A2ADataPart(
+        kind="data",
+        data={
+            data_key: mandate,
+            "risk_data": None  # 冗長性削減：Mandate内部にrisk_payloadがあるためnull
+        }
+    )
+
+    # A2AMessageStandardを構築
+    a2a_message = A2AMessageStandard(
+        header=header,
+        dataPart=dataPart
+    )
+
+    # オプション：メッセージレベル署名を追加
+    if sender_signature_manager and sender_key_id:
+        try:
+            # A2Aメッセージを辞書に変換
+            a2a_dict = dataclass_to_dict(a2a_message)
+
+            # メッセージ全体に署名
+            message_signature = sender_signature_manager.sign_a2a_message(
+                a2a_dict,
+                sender_key_id
+            )
+
+            # headerに署名を追加
+            header.signature = message_signature
+
+            # A2Aメッセージを再構築（署名付き）
+            dataPart = A2ADataPart(
+                kind="data",
+                data={
+                    data_key: mandate,
+                    "risk_data": None
+                }
+            )
+
+            a2a_message = A2AMessageStandard(
+                header=header,
+                dataPart=dataPart
+            )
+        except Exception as e:
+            print(f"[Warning] A2Aメッセージ署名に失敗: {e}")
+            # 署名失敗しても、署名なしのメッセージを返す
+
+    return a2a_message
+
+
+def show_a2a_message(mandate, mandate_type="Mandate", use_datapart_format=True):
+    """
+    A2Aメッセージペイロード全体を表示
+
+    Args:
+        mandate: Mandateオブジェクト
+        mandate_type: "IntentMandate", "CartMandate", "PaymentMandate"
+        use_datapart_format: DataPart形式を使用するか（デフォルト: True）
+    """
+    st.subheader("🌐 A2A Protocol Message")
+
+    # A2Aメッセージを構築（DataPart形式 or 旧形式）
+    if use_datapart_format:
+        a2a_message = create_a2a_message_standard(mandate, mandate_type)
+        message_format = "DataPart (A2A Standard)"
+    else:
+        a2a_message = create_a2a_message(mandate, mandate_type)
+        message_format = "Legacy Format"
+
+    if not a2a_message:
+        st.error(f"不明なMandate Type: {mandate_type}")
+        return
+
+    # A2Aメッセージの概要を表示
+    st.info(f"""
+    **A2A Protocol Message Structure** ({message_format})
+
+    このMandateは実際のAgent-to-Agent通信では以下のA2Aメッセージ構造で送信されます：
+    - **Schema**: `{a2a_message.header.schema}`
+    - **Message ID**: `{a2a_message.header.message_id}`
+    - **Timestamp**: `{a2a_message.header.timestamp}`
+    - **Format**: {message_format}
+    """)
+
+    # A2Aメッセージ全体をJSON表示
+    with st.expander("📦 A2A Message Payload (Complete)", expanded=True):
+        # dataclassを辞書に変換してJSON表示
+        a2a_dict = dataclass_to_dict(a2a_message)
+        st.json(a2a_dict)
+
+        # DataPart構造を強調表示
+        if use_datapart_format and hasattr(a2a_message, 'dataPart'):
+            st.caption("✅ **DataPart構造（A2A仕様準拠）:**")
+            st.caption(f"• kind: `{a2a_message.dataPart.kind}`")
+            data_keys = list(a2a_message.dataPart.data.keys())
+            for key in data_keys:
+                if key.startswith("ap2.mandates."):
+                    st.caption(f"• data[\"{key}\"]: Mandateオブジェクト")
+                else:
+                    st.caption(f"• data[\"{key}\"]: {a2a_message.dataPart.data[key]}")
+
+        # ダウンロードボタン
+        json_str = json.dumps(a2a_dict, indent=2, ensure_ascii=False)
+        st.download_button(
+            label="A2A Messageをダウンロード",
+            data=json_str,
+            file_name=f"a2a_{mandate_type.lower()}_{a2a_message.header.message_id}.json",
+            mime="application/json"
+        )
+
+    # 重要なフィールドをハイライト
+    st.caption("✅ **A2A Extension実装項目:**")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        if hasattr(mandate, 'mandate_metadata') and mandate.mandate_metadata:
+            st.caption(f"• Mandate Hash: `{mandate.mandate_metadata.mandate_hash[:16]}...`")
+            if mandate.mandate_metadata.previous_mandate_hash:
+                st.caption(f"• Previous Hash: `{mandate.mandate_metadata.previous_mandate_hash[:16]}...` (連鎖)")
+
+        if hasattr(mandate, 'agent_signal') and mandate.agent_signal:
+            st.caption(f"• Agent Signal: {mandate.agent_signal.agent_name} ({mandate.agent_signal.autonomous_level})")
+
+    with col2:
+        if hasattr(mandate, 'risk_payload') and mandate.risk_payload:
+            st.caption(f"• Risk Payload: Device={mandate.risk_payload.platform or 'N/A'}, Session={mandate.risk_payload.session_id[:16] if mandate.risk_payload.session_id else 'N/A'}...")
+
+        if hasattr(mandate, 'intent_mandate_hash') and mandate.intent_mandate_hash:
+            st.caption(f"• Intent Hash Ref: `{mandate.intent_mandate_hash[:16]}...`")
+
+        if hasattr(mandate, 'cart_mandate_hash') and mandate.cart_mandate_hash:
+            st.caption(f"• Cart Hash Ref: `{mandate.cart_mandate_hash[:16]}...`")
+
+
+def show_a2a_communication(
+    mandate,
+    mandate_type: str,
+    direction: str,
+    sender: str,
+    receiver: str,
+    use_datapart_format=True
+):
+    """
+    Agent間通信でのA2Aメッセージを表示（expanderなし）
+
+    Args:
+        mandate: Mandateオブジェクト
+        mandate_type: "IntentMandate", "CartMandate", "PaymentMandate"
+        direction: "request" or "response"
+        sender: 送信者名
+        receiver: 受信者名
+        use_datapart_format: DataPart形式を使用するか（デフォルト: True）
+    """
+    # 通信方向を表示
+    if direction == "request":
+        icon = "📤"
+        label = "Request"
+    else:
+        icon = "📥"
+        label = "Response"
+
+    st.write(f"**{icon} A2A Communication: {sender} → {receiver}**")
+
+    # A2Aメッセージを構築（DataPart形式 or 旧形式）
+    if use_datapart_format:
+        a2a_message = create_a2a_message_standard(
+            mandate, mandate_type, sender=sender, recipient=receiver
+        )
+        message_format = "DataPart"
+    else:
+        a2a_message = create_a2a_message(
+            mandate, mandate_type, sender=sender, recipient=receiver
+        )
+        message_format = "Legacy"
+
+    if not a2a_message:
+        st.error(f"不明なMandate Type: {mandate_type}")
+        return
+
+    # コンパクトな表示（expanderなし）
+    st.caption(f"📦 **Schema:** `{a2a_message.header.schema}`")
+    st.caption(f"📨 **Message ID:** `{a2a_message.header.message_id}`")
+
+    # HTTP通信イメージ
+    st.caption("💡 **HTTP通信での実装イメージ:**")
+
+    # DataPart形式のペイロード構造を生成
+    if use_datapart_format:
+        data_key = f"ap2.mandates.{mandate_type}"
+        payload_structure = f"""  "dataPart": {{
+    "kind": "data",
+    "data": {{
+      "{data_key}": {{ ... }},
+      "risk_data": null
+    }}
+  }}"""
+    else:
+        payload_structure = f"""  "{mandate_type.lower().replace('mandate', '_mandate')}": {{ ... }},
+  "risk_data": {{ ... }}"""
+
+    if direction == "request":
+        st.code(f"""POST https://{receiver.lower().replace(' ', '-')}.example.com/api/v1/mandates
+Content-Type: application/json
+
+{{
+  "header": {{
+    "message_id": "{a2a_message.header.message_id}",
+    "schema": "{a2a_message.header.schema}",
+    "version": "{a2a_message.header.version}",
+    "timestamp": "{a2a_message.header.timestamp}",
+    "sender": "{a2a_message.header.sender}",
+    "recipient": "{a2a_message.header.recipient}"
+  }},
+{payload_structure}
+}}""", language="http")
+    else:
+        st.code(f"""HTTP/1.1 200 OK
+Content-Type: application/json
+
+{{
+  "header": {{
+    "message_id": "{a2a_message.header.message_id}",
+    "schema": "{a2a_message.header.schema}",
+    "version": "{a2a_message.header.version}",
+    "timestamp": "{a2a_message.header.timestamp}",
+    "sender": "{a2a_message.header.sender}",
+    "recipient": "{a2a_message.header.recipient}"
+  }},
+{payload_structure}
+}}""", language="http")
 
 
 def step1_intent_creation():
@@ -471,9 +812,9 @@ def step1_intent_creation():
 
             show_signature_info(mandate.user_signature, "ユーザー署名")
 
-            # A2A Extension拡張フィールドを表示
+            # A2Aメッセージを表示
             st.divider()
-            show_a2a_extension_fields(mandate, "IntentMandate")
+            show_a2a_message(mandate, "IntentMandate")
 
             # JSON表示
             st.divider()
@@ -529,7 +870,19 @@ def step2_product_search():
                     status.update(label="検証失敗", state="error")
                     st.stop()
 
-                st.write("🔍 **ステップ 2:** Merchant Agentが商品を検索")
+                st.write("🔍 **ステップ 2:** Merchant Agentに商品検索リクエストを送信")
+
+                # A2A通信を可視化
+                show_a2a_communication(
+                    mandate=mandate,
+                    mandate_type="IntentMandate",
+                    direction="request",
+                    sender="Shopping Agent",
+                    receiver="Merchant Agent"
+                )
+
+                st.caption("📡 実際のシステムでは、このA2AメッセージがHTTP POSTでMerchant AgentのAPIエンドポイントに送信されます")
+
                 products = st.session_state.merchant_agent.search_products(mandate)
                 st.success(f"✓ {len(products)}件の商品が見つかりました")
 
@@ -670,7 +1023,19 @@ def step3_cart_creation():
                         st.caption(f"合計金額: {unsigned_cart.total}")
 
                     # ステップ2: MerchantがCart Mandateを検証して署名
-                        st.write("🏬 **ステップ 2:** MerchantがCart Mandateを検証")
+                        st.write("🏬 **ステップ 2:** MerchantにCart Mandate署名リクエストを送信")
+
+                        # A2A通信を可視化
+                        show_a2a_communication(
+                            mandate=unsigned_cart,
+                            mandate_type="CartMandate",
+                            direction="request",
+                            sender="Merchant Agent",
+                            receiver="Merchant"
+                        )
+
+                        st.caption("📡 実際のシステムでは、このA2AメッセージがHTTP POSTでMerchantのAPIエンドポイント（署名サービス）に送信されます")
+
                         try:
                             # 検証項目を直接表示
                             st.caption("🔍 Merchant検証プロセス:")
@@ -723,9 +1088,9 @@ def step3_cart_creation():
             if cart.user_signature:
                 show_signature_info(cart.user_signature, "User署名")
 
-                # A2A Extension拡張フィールドを表示
+                # A2Aメッセージを表示
                 st.divider()
-                show_a2a_extension_fields(cart, "CartMandate")
+                show_a2a_message(cart, "CartMandate")
 
                 # JSON表示
                 st.divider()
@@ -1264,9 +1629,9 @@ def step4_payment_creation():
 
                 show_signature_info(payment.user_signature, "User署名")
 
-                # A2A Extension拡張フィールドを表示
+                # A2Aメッセージを表示
                 st.divider()
-                show_a2a_extension_fields(payment, "PaymentMandate")
+                show_a2a_message(payment, "PaymentMandate")
 
                 # JSON表示
                 st.divider()
@@ -1315,11 +1680,25 @@ def step5_payment_processing():
         otp = st.text_input("ワンタイムパスワード（OTP）", value="123456", type="password")
 
         if st.button("支払いを実行", type="primary", use_container_width=True):
-            with st.spinner("支払いを処理中..."):
+            with st.status("支払いを処理中...", expanded=True) as status:
                 try:
                     # Payment Processorを直接使用してトランザクションを処理
                     from ap2_types import TransactionStatus
 
+                    st.write("📤 **ステップ 1:** Payment ProcessorにPayment Mandateを送信")
+
+                    # A2A通信を可視化
+                    show_a2a_communication(
+                        mandate=payment,
+                        mandate_type="PaymentMandate",
+                        direction="request",
+                        sender="Shopping Agent",
+                        receiver="Payment Processor"
+                    )
+
+                    st.caption("📡 実際のシステムでは、このA2AメッセージがHTTP POSTでPayment ProcessorのAPIエンドポイント（/authorize）に送信されます")
+
+                    st.write("💳 **ステップ 2:** トランザクションを承認（Authorization）")
                     # 1. トランザクションを承認（Authorization）
                     transaction_result = st.session_state.payment_processor.authorize_transaction(
                         payment_mandate=payment,
@@ -1329,17 +1708,22 @@ def step5_payment_processing():
 
                     # 2. 承認が成功した場合のみキャプチャ（Capture）
                     if transaction_result.status == TransactionStatus.AUTHORIZED:
+                        st.success("✓ オーソリゼーション成功")
+                        st.write("💵 **ステップ 3:** トランザクションをキャプチャ（Capture）")
                         transaction_result = st.session_state.payment_processor.capture_transaction(
                             transaction_result.id
                         )
+                        st.success("✓ キャプチャ完了")
                     # 3. 失敗した場合はそのまま失敗結果を使用
 
                     st.session_state.transaction_result = transaction_result
+                    status.update(label="支払い処理完了！", state="complete")
                     st.session_state.step = 6
                     st.rerun()
 
                 except Exception as e:
                     st.error(f"支払い処理エラー: {str(e)}")
+                    status.update(label="支払い処理失敗", state="error")
 
     with col2:
         st.subheader("署名検証")
@@ -1496,17 +1880,17 @@ def step6_completion():
     ])
 
     with tab1:
-        show_a2a_extension_fields(st.session_state.intent_mandate, "IntentMandate")
+        show_a2a_message(st.session_state.intent_mandate, "IntentMandate")
         st.divider()
         show_json_data(st.session_state.intent_mandate, "Intent Mandate JSON", expand=True)
 
     with tab2:
-        show_a2a_extension_fields(st.session_state.cart_mandate, "CartMandate")
+        show_a2a_message(st.session_state.cart_mandate, "CartMandate")
         st.divider()
         show_json_data(st.session_state.cart_mandate, "Cart Mandate JSON", expand=True)
 
     with tab3:
-        show_a2a_extension_fields(st.session_state.payment_mandate, "PaymentMandate")
+        show_a2a_message(st.session_state.payment_mandate, "PaymentMandate")
         st.divider()
         show_json_data(st.session_state.payment_mandate, "Payment Mandate JSON", expand=True)
 
