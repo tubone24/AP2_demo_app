@@ -579,31 +579,31 @@ def step3_cart_creation():
                         st.caption(f"合計金額: {unsigned_cart.total}")
 
                     # ステップ2: MerchantがCart Mandateを検証して署名
-                    st.write("🏬 **ステップ 2:** MerchantがCart Mandateを検証")
-                    try:
-                        # 検証項目を直接表示
-                        st.caption("🔍 Merchant検証プロセス:")
-                        st.caption(f"• 販売者IDの一致確認: {unsigned_cart.merchant_id} ✓")
-                        st.caption("• 商品在庫の確認 ✓")
-                        st.caption("• 金額整合性の確認 ✓")
-                        st.caption(f"  └ 小計: {unsigned_cart.subtotal}")
-                        st.caption(f"  └ 税金: {unsigned_cart.tax}")
-                        st.caption(f"  └ 配送料: {unsigned_cart.shipping.cost}")
-                        st.caption(f"  └ 合計: {unsigned_cart.total}")
+                        st.write("🏬 **ステップ 2:** MerchantがCart Mandateを検証")
+                        try:
+                            # 検証項目を直接表示
+                            st.caption("🔍 Merchant検証プロセス:")
+                            st.caption(f"• 販売者IDの一致確認: {unsigned_cart.merchant_id} ✓")
+                            st.caption("• 商品在庫の確認 ✓")
+                            st.caption("• 金額整合性の確認 ✓")
+                            st.caption(f"  └ 小計: {unsigned_cart.subtotal}")
+                            st.caption(f"  └ 税金: {unsigned_cart.tax}")
+                            st.caption(f"  └ 配送料: {unsigned_cart.shipping.cost}")
+                            st.caption(f"  └ 合計: {unsigned_cart.total}")
 
-                        signed_cart = st.session_state.merchant.sign_cart_mandate(unsigned_cart)
-                        st.success("✓ Merchant署名の追加完了")
+                            signed_cart = st.session_state.merchant.sign_cart_mandate(unsigned_cart)
+                            st.success("✓ Merchant署名の追加完了")
 
-                        st.caption("🔐 Merchant署名 (ECDSA-SHA256)")
-                        st.caption(f"署名時刻: {signed_cart.merchant_signature.signed_at}")
+                            st.caption("🔐 Merchant署名 (ECDSA-SHA256)")
+                            st.caption(f"署名時刻: {signed_cart.merchant_signature.signed_at}")
 
-                        st.session_state.cart_mandate = signed_cart
-                        status.update(label="Cart Mandate作成完了！", state="complete")
+                            st.session_state.cart_mandate = signed_cart
+                            status.update(label="Cart Mandate作成完了！", state="complete")
 
-                    except Exception as e:
-                        st.error(f"✗ Cart Mandate検証エラー: {str(e)}")
-                        status.update(label="検証失敗", state="error")
-                        st.stop()
+                        except Exception as e:
+                            st.error(f"✗ Cart Mandate検証エラー: {str(e)}")
+                            status.update(label="検証失敗", state="error")
+                            st.stop()
 
     with col2:
         st.subheader("Cart Mandate")
@@ -965,8 +965,23 @@ def step4_payment_creation():
                                 del st.session_state.webauthn_auth_result
                             st.rerun()
 
+                # Device Attestationが既に生成されている場合、完了状態を表示
+                if st.session_state.device_attestation is not None:
+                    # 生成完了の表示を維持
+                    with st.status("✅ Device Attestation生成完了！", state="complete", expanded=True):
+                        st.write("🔐 **ステップ 1:** デバイスがチャレンジを生成")
+                        st.write("🔐 **ステップ 2:** Passkey認証完了")
+                        st.write("🔐 **ステップ 3:** デバイスが暗号学的証明を生成")
+
+                        st.success("✓ Device Attestation生成完了")
+                        attestation = st.session_state.device_attestation
+                        st.caption(f"📋 Device ID: {attestation.device_id}")
+                        st.caption(f"📋 Platform: {attestation.platform}")
+                        st.caption(f"📋 Attestation Type: {attestation.attestation_type.value}")
+                        st.caption(f"📋 Timestamp: {attestation.timestamp}")
+
                 # 認証チェックが要求された場合
-                if st.session_state.get('auth_check_requested', False):
+                elif st.session_state.get('auth_check_requested', False):
                     st.session_state.auth_check_requested = False
 
                     # Device Attestation生成処理を実行
