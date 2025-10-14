@@ -156,16 +156,18 @@ class SecureShoppingAgent:
             model_name="Gemini 2.5 Flash",
             confidence_score=0.95,
             human_oversight=True,
-            autonomous_level='human_in_loop'
+            autonomous_level='semi_autonomous'  # AP2 Bedrock v0.2互換（human_in_loopも許容）
         )
 
         # A2A Extension: 初期Risk Payloadを作成
+        # 注: AP2仕様では、nullフィールドは送信しないことが推奨される
         risk_payload = RiskPayload(
             device_fingerprint=f"device_{uuid.uuid4().hex[:16]}",
             platform="Web",
             session_id=f"session_{uuid.uuid4().hex[:16]}",
             account_age_days=30,  # サンプル値
             previous_transactions=5  # サンプル値
+            # nullフィールドは明示的に設定しない（デフォルトNoneのまま）
         )
 
         intent_mandate = IntentMandate(
@@ -179,7 +181,7 @@ class SecureShoppingAgent:
             created_at=now.isoformat() + 'Z',
             expires_at=expires_at.isoformat() + 'Z',
             # A2A Extension拡張フィールド
-            agent_signal=agent_signal,
+            agent_signal=None,  # v0.2以降はmandate_metadata.agent_signalに移動
             risk_payload=risk_payload
         )
 
@@ -194,12 +196,26 @@ class SecureShoppingAgent:
         mandate_dict = asdict(intent_mandate)
         mandate_hash = compute_mandate_hash(mandate_dict, hash_format='hex')
 
+        # 署名チェーン（audit_trail）を作成
+        audit_trail = [
+            {
+                "action": "user_signature",
+                "signer_id": user_id,
+                "signed_at": intent_mandate.user_signature.signed_at,
+                "signature_algorithm": intent_mandate.user_signature.algorithm,
+                "mandate_type": "IntentMandate"
+            }
+        ]
+
+        # Mandate Metadataにagent_signalとaudit_trailを含める（v0.2推奨）
         intent_mandate.mandate_metadata = MandateMetadata(
             mandate_hash=mandate_hash,
             schema_version='0.1',
             issuer=self.agent_id,
             issued_at=now.isoformat() + 'Z',
-            nonce=uuid.uuid4().hex
+            nonce=uuid.uuid4().hex,
+            agent_signal=agent_signal,  # v0.2以降の推奨位置
+            audit_trail=audit_trail  # 署名チェーンの証跡
         )
 
         print(f"  ✓ Intent Mandate作成完了: {intent_mandate.id}")
@@ -417,7 +433,7 @@ class SecureShoppingAgent:
             intent_mandate_id=intent_mandate.id,
             payment_method=payment_method,
             amount=cart_mandate.total,
-            transaction_type='human_present',
+            transaction_type='user_present',  # AP2仕様v0.2推奨値（human_presentは非推奨）
             agent_involved=True,
             payer_id=user_id,
             payee_id=cart_mandate.merchant_id,
@@ -462,13 +478,42 @@ class SecureShoppingAgent:
         payment_mandate_dict = asdict(payment_mandate)
         payment_mandate_hash = compute_mandate_hash(payment_mandate_dict, hash_format='hex')
 
+        # 署名チェーン（audit_trail）を作成
+        # Payment Mandateには複数の署名が含まれる：
+        # 1. IntentMandateからのUser署名
+        # 2. CartMandateからのMerchant署名
+        # 3. CartMandateへのUser署名（select_and_sign_cart後）
+        # 4. PaymentMandateへのUser署名
+        audit_trail = []
+
+        # Merchant署名の記録（CartMandateから継承）
+        if payment_mandate.merchant_signature:
+            audit_trail.append({
+                "action": "merchant_signature",
+                "signer_id": cart_mandate.merchant_id,
+                "signed_at": payment_mandate.merchant_signature.signed_at,
+                "signature_algorithm": payment_mandate.merchant_signature.algorithm,
+                "mandate_type": "CartMandate",
+                "inherited_from": "CartMandate"
+            })
+
+        # User署名の記録（Payment Mandate）
+        audit_trail.append({
+            "action": "user_signature",
+            "signer_id": user_id,
+            "signed_at": payment_mandate.user_signature.signed_at,
+            "signature_algorithm": payment_mandate.user_signature.algorithm,
+            "mandate_type": "PaymentMandate"
+        })
+
         payment_mandate.mandate_metadata = MandateMetadata(
             mandate_hash=payment_mandate_hash,
             schema_version='0.1',
             issuer=self.agent_id,
             issued_at=now.isoformat() + 'Z',
             previous_mandate_hash=cart_mandate_hash,  # CartMandateから連鎖
-            nonce=uuid.uuid4().hex
+            nonce=uuid.uuid4().hex,
+            audit_trail=audit_trail  # 署名チェーンの証跡
         )
 
         print(f"  ✓ Payment Mandate作成完了: {payment_mandate.id}")

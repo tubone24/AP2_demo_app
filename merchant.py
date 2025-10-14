@@ -118,13 +118,27 @@ class Merchant:
         cart_mandate_hash = compute_mandate_hash(cart_dict_signed, hash_format='hex')
 
         now = datetime.utcnow()
+
+        # 署名チェーン（audit_trail）を作成
+        # Merchant署名を記録
+        audit_trail = [
+            {
+                "action": "merchant_signature",
+                "signer_id": self.merchant_id,
+                "signed_at": signature.signed_at,
+                "signature_algorithm": signature.algorithm,
+                "mandate_type": "CartMandate"
+            }
+        ]
+
         cart_mandate.mandate_metadata = MandateMetadata(
             mandate_hash=cart_mandate_hash,
             schema_version='0.1',
             issuer=self.merchant_id,
             issued_at=now.isoformat() + 'Z',
             previous_mandate_hash=cart_mandate.intent_mandate_hash,  # IntentMandateから連鎖
-            nonce=uuid.uuid4().hex
+            nonce=uuid.uuid4().hex,
+            audit_trail=audit_trail  # 署名チェーンの証跡
         )
 
         print(f"[Merchant] Merchant署名を追加完了")

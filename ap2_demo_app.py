@@ -238,17 +238,34 @@ def initialize_participants(
         st.session_state.user_initialized = True
 
 
-def dataclass_to_dict(obj: Any) -> Any:
-    """dataclassを再帰的に辞書に変換（Enum対応）"""
+def dataclass_to_dict(obj: Any, exclude_none: bool = True) -> Any:
+    """
+    dataclassを再帰的に辞書に変換（Enum対応）
+
+    Args:
+        obj: 変換するオブジェクト
+        exclude_none: Noneフィールドを除外するか（AP2仕様推奨）
+
+    Returns:
+        辞書表現
+    """
     if is_dataclass(obj):
         result = {}
         for field_name, field_value in asdict(obj).items():
-            result[field_name] = dataclass_to_dict(field_value)
+            # Noneフィールドを除外（AP2仕様ではnullより未送信が推奨）
+            if exclude_none and field_value is None:
+                continue
+            result[field_name] = dataclass_to_dict(field_value, exclude_none=exclude_none)
         return result
     elif isinstance(obj, list):
-        return [dataclass_to_dict(item) for item in obj]
+        return [dataclass_to_dict(item, exclude_none=exclude_none) for item in obj]
     elif isinstance(obj, dict):
-        return {key: dataclass_to_dict(value) for key, value in obj.items()}
+        result = {}
+        for key, value in obj.items():
+            if exclude_none and value is None:
+                continue
+            result[key] = dataclass_to_dict(value, exclude_none=exclude_none)
+        return result
     elif hasattr(obj, 'value'):  # Enumの場合
         return obj.value
     else:
@@ -357,7 +374,19 @@ def create_a2a_message(
         sender = f"did:ap2:agent:{sender.lower().replace(' ', '_')}"
 
     if recipient is None:
-        recipient = "did:ap2:agent:recipient"
+        # Mandate typeから適切なrecipientを推測（A2A通信では正確なDIDを指定すべき）
+        if mandate_type == "IntentMandate":
+            # IntentMandateはMerchant Agentへ送信
+            recipient = f"did:ap2:agent:merchant_agent"
+        elif mandate_type == "CartMandate":
+            # CartMandateはShopping Agentまたはユーザーへ返送
+            recipient = f"did:ap2:agent:shopping_agent"
+        elif mandate_type == "PaymentMandate":
+            # PaymentMandateはPayment Processorへ送信
+            payee_id = getattr(mandate, 'payee_id', 'payment_processor')
+            recipient = f"did:ap2:agent:{payee_id}"
+        else:
+            recipient = "did:ap2:agent:unknown"
     else:
         # Agent名をURI形式に変換
         recipient = f"did:ap2:agent:{recipient.lower().replace(' ', '_')}"
@@ -482,7 +511,19 @@ def create_a2a_message_standard(
         sender = f"did:ap2:agent:{sender.lower().replace(' ', '_')}"
 
     if recipient is None:
-        recipient = "did:ap2:agent:recipient"
+        # Mandate typeから適切なrecipientを推測（A2A通信では正確なDIDを指定）
+        if mandate_type == "IntentMandate":
+            # IntentMandateはMerchant Agentへ送信
+            recipient = f"did:ap2:agent:merchant_agent"
+        elif mandate_type == "CartMandate":
+            # CartMandateはShopping Agentまたはユーザーへ返送
+            recipient = f"did:ap2:agent:shopping_agent"
+        elif mandate_type == "PaymentMandate":
+            # PaymentMandateはPayment Processorへ送信
+            payee_id = getattr(mandate, 'payee_id', 'payment_processor')
+            recipient = f"did:ap2:agent:{payee_id}"
+        else:
+            recipient = "did:ap2:agent:unknown"
     else:
         # Agent名をURI形式に変換
         recipient = f"did:ap2:agent:{recipient.lower().replace(' ', '_')}"
@@ -516,11 +557,11 @@ def create_a2a_message_standard(
         kind="data",
         data={
             data_key: mandate,
-            "risk_data": None  # 冗長性削減：Mandate内部にrisk_payloadがあるためnull
+            "risk_data": None
         }
     )
 
-    # A2AMessageStandardを構築
+    # A2AMessageを構築
     a2a_message = A2AMessageStandard(
         header=header,
         dataPart=dataPart
@@ -561,24 +602,18 @@ def create_a2a_message_standard(
     return a2a_message
 
 
-def show_a2a_message(mandate, mandate_type="Mandate", use_datapart_format=True):
+def show_a2a_message(mandate, mandate_type="Mandate"):
     """
     A2Aメッセージペイロード全体を表示
 
     Args:
         mandate: Mandateオブジェクト
         mandate_type: "IntentMandate", "CartMandate", "PaymentMandate"
-        use_datapart_format: DataPart形式を使用するか（デフォルト: True）
     """
     st.subheader("🌐 A2A Protocol Message")
 
-    # A2Aメッセージを構築（DataPart形式 or 旧形式）
-    if use_datapart_format:
-        a2a_message = create_a2a_message_standard(mandate, mandate_type)
-        message_format = "DataPart (A2A Standard)"
-    else:
-        a2a_message = create_a2a_message(mandate, mandate_type)
-        message_format = "Legacy Format"
+    a2a_message = create_a2a_message_standard(mandate, mandate_type)
+    message_format = "DataPart (A2A Message)"
 
     if not a2a_message:
         st.error(f"不明なMandate Type: {mandate_type}")
@@ -588,7 +623,7 @@ def show_a2a_message(mandate, mandate_type="Mandate", use_datapart_format=True):
     st.info(f"""
     **A2A Protocol Message Structure** ({message_format})
 
-    このMandateは実際のAgent-to-Agent通信では以下のA2Aメッセージ構造で送信されます：
+    このMandateは以下のA2Aメッセージ構造で送信されます
     - **Schema**: `{a2a_message.header.schema}`
     - **Message ID**: `{a2a_message.header.message_id}`
     - **Timestamp**: `{a2a_message.header.timestamp}`
@@ -596,21 +631,10 @@ def show_a2a_message(mandate, mandate_type="Mandate", use_datapart_format=True):
     """)
 
     # A2Aメッセージ全体をJSON表示
-    with st.expander("📦 A2A Message Payload (Complete)", expanded=True):
+    with st.expander("📦 A2A Message Payload", expanded=True):
         # dataclassを辞書に変換してJSON表示
         a2a_dict = dataclass_to_dict(a2a_message)
         st.json(a2a_dict)
-
-        # DataPart構造を強調表示
-        if use_datapart_format and hasattr(a2a_message, 'dataPart'):
-            st.caption("✅ **DataPart構造（A2A仕様準拠）:**")
-            st.caption(f"• kind: `{a2a_message.dataPart.kind}`")
-            data_keys = list(a2a_message.dataPart.data.keys())
-            for key in data_keys:
-                if key.startswith("ap2.mandates."):
-                    st.caption(f"• data[\"{key}\"]: Mandateオブジェクト")
-                else:
-                    st.caption(f"• data[\"{key}\"]: {a2a_message.dataPart.data[key]}")
 
         # ダウンロードボタン
         json_str = json.dumps(a2a_dict, indent=2, ensure_ascii=False)
@@ -622,7 +646,7 @@ def show_a2a_message(mandate, mandate_type="Mandate", use_datapart_format=True):
         )
 
     # 重要なフィールドをハイライト
-    st.caption("✅ **A2A Extension実装項目:**")
+    st.caption("✅ **A2A Extension**")
 
     col1, col2 = st.columns(2)
 
@@ -632,8 +656,15 @@ def show_a2a_message(mandate, mandate_type="Mandate", use_datapart_format=True):
             if mandate.mandate_metadata.previous_mandate_hash:
                 st.caption(f"• Previous Hash: `{mandate.mandate_metadata.previous_mandate_hash[:16]}...` (連鎖)")
 
-        if hasattr(mandate, 'agent_signal') and mandate.agent_signal:
-            st.caption(f"• Agent Signal: {mandate.agent_signal.agent_name} ({mandate.agent_signal.autonomous_level})")
+        # agent_signalはv0.2以降mandate_metadata内に配置
+        agent_sig = None
+        if hasattr(mandate, 'mandate_metadata') and mandate.mandate_metadata and mandate.mandate_metadata.agent_signal:
+            agent_sig = mandate.mandate_metadata.agent_signal
+        elif hasattr(mandate, 'agent_signal') and mandate.agent_signal:
+            agent_sig = mandate.agent_signal
+
+        if agent_sig:
+            st.caption(f"• Agent Signal: {agent_sig.agent_name} ({agent_sig.autonomous_level})")
 
     with col2:
         if hasattr(mandate, 'risk_payload') and mandate.risk_payload:
@@ -691,57 +722,8 @@ def show_a2a_communication(
         st.error(f"不明なMandate Type: {mandate_type}")
         return
 
-    # コンパクトな表示（expanderなし）
     st.caption(f"📦 **Schema:** `{a2a_message.header.schema}`")
     st.caption(f"📨 **Message ID:** `{a2a_message.header.message_id}`")
-
-    # HTTP通信イメージ
-    st.caption("💡 **HTTP通信での実装イメージ:**")
-
-    # DataPart形式のペイロード構造を生成
-    if use_datapart_format:
-        data_key = f"ap2.mandates.{mandate_type}"
-        payload_structure = f"""  "dataPart": {{
-    "kind": "data",
-    "data": {{
-      "{data_key}": {{ ... }},
-      "risk_data": null
-    }}
-  }}"""
-    else:
-        payload_structure = f"""  "{mandate_type.lower().replace('mandate', '_mandate')}": {{ ... }},
-  "risk_data": {{ ... }}"""
-
-    if direction == "request":
-        st.code(f"""POST https://{receiver.lower().replace(' ', '-')}.example.com/api/v1/mandates
-Content-Type: application/json
-
-{{
-  "header": {{
-    "message_id": "{a2a_message.header.message_id}",
-    "schema": "{a2a_message.header.schema}",
-    "version": "{a2a_message.header.version}",
-    "timestamp": "{a2a_message.header.timestamp}",
-    "sender": "{a2a_message.header.sender}",
-    "recipient": "{a2a_message.header.recipient}"
-  }},
-{payload_structure}
-}}""", language="http")
-    else:
-        st.code(f"""HTTP/1.1 200 OK
-Content-Type: application/json
-
-{{
-  "header": {{
-    "message_id": "{a2a_message.header.message_id}",
-    "schema": "{a2a_message.header.schema}",
-    "version": "{a2a_message.header.version}",
-    "timestamp": "{a2a_message.header.timestamp}",
-    "sender": "{a2a_message.header.sender}",
-    "recipient": "{a2a_message.header.recipient}"
-  }},
-{payload_structure}
-}}""", language="http")
 
 
 def step1_intent_creation():

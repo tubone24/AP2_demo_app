@@ -182,6 +182,7 @@ class MandateMetadata:
     Mandate Metadata - Mandateのメタデータ
 
     Mandateの再利用・検証・監査に使用される情報。
+    AP2仕様v0.2以降では、agent_signalをここに配置することが推奨される。
     """
     mandate_hash: str  # Mandateのcanonical JSONのSHA-256ハッシュ
     schema_version: str  # スキーマバージョン
@@ -189,7 +190,8 @@ class MandateMetadata:
     issued_at: str  # 発行日時（ISO 8601）
     previous_mandate_hash: Optional[str] = None  # 前のMandateのハッシュ（連鎖用）
     nonce: Optional[str] = None  # リプレイ攻撃防止用ノンス
-    audit_trail: Optional[List[Dict[str, Any]]] = None  # 監査証跡
+    audit_trail: Optional[List[Dict[str, Any]]] = None  # 監査証跡（署名チェーンなど）
+    agent_signal: Optional['AgentSignal'] = None  # エージェント関与シグナル（v0.2推奨位置）
 
 
 # ========================================
@@ -222,8 +224,8 @@ class IntentMandate:
     expires_at: str  # ISO 8601
     user_signature: Optional[Signature] = None
     # A2A Extension拡張フィールド
-    agent_signal: Optional[AgentSignal] = None  # エージェント関与シグナル
-    mandate_metadata: Optional[MandateMetadata] = None  # メタデータ
+    agent_signal: Optional[AgentSignal] = None  # 非推奨: v0.2以降はmandate_metadata.agent_signalを使用
+    mandate_metadata: Optional[MandateMetadata] = None  # メタデータ（agent_signalを含む）
     risk_payload: Optional[RiskPayload] = None  # リスク情報
 
 
@@ -371,7 +373,7 @@ class PaymentMandate:
     intent_mandate_id: str
     payment_method: PaymentMethod
     amount: Amount
-    transaction_type: Literal['human_present', 'human_not_present']
+    transaction_type: Literal['user_present', 'human_verified', 'human_present', 'human_not_present']  # human_presentは非推奨
     agent_involved: bool
     payer_id: str
     payee_id: str
