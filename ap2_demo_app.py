@@ -52,6 +52,16 @@ def init_session_state():
     if 'transaction_result' not in st.session_state:
         st.session_state.transaction_result = None
 
+    # シーケンス4-7用の新しいstate
+    if 'credential_providers' not in st.session_state:
+        st.session_state.credential_providers = None  # List[CredentialProvider]
+    if 'selected_credential_provider' not in st.session_state:
+        st.session_state.selected_credential_provider = None  # 選択されたCP
+    if 'shipping_address' not in st.session_state:
+        st.session_state.shipping_address = None  # Address
+    if 'payment_methods' not in st.session_state:
+        st.session_state.payment_methods = None  # List[StoredPaymentMethod]
+
 
 def get_rp_id():
     """
@@ -145,15 +155,38 @@ def initialize_participants(
             passphrase=merchant_passphrase
         )
 
-        # Credential Provider
+        # Credential Providers (複数作成 - シーケンス4対応)
         st.session_state.credential_provider_passphrase = credential_provider_passphrase
-        st.session_state.credential_provider = CredentialProvider(
-            provider_id="cp_demo_001",
-            provider_name="Demo Credential Provider",
+
+        # CP1: PayPal風
+        cp1 = CredentialProvider(
+            provider_id="cp_paypal_demo",
+            provider_name="PayPal Wallet",
             passphrase=credential_provider_passphrase
         )
 
-        # Merchant Payment Processor (Credential Providerを渡す)
+        # CP2: Apple Pay風
+        cp2 = CredentialProvider(
+            provider_id="cp_applepay_demo",
+            provider_name="Apple Pay",
+            passphrase=credential_provider_passphrase
+        )
+
+        # CP3: Google Pay風
+        cp3 = CredentialProvider(
+            provider_id="cp_googlepay_demo",
+            provider_name="Google Pay",
+            passphrase=credential_provider_passphrase
+        )
+
+        # 複数のCredential Providersをリストで管理
+        st.session_state.credential_providers = [cp1, cp2, cp3]
+
+        # デフォルトのCredential Provider（後で選択可能）
+        st.session_state.credential_provider = cp1
+        st.session_state.selected_credential_provider = None  # まだ選択されていない
+
+        # Merchant Payment Processor (デフォルトのCredential Providerを渡す)
         st.session_state.payment_processor_passphrase = payment_processor_passphrase
         st.session_state.payment_processor = MerchantPaymentProcessor(
             processor_id="processor_demo_001",
@@ -162,10 +195,12 @@ def initialize_participants(
             credential_provider=st.session_state.credential_provider
         )
 
-        # デモ用の支払い方法を事前登録
-        demo_card1 = CardPaymentMethod(
+        # デモ用の支払い方法を各Credential Providerに登録
+
+        # CP1 (PayPal): Visa, Mastercardを登録
+        cp1_card1 = CardPaymentMethod(
             type='card',
-            token='',  # トークン化前
+            token='',
             last4='4242',
             brand='visa',
             expiry_month=12,
@@ -173,7 +208,7 @@ def initialize_participants(
             holder_name='デモユーザー'
         )
 
-        demo_card2 = CardPaymentMethod(
+        cp1_card2 = CardPaymentMethod(
             type='card',
             token='',
             last4='5555',
@@ -183,8 +218,74 @@ def initialize_participants(
             holder_name='デモユーザー'
         )
 
+        cp1.register_payment_method(
+            user_id=st.session_state.user_id,
+            payment_method=cp1_card1,
+            is_default=True
+        )
+
+        cp1.register_payment_method(
+            user_id=st.session_state.user_id,
+            payment_method=cp1_card2,
+            is_default=False
+        )
+
+        # CP2 (Apple Pay): Amex, Visaを登録
+        cp2_card1 = CardPaymentMethod(
+            type='card',
+            token='',
+            last4='3782',
+            brand='amex',
+            expiry_month=3,
+            expiry_year=2028,
+            holder_name='デモユーザー'
+        )
+
+        cp2_card2 = CardPaymentMethod(
+            type='card',
+            token='',
+            last4='4111',
+            brand='visa',
+            expiry_month=9,
+            expiry_year=2027,
+            holder_name='デモユーザー'
+        )
+
+        cp2.register_payment_method(
+            user_id=st.session_state.user_id,
+            payment_method=cp2_card1,
+            is_default=True
+        )
+
+        cp2.register_payment_method(
+            user_id=st.session_state.user_id,
+            payment_method=cp2_card2,
+            is_default=False
+        )
+
+        # CP3 (Google Pay): Mastercard, JCBを登録
+        cp3_card1 = CardPaymentMethod(
+            type='card',
+            token='',
+            last4='2223',
+            brand='mastercard',
+            expiry_month=11,
+            expiry_year=2026,
+            holder_name='デモユーザー'
+        )
+
+        cp3_card2 = CardPaymentMethod(
+            type='card',
+            token='',
+            last4='3566',
+            brand='jcb',
+            expiry_month=8,
+            expiry_year=2028,
+            holder_name='デモユーザー'
+        )
+
         # テスト用：オーソリ失敗するカード（残高不足）
-        demo_card_fail = CardPaymentMethod(
+        cp3_card_fail = CardPaymentMethod(
             type='card',
             token='',
             last4='0001',
@@ -194,22 +295,21 @@ def initialize_participants(
             holder_name='デモユーザー（残高不足テスト）'
         )
 
-        # 支払い方法をCredential Providerに登録
-        st.session_state.credential_provider.register_payment_method(
+        cp3.register_payment_method(
             user_id=st.session_state.user_id,
-            payment_method=demo_card1,
+            payment_method=cp3_card1,
             is_default=True
         )
 
-        st.session_state.credential_provider.register_payment_method(
+        cp3.register_payment_method(
             user_id=st.session_state.user_id,
-            payment_method=demo_card2,
+            payment_method=cp3_card2,
             is_default=False
         )
 
-        st.session_state.credential_provider.register_payment_method(
+        cp3.register_payment_method(
             user_id=st.session_state.user_id,
-            payment_method=demo_card_fail,
+            payment_method=cp3_card_fail,
             is_default=False
         )
 
@@ -729,6 +829,7 @@ def show_a2a_communication(
 def step1_intent_creation():
     """ステップ1: Intent Mandateの作成"""
     st.header("📝 ステップ1: 購買意図の表明")
+    st.caption("🔄 **AP2シーケンス: ステップ 1-3**")
 
     # 参加者バナー
     show_participant_banner(
@@ -737,6 +838,11 @@ def step1_intent_creation():
     )
 
     st.markdown("""
+    **AP2プロトコルフロー**
+    - **ステップ 1:** User → Shopping Agent: Shopping Prompts（購買意図の入力）
+    - **ステップ 2:** Shopping Agent → User: IntentMandate confirmation（確認）
+    - **ステップ 3:** User → Shopping Agent: Confirm（承認）
+
     ユーザーが購買意図を表明し、Shopping Agentに購入の権限を委任します。
     Intent Mandateにはユーザーの署名が含まれます。
     """)
@@ -809,9 +915,266 @@ def step1_intent_creation():
             st.info("左側のフォームからIntent Mandateを作成してください")
 
 
-def step2_product_search():
-    """ステップ2: 商品検索"""
-    st.header("🔍 ステップ2: 商品検索")
+def step2_credential_provider_selection():
+    """ステップ2: Credential Provider選択"""
+    st.header("🔑 Credential Provider選択")
+    st.caption("🔄 **AP2シーケンス: ステップ 4**")
+
+    # 参加者バナー
+    show_participant_banner(
+        ["user", "shopping_agent"],
+        "ユーザーが使用するCredential Providerを選択"
+    )
+
+    st.markdown("""
+    **AP2プロトコルフロー**
+    - **ステップ 4:** User → Shopping Agent: (optional) Credential Provider選択
+
+    ユーザーが使用するCredential Provider（支払い認証情報プロバイダー）を選択します。
+    複数のプロバイダーから選択できます（例: PayPal, Apple Pay, Google Pay）。
+    """)
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.subheader("利用可能なCredential Providers")
+
+        # 利用可能なCredential Providersを表示
+        providers = st.session_state.credential_providers
+
+        if not providers:
+            st.error("Credential Providerが登録されていません")
+            return
+
+        # プロバイダー選択
+        st.write("**以下から選択してください：**")
+
+        # プロバイダーごとにカードを表示
+        for i, provider in enumerate(providers):
+            with st.container():
+                col_icon, col_info = st.columns([1, 4])
+
+                with col_icon:
+                    # プロバイダーのアイコン
+                    if "paypal" in provider.provider_id.lower():
+                        st.write("💳")
+                    elif "apple" in provider.provider_id.lower():
+                        st.write("🍎")
+                    elif "google" in provider.provider_id.lower():
+                        st.write("🔍")
+                    else:
+                        st.write("🔑")
+
+                with col_info:
+                    st.write(f"**{provider.provider_name}**")
+                    st.caption(f"Provider ID: `{provider.provider_id}`")
+
+                    # 登録されている支払い方法の数を表示
+                    methods = provider.get_payment_methods(st.session_state.user_id)
+                    st.caption(f"登録済み支払い方法: {len(methods)}件")
+
+                    # 選択ボタン
+                    if st.button(f"{provider.provider_name}を選択", key=f"select_cp_{i}", use_container_width=True):
+                        st.session_state.selected_credential_provider = provider
+                        st.session_state.credential_provider = provider  # デフォルトのCPも更新
+
+                        # Payment Processorに選択されたCPを設定
+                        st.session_state.payment_processor.credential_provider = provider
+
+                        st.success(f"✓ {provider.provider_name}を選択しました")
+                        st.rerun()
+
+                st.divider()
+
+    with col2:
+        st.subheader("選択されたCredential Provider")
+
+        if st.session_state.selected_credential_provider:
+            provider = st.session_state.selected_credential_provider
+
+            st.success(f"✓ **{provider.provider_name}**を選択済み")
+
+            st.write(f"**Provider ID:** `{provider.provider_id}`")
+
+            # 登録されている支払い方法を表示
+            methods = provider.get_payment_methods(st.session_state.user_id)
+
+            st.write(f"**登録済み支払い方法:** {len(methods)}件")
+
+            for method in methods:
+                pm = method.payment_method
+                default_mark = " ⭐ (デフォルト)" if method.is_default else ""
+                st.write(f"- {pm.brand.upper()} ****{pm.last4}{default_mark}")
+
+            st.divider()
+
+            st.info("""
+            **次のステップ:**
+            Credential Providerを選択したら、配送先住所の入力に進みます。
+            """)
+
+            if st.button("次のステップへ →", type="primary", use_container_width=True):
+                st.session_state.step = 3
+                st.rerun()
+        else:
+            st.info("左側からCredential Providerを選択してください")
+
+
+def step3_shipping_address_selection():
+    """ステップ3: Shipping Address選択"""
+    st.header("📦 ステップ3: 配送先住所の入力")
+    st.caption("🔄 **AP2シーケンス: ステップ 5**")
+
+    # 参加者バナー
+    show_participant_banner(
+        ["user", "shopping_agent"],
+        "ユーザーが配送先住所を入力してShopping Agentに通知"
+    )
+
+    st.markdown("""
+    **AP2プロトコルフロー**
+    - **ステップ 5:** User → Shopping Agent: (optional) Shipping Address
+
+    ユーザーが商品の配送先住所を入力します。
+    この情報はCart Mandate作成時に使用されます。
+    """)
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.subheader("配送先情報の入力")
+
+        street = st.text_input("住所", value="123 Main Street", key="shipping_street")
+        city = st.text_input("市区町村", value="San Francisco", key="shipping_city")
+        state = st.text_input("都道府県/州", value="CA", key="shipping_state")
+        postal_code = st.text_input("郵便番号", value="94105", key="shipping_postal")
+        country = st.text_input("国", value="US", key="shipping_country")
+
+        st.divider()
+
+        if st.button("配送先を確定", type="primary", use_container_width=True):
+            # Addressオブジェクトを作成
+            from ap2_types import Address
+
+            shipping_address = Address(
+                street=street,
+                city=city,
+                state=state,
+                postal_code=postal_code,
+                country=country
+            )
+
+            # Session stateに保存
+            st.session_state.shipping_address = shipping_address
+            st.success("✓ 配送先住所を保存しました")
+            st.rerun()
+
+    with col2:
+        st.subheader("確認された配送先")
+
+        if st.session_state.shipping_address:
+            addr = st.session_state.shipping_address
+
+            st.success("✓ 配送先住所が確定しました")
+
+            st.write("**配送先:**")
+            st.write(f"- {addr.street}")
+            st.write(f"- {addr.city}, {addr.state} {addr.postal_code}")
+            st.write(f"- {addr.country}")
+
+            st.divider()
+
+            st.info("""
+            **次のステップ:**
+            配送先を確定したら、Credential Providerから支払い方法を取得します。
+            """)
+
+            if st.button("次のステップへ →", type="primary", use_container_width=True):
+                st.session_state.step = 4
+                st.rerun()
+        else:
+            st.info("左側のフォームから配送先住所を入力してください")
+
+
+def step4_payment_methods_get():
+    """ステップ4: Payment Methods取得"""
+    st.header("💳 ステップ4: 支払い方法の取得")
+    st.caption("🔄 **AP2シーケンス: ステップ 6-7**")
+
+    # 参加者バナー
+    show_participant_banner(
+        ["shopping_agent", "credential_provider"],
+        "Shopping AgentがCredential Providerから利用可能な支払い方法を取得"
+    )
+
+    st.markdown("""
+    **AP2プロトコルフロー**
+    - **ステップ 6:** Shopping Agent → Credential Provider: Get Payment Methods
+    - **ステップ 7:** Credential Provider → Shopping Agent: { payment methods }
+
+    Shopping Agentが選択されたCredential Providerから、
+    ユーザーの利用可能な支払い方法リストを取得します。
+    """)
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.subheader("支払い方法の取得")
+
+        if not st.session_state.selected_credential_provider:
+            st.error("Credential Providerが選択されていません")
+            st.stop()
+
+        provider = st.session_state.selected_credential_provider
+
+        st.write(f"**Credential Provider:** {provider.provider_name}")
+        st.write(f"**Provider ID:** `{provider.provider_id}`")
+
+        st.divider()
+
+        if st.button("支払い方法を取得", type="primary", use_container_width=True):
+            with st.spinner("支払い方法を取得中..."):
+                # Credential Providerから支払い方法を取得
+                methods = provider.get_payment_methods(st.session_state.user_id)
+
+                st.session_state.payment_methods = methods
+                st.success(f"✓ {len(methods)}件の支払い方法を取得しました")
+                st.rerun()
+
+    with col2:
+        st.subheader("取得された支払い方法")
+
+        if st.session_state.payment_methods:
+            methods = st.session_state.payment_methods
+
+            st.success(f"✓ {len(methods)}件の支払い方法")
+
+            st.write("**利用可能な支払い方法:**")
+
+            for method in methods:
+                pm = method.payment_method
+                default_mark = " ⭐ (デフォルト)" if method.is_default else ""
+                st.write(f"- **{pm.brand.upper()}** ****{pm.last4}{default_mark}")
+                st.caption(f"  有効期限: {pm.expiry_month:02d}/{pm.expiry_year}")
+
+            st.divider()
+
+            st.info("""
+            **次のステップ:**
+            支払い方法を取得したら、商品検索に進みます。
+            """)
+
+            if st.button("次のステップへ →", type="primary", use_container_width=True):
+                st.session_state.step = 5
+                st.rerun()
+        else:
+            st.info("左側のボタンから支払い方法を取得してください")
+
+
+def step5_product_search():
+    """ステップ5: 商品検索"""
+    st.header("🔍 ステップ5: 商品検索")
+    st.caption("🔄 **AP2シーケンス: ステップ 8**")
 
     # 参加者バナー
     show_participant_banner(
@@ -820,6 +1183,9 @@ def step2_product_search():
     )
 
     st.markdown("""
+    **AP2プロトコルフロー**
+    - **ステップ 8:** Shopping Agent → Merchant Agent: IntentMandate送信
+
     Merchant AgentがIntent Mandateの内容に基づいて商品を検索します。
     Intent Mandateの署名を検証してから検索を実行します。
     """)
@@ -894,15 +1260,16 @@ def step2_product_search():
                     st.divider()
 
             if st.button("次のステップへ →", use_container_width=True):
-                st.session_state.step = 3
+                st.session_state.step = 6
                 st.rerun()
         else:
             st.info("左側のボタンから商品を検索してください")
 
 
-def step3_cart_creation():
-    """ステップ3: Cart Mandateの作成"""
-    st.header("🛒 ステップ3: カートの作成と承認")
+def step6_cart_creation():
+    """ステップ6: Cart Mandateの作成"""
+    st.header("🛒 ステップ6: カートの作成と承認")
+    st.caption("🔄 **AP2シーケンス: ステップ 9-12, 15**")
 
     # 参加者バナー
     if st.session_state.cart_mandate and st.session_state.cart_mandate.user_signature:
@@ -919,7 +1286,13 @@ def step3_cart_creation():
         )
 
     st.markdown("""
-    **AP2プロトコル準拠フロー:**
+    **AP2プロトコルフロー**
+    - **ステップ 9:** Merchant Agent内部: Create CartMandate（カート作成）
+    - **ステップ 10-11:** Merchant Agent → Merchant: 署名リクエスト & Merchant → Merchant Agent: 署名済みCartMandate返却
+    - **ステップ 12:** Merchant Agent → Shopping Agent: 署名済みCartMandate送信
+    - **ステップ 15a-b:** Shopping Agent → User: CartMandate表示 & 支払いオプション提示
+
+    **実装フロー:**
     1. **Merchant Agent** がCart Mandateを作成（署名なし）
     2. **Merchant** がCart Mandateを検証してMerchant署名を追加
     3. **User** がカート内容を確認してUser署名を追加
@@ -967,13 +1340,15 @@ def step3_cart_creation():
             if not selected_products:
                 st.warning("商品を1つ以上選択してください")
 
+            # 配送先情報の確認（session_stateから取得）
             st.subheader("配送先情報")
 
-            street = st.text_input("住所", value="123 Main Street")
-            city = st.text_input("市区町村", value="San Francisco")
-            state = st.text_input("都道府県/州", value="CA")
-            postal_code = st.text_input("郵便番号", value="94105")
-            country = st.text_input("国", value="US")
+            if st.session_state.shipping_address:
+                addr = st.session_state.shipping_address
+                st.write(f"**配送先:** {addr.street}, {addr.city}, {addr.state} {addr.postal_code}, {addr.country}")
+            else:
+                st.error("配送先が設定されていません。ステップ3で配送先を入力してください。")
+                return
 
             if st.button("Cart Mandateを作成", type="primary", use_container_width=True):
                 # 商品が選択されているか確認
@@ -982,13 +1357,8 @@ def step3_cart_creation():
                 else:
                     # Cart Mandate作成プロセスの詳細表示
                     with st.status("Cart Mandateを作成中...", expanded=True) as status:
-                        shipping_address = Address(
-                            street=street,
-                            city=city,
-                            state=state,
-                            postal_code=postal_code,
-                            country=country
-                        )
+                        # session_stateから配送先を取得
+                        shipping_address = st.session_state.shipping_address
 
                         # ステップ1: Merchant AgentがCart Mandateを作成（署名なし）
                         st.write("🏪 **ステップ 1:** Merchant AgentがCart Mandateを作成")
@@ -1079,7 +1449,7 @@ def step3_cart_creation():
                 show_json_data(cart, "Cart Mandate JSON (署名済み)")
 
                 if st.button("次のステップへ →", use_container_width=True):
-                    st.session_state.step = 4
+                    st.session_state.step = 7
                     st.rerun()
             else:
                 st.divider()
@@ -1103,48 +1473,57 @@ def step3_cart_creation():
             st.info("左側のフォームからCart Mandateを作成してください")
 
 
-def step4_payment_creation():
-    """ステップ4: Payment Mandateの作成（Device Attestation統合版）"""
-    st.header("💳 ステップ4: 支払い方法の選択とデバイス確認")
+def step7_payment_creation():
+    """ステップ7: Payment Mandateの作成（Device Attestation統合版）"""
+    st.header("💳 ステップ7: 支払い方法の選択とデバイス確認")
+    st.caption("🔄 **AP2シーケンス: ステップ 15b, 16-23**")
 
     # 参加者バナーは状態に応じて変える
     if not st.session_state.selected_payment_method:
-        # 状態4a: 支払い方法選択
+        # 状態7a: 支払い方法選択
         show_participant_banner(
-            ["user", "credential_provider"],
-            "UserがCredential Providerから支払い方法を選択してトークン化"
+            ["user", "shopping_agent", "credential_provider"],
+            "Shopping AgentがUserに支払いオプションを提示し、Userが選択してトークン化"
         )
     elif not st.session_state.device_attestation:
-        # 状態4b: デバイス確認
+        # 状態7b: デバイス確認
         show_participant_banner(
             ["user"],
             "ユーザーが信頼されたデバイスで取引を承認（AP2ステップ20-22）"
         )
     else:
-        # 状態4c: Payment Mandate作成
+        # 状態7c: Payment Mandate作成
         show_participant_banner(
             ["shopping_agent"],
-            "Shopping AgentがDevice AttestationとともにPayment Mandateを作成（AP2ステップ23）"
+            "Shopping AgentがDevice AttestationとともにPayment Mandateを作成（AP2ステップ19, 23）"
         )
 
     st.markdown("""
-    **AP2プロトコル完全準拠フロー（ステップ19-23）:**
-    1. **ステップ19**: Credential Providerから支払い方法を選択してトークン化
-    2. **ステップ20-22**: ユーザーを信頼されたデバイスにリダイレクトし、取引を承認してDevice Attestationを生成
-    3. **ステップ23**: Device AttestationとともにPayment Mandateを作成
+    **AP2プロトコルフロー**
+    - **ステップ 15b:** Shopping Agent → User: Payment Options Prompt（支払いオプション提示）
+    - **ステップ 16:** User → Shopping Agent: payment method selection（支払い方法選択）
+    - **ステップ 17-18:** Shopping Agent → Credential Provider: Get payment method token（トークン取得）
+    - **ステップ 19:** Shopping Agent内部: Create PaymentMandate（Payment Mandate作成）
+    - **ステップ 20:** Shopping Agent → User: Redirect to trusted device surface（信頼されたデバイスへリダイレクト）
+    - **ステップ 21:** User内部: User confirms purchase & device creates attestation（デバイス証明生成）
+    - **ステップ 22:** User → Shopping Agent: {attestation}（証明を送信）
+    - **ステップ 23:** Shopping Agent → Credential Provider: PaymentMandate + attestation
     """)
 
-    # --- 状態4a: 支払い方法の選択 ---
+    # --- 状態7a: 支払い方法の選択 ---
     if not st.session_state.selected_payment_method:
         col1, col2 = st.columns(2)
 
         with col1:
-            st.subheader("📋 ステップ4a: 支払い方法の選択")
+            st.subheader("📋 ステップ7a: 支払い方法の選択")
+            st.caption("🔄 **シーケンス 15b, 16-18**")
 
-            # Credential Providerから支払い方法を取得
-            available_methods = st.session_state.credential_provider.get_payment_methods(
-                st.session_state.user_id
-            )
+            # ステップ4で取得済みの支払い方法を使用
+            if not st.session_state.payment_methods:
+                st.error("支払い方法が取得されていません。ステップ4で支払い方法を取得してください。")
+                return
+
+            available_methods = st.session_state.payment_methods
 
             if not available_methods:
                 st.warning("登録済みの支払い方法がありません")
@@ -1201,12 +1580,13 @@ def step4_payment_creation():
             - これにより、取引がリアルタイムで行われていること、デバイスが改ざんされていないことを保証
             """)
 
-    # --- 状態4b: デバイス確認 ---
+    # --- 状態7b: デバイス確認 ---
     elif not st.session_state.device_attestation:
         col1, col2 = st.columns(2)
 
         with col1:
-            st.subheader("📱 ステップ4b: デバイス確認")
+            st.subheader("📱 ステップ7b: デバイス確認")
+            st.caption("🔄 **シーケンス 20-22**")
 
             st.info("""
             **AP2プロトコル ステップ20-22: Device Attestation**
@@ -1523,12 +1903,13 @@ def step4_payment_creation():
             - 不正なデバイスからの取引
             """)
 
-    # --- 状態4c: Payment Mandate作成 ---
+    # --- 状態7c: Payment Mandate作成 ---
     else:
         col1, col2 = st.columns(2)
 
         with col1:
-            st.subheader("✅ デバイス確認完了")
+            st.subheader("✅ ステップ7c: デバイス確認完了")
+            st.caption("🔄 **シーケンス 19, 23**")
 
             st.success("✓ Device Attestation生成完了")
 
@@ -1620,15 +2001,16 @@ def step4_payment_creation():
                 show_json_data(payment, "Payment Mandate JSON")
 
                 if st.button("次のステップへ →", use_container_width=True):
-                    st.session_state.step = 5
+                    st.session_state.step = 8
                     st.rerun()
             else:
                 st.info("左側のボタンからPayment Mandateを作成してください")
 
 
-def step5_payment_processing():
-    """ステップ5: 支払い処理"""
-    st.header("✅ ステップ5: 支払い処理")
+def step8_payment_processing():
+    """ステップ8: 支払い処理"""
+    st.header("✅ ステップ8: 支払い処理")
+    st.caption("🔄 **AP2シーケンス: ステップ 24-31**")
 
     # 参加者バナー
     show_participant_banner(
@@ -1637,7 +2019,17 @@ def step5_payment_processing():
     )
 
     st.markdown("""
-    **AP2仕様準拠の支払いフロー（ステップ25-27）:**
+    **AP2プロトコルフロー**
+    - **ステップ 24:** Shopping Agent → Merchant Agent: purchase {PaymentMandate + attestation}
+    - **ステップ 25:** Merchant Agent → Merchant Payment Processor: initiate payment {PaymentMandate + attestation}
+    - **ステップ 26:** Merchant Payment Processor → Credential Provider: request payment credentials {PaymentMandate}
+    - **ステップ 27:** Credential Provider → Merchant Payment Processor: {payment credentials}
+    - **ステップ 28:** Merchant Payment Processor内部: Process payment（決済処理）
+    - **ステップ 29:** Merchant Payment Processor → Credential Provider: Payment receipt
+    - **ステップ 30:** Merchant Payment Processor → Merchant Agent: Payment receipt
+    - **ステップ 31:** Merchant Agent → Shopping Agent: Payment receipt
+
+    **実装フロー:**
     1. **Shopping Agent** がすべての Mandate 署名を検証
     2. **Payment Processor** が **Credential Provider** に payment credentials をリクエスト
     3. **Credential Provider** がリスク評価を実施し、高リスク取引の場合は OTP による追加認証を要求
@@ -1700,7 +2092,7 @@ def step5_payment_processing():
 
                     st.session_state.transaction_result = transaction_result
                     status.update(label="支払い処理完了！", state="complete")
-                    st.session_state.step = 6
+                    st.session_state.step = 9
                     st.rerun()
 
                 except Exception as e:
@@ -1718,14 +2110,14 @@ def step5_payment_processing():
         st.write("✓ Payment Mandate - User署名")
 
 
-def step6_completion():
-    """ステップ6: 完了"""
+def step9_completion():
+    """ステップ9: 完了"""
     result = st.session_state.transaction_result
 
     # トランザクションが失敗した場合の処理
     from ap2_types import TransactionStatus
     if result.status == TransactionStatus.FAILED:
-        st.header("❌ ステップ6: トランザクション失敗")
+        st.header("❌ ステップ9: トランザクション失敗")
 
         # 参加者バナー
         show_participant_banner(
@@ -1795,13 +2187,19 @@ def step6_completion():
         return
 
     # 成功した場合の処理
-    st.header("🎉 ステップ6: トランザクション完了")
+    st.header("🎉 ステップ9: トランザクション完了")
+    st.caption("🔄 **AP2シーケンス: ステップ 32**")
 
     # 参加者バナー
     show_participant_banner(
         ["payment_processor", "user"],
         "Payment Processorが取引を完了し、Userに領収書を発行"
     )
+
+    st.markdown("""
+    **AP2プロトコルフロー**
+    - **ステップ 32:** Shopping Agent → User: Purchase completed + receipt（購入完了と領収書）
+    """)
 
     st.success("✓✓✓ 支払いが正常に完了しました！ ✓✓✓")
 
@@ -1903,21 +2301,27 @@ def main():
         st.header("📋 プロセス")
 
         steps = [
-            "参加者の初期化",
-            "Intent Mandate作成",
-            "商品検索",
-            "Cart Mandate作成",
-            "Payment Mandate作成",
-            "支払い処理",
-            "完了"
+            ("参加者の初期化", "準備"),
+            ("Intent Mandate作成", "1-3"),
+            ("Credential Provider選択", "4"),
+            ("配送先住所入力", "5"),
+            ("支払い方法取得", "6-7"),
+            ("商品検索", "8"),
+            ("Cart Mandate作成", "9-12, 15"),
+            ("Payment Mandate作成", "16-23"),
+            ("支払い処理", "24-31"),
+            ("完了", "32")
         ]
 
-        for i, step_name in enumerate(steps):
+        for i, (step_name, sequence) in enumerate(steps):
             if i < st.session_state.step:
+                st.caption(f"シーケンス: {sequence}")
                 st.success(f"✓ {step_name}")
             elif i == st.session_state.step:
+                st.caption(f"シーケンス: {sequence}")
                 st.info(f"→ {step_name}")
             else:
+                st.caption(f"シーケンス: {sequence}")
                 st.text(f"  {step_name}")
 
         st.divider()
@@ -2177,19 +2581,28 @@ def main():
         step1_intent_creation()
 
     elif st.session_state.step == 2:
-        step2_product_search()
+        step2_credential_provider_selection()
 
     elif st.session_state.step == 3:
-        step3_cart_creation()
+        step3_shipping_address_selection()
 
     elif st.session_state.step == 4:
-        step4_payment_creation()
+        step4_payment_methods_get()
 
     elif st.session_state.step == 5:
-        step5_payment_processing()
+        step5_product_search()
 
     elif st.session_state.step == 6:
-        step6_completion()
+        step6_cart_creation()
+
+    elif st.session_state.step == 7:
+        step7_payment_creation()
+
+    elif st.session_state.step == 8:
+        step8_payment_processing()
+
+    elif st.session_state.step == 9:
+        step9_completion()
 
 
 if __name__ == "__main__":

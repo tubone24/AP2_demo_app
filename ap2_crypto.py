@@ -475,10 +475,12 @@ class SignatureManager:
             }
             return self.sign_data(signing_data, key_id)
 
-        # 他のMandateタイプの場合は、署名対象からsignatureフィールドを除外
+        # 他のMandateタイプの場合は、署名対象からsignatureフィールドとmandate_metadataを除外
+        # mandate_metadataは署名後に追加されるため、署名計算に含めない
         mandate_copy = mandate.copy()
         mandate_copy.pop('user_signature', None)
         mandate_copy.pop('merchant_signature', None)
+        mandate_copy.pop('mandate_metadata', None)  # メタデータを除外（署名後に追加されるため）
 
         return self.sign_data(mandate_copy, key_id)
     
@@ -506,10 +508,12 @@ class SignatureManager:
             }
             return self.verify_signature(verification_data, signature)
 
-        # 他のMandateタイプの場合は、署名対象からsignatureフィールドを除外
+        # 他のMandateタイプの場合は、署名対象からsignatureフィールドとmandate_metadataを除外
+        # mandate_metadataは署名後に追加されるため、検証時も除外する
         mandate_copy = mandate.copy()
         mandate_copy.pop('user_signature', None)
         mandate_copy.pop('merchant_signature', None)
+        mandate_copy.pop('mandate_metadata', None)  # メタデータを除外（署名時と同じ状態にする）
 
         return self.verify_signature(mandate_copy, signature)
 
