@@ -828,7 +828,7 @@ def show_a2a_communication(
 
 def step1_intent_creation():
     """ステップ1: Intent Mandateの作成"""
-    st.header("📝 ステップ1: 購買意図の表明")
+    st.header("📝購買意図の表明")
     st.caption("🔄 **AP2シーケンス: ステップ 1-3**")
 
     # 参加者バナー
@@ -947,7 +947,7 @@ def step2_credential_provider_selection():
             return
 
         # プロバイダー選択
-        st.write("**以下から選択してください：**")
+        st.write("**以下から選択してください**")
 
         # プロバイダーごとにカードを表示
         for i, provider in enumerate(providers):
@@ -1022,7 +1022,7 @@ def step2_credential_provider_selection():
 
 def step3_shipping_address_selection():
     """ステップ3: Shipping Address選択"""
-    st.header("📦 ステップ3: 配送先住所の入力")
+    st.header("📦配送先住所の入力")
     st.caption("🔄 **AP2シーケンス: ステップ 5**")
 
     # 参加者バナー
@@ -1098,7 +1098,7 @@ def step3_shipping_address_selection():
 
 def step4_payment_methods_get():
     """ステップ4: Payment Methods取得"""
-    st.header("💳 ステップ4: 支払い方法の取得")
+    st.header("💳支払い方法の取得")
     st.caption("🔄 **AP2シーケンス: ステップ 6-7**")
 
     # 参加者バナー
@@ -1173,7 +1173,7 @@ def step4_payment_methods_get():
 
 def step5_product_search():
     """ステップ5: 商品検索"""
-    st.header("🔍 ステップ5: 商品検索")
+    st.header("🔍商品検索")
     st.caption("🔄 **AP2シーケンス: ステップ 8**")
 
     # 参加者バナー
@@ -1268,7 +1268,7 @@ def step5_product_search():
 
 def step6_cart_creation():
     """ステップ6: Cart Mandateの作成"""
-    st.header("🛒 ステップ6: カートの作成と承認")
+    st.header("🛒カートの作成と承認")
     st.caption("🔄 **AP2シーケンス: ステップ 9-12, 15**")
 
     # 参加者バナー
@@ -1475,7 +1475,7 @@ def step6_cart_creation():
 
 def step7_payment_creation():
     """ステップ7: Payment Mandateの作成（Device Attestation統合版）"""
-    st.header("💳 ステップ7: 支払い方法の選択とデバイス確認")
+    st.header("💳支払い方法の選択とデバイス確認")
     st.caption("🔄 **AP2シーケンス: ステップ 15b, 16-23**")
 
     # 参加者バナーは状態に応じて変える
@@ -1515,7 +1515,7 @@ def step7_payment_creation():
         col1, col2 = st.columns(2)
 
         with col1:
-            st.subheader("📋 ステップ7a: 支払い方法の選択")
+            st.subheader("📋支払い方法の選択")
             st.caption("🔄 **シーケンス 15b, 16-18**")
 
             # ステップ4で取得済みの支払い方法を使用
@@ -1572,9 +1572,9 @@ def step7_payment_creation():
         with col2:
             st.subheader("📌 次のステップ")
             st.info("""
-            支払い方法を選択すると、次のステップに進みます：
+            支払い方法を選択すると、次のステップに進みます
 
-            **ステップ4b: デバイス確認**
+            **デバイス確認**
             - 信頼されたデバイス（スマートフォン、セキュリティキーなど）で取引を承認
             - デバイスが暗号学的証明（Device Attestation）を生成
             - これにより、取引がリアルタイムで行われていること、デバイスが改ざんされていないことを保証
@@ -1585,14 +1585,14 @@ def step7_payment_creation():
         col1, col2 = st.columns(2)
 
         with col1:
-            st.subheader("📱 ステップ7b: デバイス確認")
+            st.subheader("📱デバイス確認")
             st.caption("🔄 **シーケンス 20-22**")
 
             st.info("""
             **AP2プロトコル ステップ20-22: Device Attestation**
 
             このステップでは、信頼されたデバイスで取引を承認します。
-            実際のシステムでは：
+            実際のシステムでは
             - Face ID / Touch ID（生体認証）
             - デバイスバインディング
             - セキュアエンクレーブによる証明
@@ -1602,7 +1602,7 @@ def step7_payment_creation():
             st.divider()
 
             # 取引情報の表示
-            st.write("**承認する取引情報:**")
+            st.write("**承認する取引情報**")
             st.write(f"- **店舗:** {st.session_state.cart_mandate.merchant_name}")
             st.write(f"- **金額:** {st.session_state.cart_mandate.total}")
             st.write(f"- **支払い方法:** {st.session_state.selected_payment_method.brand.upper()} ****{st.session_state.selected_payment_method.last4}")
@@ -1701,7 +1701,7 @@ def step7_payment_creation():
                     # 認証モード
                     st.write("### 🔐 Passkey認証中...")
 
-                    # セキュリティ: 古い認証結果をクリア（リプレイ攻撃対策）
+                    # セキュリティ: 古い認証結果をクリア
                     from webauthn_component import clear_webauthn_auth_result
                     st.info("🔒 **セキュリティチェック:** 古い認証結果をクリアしています...")
                     clear_webauthn_auth_result()
@@ -1808,18 +1808,8 @@ def step7_payment_creation():
 
                     # Device Attestation生成処理を実行
                     with st.status("Device Attestationを生成中...", expanded=True) as status:
-                        import time
                         from ap2_crypto import DeviceAttestationManager
                         from ap2_types import AttestationType, PaymentMandate
-
-                        st.write("🔐 **ステップ 1:** デバイスがチャレンジを生成")
-                        time.sleep(0.5)
-
-                        st.write("🔐 **ステップ 2:** Passkey認証完了")
-                        time.sleep(0.5)
-
-                        st.write("🔐 **ステップ 3:** デバイスが暗号学的証明を生成")
-                        time.sleep(0.5)
 
                         # Device Attestation Managerを初期化
                         attestation_manager = DeviceAttestationManager(st.session_state.user_key_manager)
@@ -1868,31 +1858,11 @@ def step7_payment_creation():
                         st.session_state.device_attestation = device_attestation
                         st.session_state.payment_mandate_id = payment_id  # Payment IDを保存
                         status.update(label="デバイス認証完了！", state="complete")
-                        time.sleep(0.5)
                         st.rerun()
 
         with col2:
-            st.subheader("🔒 Device Attestationとは")
 
-            st.markdown("""
-            **Device Attestation**は、AP2プロトコルの重要なセキュリティ機能です。
-
-            **目的:**
-            - ユーザーが信頼されたデバイスで取引を承認したことを証明
-            - デバイスが改ざんされていないことを保証
-            - 取引がリアルタイムで行われていることを保証（リプレイ攻撃対策）
-
-            **技術的な仕組み:**
-            1. デバイスがランダムなチャレンジ値を生成
-            2. ユーザーが生体認証などで承認
-            3. デバイスの秘密鍵で取引情報とチャレンジに署名
-            4. 署名、チャレンジ、タイムスタンプを含むAttestationを生成
-
-            **検証:**
-            - Credential ProviderがAttestationの署名を検証
-            - タイムスタンプの鮮度をチェック（5分以内）
-            - デバイスの公開鍵で署名が正しいことを確認
-            """)
+            st.subheader("⌛️デバイス確認待ち")
 
             st.info("""
             💡 **セキュリティのポイント:**
@@ -1908,7 +1878,7 @@ def step7_payment_creation():
         col1, col2 = st.columns(2)
 
         with col1:
-            st.subheader("✅ ステップ7c: デバイス確認完了")
+            st.subheader("✅デバイス確認完了")
             st.caption("🔄 **シーケンス 19, 23**")
 
             st.success("✓ Device Attestation生成完了")
@@ -2009,7 +1979,7 @@ def step7_payment_creation():
 
 def step8_payment_processing():
     """ステップ8: 支払い処理"""
-    st.header("✅ ステップ8: 支払い処理")
+    st.header("✅支払い処理")
     st.caption("🔄 **AP2シーケンス: ステップ 24-31**")
 
     # 参加者バナー
@@ -2187,7 +2157,7 @@ def step9_completion():
         return
 
     # 成功した場合の処理
-    st.header("🎉 ステップ9: トランザクション完了")
+    st.header("🎉トランザクション完了")
     st.caption("🔄 **AP2シーケンス: ステップ 32**")
 
     # 参加者バナー
