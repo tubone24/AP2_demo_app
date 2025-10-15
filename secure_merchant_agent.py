@@ -4,7 +4,7 @@ AP2 Protocol - Merchant Agent（暗号署名機能統合版）
 """
 
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Dict, Any
 from dataclasses import asdict
 from decimal import Decimal, ROUND_HALF_UP
@@ -193,7 +193,9 @@ class SecureMerchantAgent:
         Raises:
             MandateError: 期限切れの場合
         """
-        expires_at = datetime.fromisoformat(intent_mandate.expires_at.replace('Z', '+00:00'))
+        # 不正な形式（+00:00Z）を修正してからパース
+        expires_at_str = intent_mandate.expires_at.replace('+00:00Z', 'Z').replace('Z', '+00:00')
+        expires_at = datetime.fromisoformat(expires_at_str)
         now = datetime.now(expires_at.tzinfo)
 
         if now > expires_at:
@@ -360,7 +362,7 @@ class SecureMerchantAgent:
             ),
             method="Standard Shipping",
             cost=self.default_shipping_cost,
-            estimated_delivery=(datetime.utcnow() + timedelta(days=5)).isoformat() + 'Z'
+            estimated_delivery=(datetime.now(timezone.utc) + timedelta(days=5)).isoformat().replace('+00:00', 'Z')
         )
 
         # 合計金額（Decimalで精度を保証）
@@ -369,7 +371,7 @@ class SecureMerchantAgent:
         total = Amount.from_decimal(total_value_decimal, "USD")
 
         # Cart Mandateを作成（署名なし）
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         expires_at = now + timedelta(hours=1)
 
         # A2A Extension: IntentMandateのハッシュを計算
@@ -404,8 +406,8 @@ class SecureMerchantAgent:
             total=total,
             merchant_id=self.merchant_id,
             merchant_name=self.merchant_name,
-            created_at=now.isoformat() + 'Z',
-            expires_at=expires_at.isoformat() + 'Z',
+            created_at=now.isoformat().replace('+00:00', 'Z'),
+            expires_at=expires_at.isoformat().replace('+00:00', 'Z'),
             # A2A Extension拡張フィールド
             intent_mandate_hash=intent_mandate_hash,
             risk_payload=cart_risk_payload
@@ -452,9 +454,10 @@ class SecureMerchantAgent:
             bool: 検証結果
         """
         print(f"\n[{self.merchant_name}] Cart Mandateを検証中: {cart_mandate.id}")
-        
+
         # 1. 有効期限チェック
-        expires_at = datetime.fromisoformat(cart_mandate.expires_at.replace('Z', '+00:00'))
+        expires_at_str = cart_mandate.expires_at.replace('+00:00Z', 'Z').replace('Z', '+00:00')
+        expires_at = datetime.fromisoformat(expires_at_str)
         now = datetime.now(expires_at.tzinfo)
         
         if now > expires_at:
@@ -547,10 +550,10 @@ async def demo_secure_merchant():
             max_amount=Amount(value="100.00", currency="USD"),
             categories=["running"],
             brands=["Nike", "Adidas"],
-            valid_until=(datetime.utcnow() + timedelta(hours=24)).isoformat() + 'Z'
+            valid_until=(datetime.now(timezone.utc) + timedelta(hours=24)).isoformat().replace('+00:00', 'Z')
         ),
-        created_at=datetime.utcnow().isoformat() + 'Z',
-        expires_at=(datetime.utcnow() + timedelta(hours=24)).isoformat() + 'Z'
+        created_at=datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
+        expires_at=(datetime.now(timezone.utc) + timedelta(hours=24)).isoformat().replace('+00:00', 'Z')
     )
     
     # 商品を検索

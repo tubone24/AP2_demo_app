@@ -5,7 +5,7 @@ AP2 Protocol - Credential Provider
 
 import secrets
 from typing import List, Dict, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 from dataclasses import dataclass
 
 from ap2_types import PaymentMethod, CardPaymentMethod
@@ -94,7 +94,7 @@ class CredentialProvider:
             user_id=user_id,
             payment_method=payment_method,
             is_default=is_default,
-            created_at=datetime.utcnow().isoformat()
+            created_at=datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
         )
 
         self.stored_methods[method_id] = stored_method
@@ -144,7 +144,7 @@ class CredentialProvider:
         self.token_mapping[token] = method_id
 
         # 最終使用日時を更新
-        self.stored_methods[method_id].last_used_at = datetime.utcnow().isoformat()
+        self.stored_methods[method_id].last_used_at = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
 
         print(f"[Credential Provider] 支払い方法をトークン化: {method_id} -> {token[:16]}...")
 

@@ -4,7 +4,7 @@ AP2 Protocol - Merchant Payment Processor
 Credential Providerと連携して実際の決済を実行
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Dict
 import uuid
 import time
@@ -111,7 +111,8 @@ class MerchantPaymentProcessor:
         print(f"[Payment Processor] Payment Mandateを検証中...")
 
         # 0. Payment Mandateの有効期限をチェック
-        expires_at = datetime.fromisoformat(payment_mandate.expires_at.replace('Z', '+00:00'))
+        expires_at_str = payment_mandate.expires_at.replace('+00:00Z', 'Z').replace('Z', '+00:00')
+        expires_at = datetime.fromisoformat(expires_at_str)
         now = datetime.now(expires_at.tzinfo)
 
         if now > expires_at:
@@ -213,7 +214,7 @@ class MerchantPaymentProcessor:
                         "payment_mandate": payment_mandate,
                         "cart_mandate": cart_mandate,
                         "risk_score": payment_mandate.risk_score or 0,
-                        "created_at": datetime.utcnow().isoformat() + "Z"
+                        "created_at": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
                     }
 
                     risk_score = payment_mandate.risk_score or 0
@@ -367,7 +368,7 @@ class MerchantPaymentProcessor:
         time.sleep(0.5)  # シミュレート用の遅延
 
         # キャプチャ処理をシミュレート（常に成功）
-        captured_at = datetime.utcnow().isoformat() + "Z"
+        captured_at = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
 
         # 領収書URLを生成（実際はS3などのストレージURLを使用）
         receipt_url = f"https://receipts.ap2-demo.com/{transaction_id}.pdf"
@@ -414,7 +415,7 @@ class MerchantPaymentProcessor:
         time.sleep(0.5)  # シミュレート用の遅延
 
         # 返金処理をシミュレート（常に成功）
-        refunded_at = datetime.utcnow().isoformat() + "Z"
+        refunded_at = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
 
         # トランザクション結果を更新
         transaction.status = TransactionStatus.REFUNDED
@@ -481,7 +482,7 @@ class MerchantPaymentProcessor:
             )
 
         # それ以外のカードは成功
-        authorized_at = datetime.utcnow().isoformat() + "Z"
+        authorized_at = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
 
         return TransactionResult(
             id=transaction_id,
@@ -572,12 +573,12 @@ def demo_payment_processor():
         user_public_key="dummy_public_key",
         intent="ランニングシューズを購入したい",
         constraints=IntentConstraints(
-            valid_until=(datetime.utcnow() + timedelta(hours=24)).isoformat(),
+            valid_until=(datetime.now(timezone.utc) + timedelta(hours=24)).isoformat(),
             max_amount=Amount(value="100.00", currency="USD"),
             brands=["Nike", "Adidas"]
         ),
-        created_at=datetime.utcnow().isoformat(),
-        expires_at=(datetime.utcnow() + timedelta(hours=24)).isoformat()
+        created_at=datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
+        expires_at=(datetime.now(timezone.utc) + timedelta(hours=24)).isoformat()
     )
 
     # 商品を検索
@@ -617,7 +618,7 @@ def demo_payment_processor():
     )
 
     # Payment Mandateを作成（有効期限15分）
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     expires_at = now + timedelta(minutes=15)
 
     payment_mandate = PaymentMandate(
@@ -632,8 +633,8 @@ def demo_payment_processor():
         agent_involved=False,
         payer_id="user_demo_001",
         payee_id="merchant_demo_001",
-        created_at=now.isoformat() + 'Z',
-        expires_at=expires_at.isoformat() + 'Z'
+        created_at=now.isoformat().replace('+00:00', 'Z'),
+        expires_at=expires_at.isoformat().replace('+00:00', 'Z')
     )
 
     print(f"Payment Mandate ID: {payment_mandate.id}")

@@ -4,7 +4,7 @@ AP2 Protocol - Transaction Store
 """
 
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Dict, List
 import json
 
@@ -67,7 +67,7 @@ class TransactionStore:
             data = {
                 'metadata': {
                     'version': '1.0',
-                    'last_updated': datetime.utcnow().isoformat() + 'Z',
+                    'last_updated': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
                     'total_transactions': len(self.transactions)
                 },
                 'transactions': self.transactions
@@ -117,7 +117,7 @@ class TransactionStore:
             'error_message': transaction_result.error_message,
             'receipt_url': transaction_result.receipt_url,
             'verified': True,  # Verifierによる検証済みフラグ
-            'saved_at': datetime.utcnow().isoformat() + 'Z'
+            'saved_at': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
         }
 
         # Cart Mandate情報を追加
@@ -329,7 +329,7 @@ class TransactionStore:
             output_path.parent.mkdir(parents=True, exist_ok=True)
 
             export_data = {
-                'exported_at': datetime.utcnow().isoformat() + 'Z',
+                'exported_at': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
                 'total_transactions': len(self.transactions),
                 'statistics': self.get_transaction_stats(),
                 'transactions': list(self.transactions.values())
@@ -378,8 +378,8 @@ def demo_transaction_store():
             id=f"txn_{uuid.uuid4().hex[:12]}",
             status=TransactionStatus.CAPTURED if i < 2 else TransactionStatus.FAILED,
             payment_mandate_id=f"payment_{i+1}",
-            authorized_at=datetime.utcnow().isoformat() + 'Z',
-            captured_at=datetime.utcnow().isoformat() + 'Z' if i < 2 else None,
+            authorized_at=datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
+            captured_at=datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z') if i < 2 else None,
             error_code="insufficient_funds" if i == 2 else None,
             error_message="残高不足" if i == 2 else None
         )
@@ -387,7 +387,7 @@ def demo_transaction_store():
         # PaymentMandate（簡易版）
         from ap2_types import PaymentMandate
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         payment_mandate = PaymentMandate(
             id=f"payment_{i+1}",
             type="PaymentMandate",
@@ -408,8 +408,8 @@ def demo_transaction_store():
             agent_involved=True,
             payer_id="user_demo_001",
             payee_id="merchant_demo_001",
-            created_at=now.isoformat() + 'Z',
-            expires_at=(now + timedelta(minutes=15)).isoformat() + 'Z',
+            created_at=now.isoformat().replace('+00:00', 'Z'),
+            expires_at=(now + timedelta(minutes=15)).isoformat().replace('+00:00', 'Z'),
             risk_score=25 + i*10
         )
 

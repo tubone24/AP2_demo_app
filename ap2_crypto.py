@@ -7,7 +7,7 @@ import base64
 import hashlib
 import os
 from typing import Tuple, Optional, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -400,7 +400,7 @@ class SignatureManager:
             algorithm=algorithm,
             value=base64.b64encode(signature_bytes).decode('utf-8'),
             public_key=public_key_base64,
-            signed_at=datetime.utcnow().isoformat() + 'Z'
+            signed_at=datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
         )
         
         print(f"  ✓ 署名完了")
@@ -953,7 +953,7 @@ class DeviceAttestationManager:
 
         # タイムスタンプを設定（指定されたものを使用、またはデフォルトで現在時刻）
         if timestamp is None:
-            timestamp = datetime.utcnow().isoformat() + 'Z'
+            timestamp = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
             print(f"  タイムスタンプを生成: {timestamp}")
         else:
             print(f"  指定されたタイムスタンプを使用: {timestamp}")
@@ -1021,9 +1021,16 @@ class DeviceAttestationManager:
 
         try:
             # 1. タイムスタンプを確認（リプレイ攻撃対策）
-            attestation_time = datetime.fromisoformat(device_attestation.timestamp.replace('Z', '+00:00'))
-            now = datetime.utcnow()
-            age_seconds = (now - attestation_time.replace(tzinfo=None)).total_seconds()
+            # 不正な形式（+00:00Z）を修正してからパース
+            timestamp_str = device_attestation.timestamp.replace('+00:00Z', 'Z').replace('Z', '+00:00')
+            attestation_time = datetime.fromisoformat(timestamp_str)
+
+            # タイムゾーン情報がない場合はUTCとして扱う
+            if attestation_time.tzinfo is None:
+                attestation_time = attestation_time.replace(tzinfo=timezone.utc)
+
+            now = datetime.now(timezone.utc)
+            age_seconds = (now - attestation_time).total_seconds()
 
             # 未来のタイムスタンプを拒否（リプレイ攻撃対策）
             if age_seconds < 0:

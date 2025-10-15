@@ -7,7 +7,7 @@ Merchant Agentとは別のエンティティとして、Cart Mandateを検証・
 from ap2_crypto import KeyManager, SignatureManager, compute_mandate_hash
 from ap2_types import CartMandate, MandateMetadata
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 class Merchant:
@@ -179,7 +179,7 @@ class Merchant:
         cart_dict_signed = asdict(cart_mandate)
         cart_mandate_hash = compute_mandate_hash(cart_dict_signed, hash_format='hex')
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
 
         # 署名チェーン（audit_trail）を作成
         # Merchant署名を記録
@@ -197,7 +197,7 @@ class Merchant:
             mandate_hash=cart_mandate_hash,
             schema_version='0.1',
             issuer=self.merchant_id,
-            issued_at=now.isoformat() + 'Z',
+            issued_at=now.isoformat().replace('+00:00', 'Z'),
             previous_mandate_hash=cart_mandate.intent_mandate_hash,  # IntentMandateから連鎖
             nonce=uuid.uuid4().hex,
             audit_trail=audit_trail  # 署名チェーンの証跡
@@ -265,12 +265,12 @@ def demo_merchant():
         user_public_key="dummy_public_key",
         intent="ランニングシューズを購入したい",
         constraints=IntentConstraints(
-            valid_until=(datetime.utcnow() + timedelta(hours=24)).isoformat(),
+            valid_until=(datetime.now(timezone.utc) + timedelta(hours=24)).isoformat(),
             max_amount=Amount(value="100.00", currency="USD"),
             brands=["Nike", "Adidas"]
         ),
-        created_at=datetime.utcnow().isoformat(),
-        expires_at=(datetime.utcnow() + timedelta(hours=24)).isoformat()
+        created_at=datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
+        expires_at=(datetime.now(timezone.utc) + timedelta(hours=24)).isoformat()
     )
 
     # 商品を検索

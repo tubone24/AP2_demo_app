@@ -5,7 +5,7 @@ AP2 Protocol - Streamlitデモアプリケーション
 import streamlit as st
 import streamlit.components.v1 as components
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 from dataclasses import asdict, is_dataclass
 from typing import Any
@@ -502,7 +502,7 @@ def create_a2a_message(
         message_id=f"msg_{uuid.uuid4().hex[:16]}",
         schema="",  # メッセージごとに設定
         version="0.1",
-        timestamp=datetime.utcnow().isoformat() + 'Z',
+        timestamp=datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
         sender=sender,
         recipient=recipient,
         signature=None  # 署名は後で追加
@@ -652,7 +652,7 @@ def create_a2a_message_standard(
         message_id=f"msg_{uuid.uuid4().hex[:16]}",
         schema=schema,
         version="0.1",
-        timestamp=datetime.utcnow().isoformat() + 'Z',
+        timestamp=datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
         sender=sender,
         recipient=recipient,
         signature=None  # 署名は後で追加
@@ -1861,7 +1861,7 @@ def step7_payment_creation():
                             if timestamp_ms:
                                 from datetime import datetime
                                 dt = datetime.utcfromtimestamp(timestamp_ms / 1000.0)
-                                webauthn_timestamp = dt.isoformat() + 'Z'
+                                webauthn_timestamp = dt.isoformat().replace('+00:00', 'Z')
                                 st.caption(f"🔒 WebAuthn認証タイムスタンプを使用: {webauthn_timestamp}")
 
                         device_attestation = attestation_manager.create_device_attestation(

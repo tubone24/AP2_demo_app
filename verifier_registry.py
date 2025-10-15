@@ -4,7 +4,7 @@ AP2 Protocol - Verifier公開鍵管理
 """
 
 from typing import Dict, Optional, List, Set
-from datetime import datetime
+from datetime import datetime, timezone
 from dataclasses import dataclass
 import json
 from pathlib import Path
@@ -113,7 +113,7 @@ class VerifierPublicKeyRegistry:
             entity_name=entity_name,
             entity_type=entity_type,
             public_key=public_key,
-            added_at=datetime.utcnow().isoformat() + 'Z',
+            added_at=datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
             added_by=added_by,
             is_active=True,
             metadata=metadata
@@ -170,7 +170,7 @@ class VerifierPublicKeyRegistry:
         if self.trusted_keys[entity_id].metadata is None:
             self.trusted_keys[entity_id].metadata = {}
         self.trusted_keys[entity_id].metadata['revoked_by'] = revoked_by
-        self.trusted_keys[entity_id].metadata['revoked_at'] = datetime.utcnow().isoformat() + 'Z'
+        self.trusted_keys[entity_id].metadata['revoked_at'] = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
 
         self._save_registry()
 

@@ -4,7 +4,7 @@ AP2 Protocol - Shopping Agent（暗号署名機能統合版）
 """
 
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Dict, Any
 from dataclasses import asdict
 
@@ -127,7 +127,7 @@ class SecureShoppingAgent:
         """
         print(f"\n[{self.agent_name}] Intent Mandateを作成中...")
         
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         expires_at = now + timedelta(hours=valid_hours)
         
         # merchants制約を空リストで明示（AP2仕様準拠）
@@ -138,8 +138,8 @@ class SecureShoppingAgent:
             categories=categories,
             brands=brands,
             merchants=merchants_constraint,  # AP2仕様：空リストを明示
-            valid_until=expires_at.isoformat() + 'Z',
-            valid_from=now.isoformat() + 'Z',
+            valid_until=expires_at.isoformat().replace('+00:00', 'Z'),
+            valid_from=now.isoformat().replace('+00:00', 'Z'),
             max_transactions=1
         )
 
@@ -178,8 +178,8 @@ class SecureShoppingAgent:
             user_public_key=user_public_key_base64,
             intent=intent,
             constraints=constraints,
-            created_at=now.isoformat() + 'Z',
-            expires_at=expires_at.isoformat() + 'Z',
+            created_at=now.isoformat().replace('+00:00', 'Z'),
+            expires_at=expires_at.isoformat().replace('+00:00', 'Z'),
             # A2A Extension拡張フィールド
             agent_signal=None,  # v0.2以降はmandate_metadata.agent_signalに移動
             risk_payload=risk_payload
@@ -212,7 +212,7 @@ class SecureShoppingAgent:
             mandate_hash=mandate_hash,
             schema_version='0.1',
             issuer=self.agent_id,
-            issued_at=now.isoformat() + 'Z',
+            issued_at=now.isoformat().replace('+00:00', 'Z'),
             nonce=uuid.uuid4().hex,
             agent_signal=agent_signal,  # v0.2以降の推奨位置
             audit_trail=audit_trail  # 署名チェーンの証跡
@@ -238,7 +238,9 @@ class SecureShoppingAgent:
         Raises:
             MandateError: 期限切れの場合
         """
-        expires_at = datetime.fromisoformat(intent_mandate.expires_at.replace('Z', '+00:00'))
+        # 不正な形式（+00:00Z）を修正してからパース
+        expires_at_str = intent_mandate.expires_at.replace('+00:00Z', 'Z').replace('Z', '+00:00')
+        expires_at = datetime.fromisoformat(expires_at_str)
         now = datetime.now(expires_at.tzinfo)
 
         if now > expires_at:
@@ -399,7 +401,7 @@ class SecureShoppingAgent:
             payment_id = f"payment_{uuid.uuid4().hex}"
 
         # Payment Mandateの有効期限を設定（作成時刻から15分）
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         expires_at = now + timedelta(minutes=15)
 
         # A2A Extension: IntentMandateとCartMandateのハッシュを計算
@@ -437,8 +439,8 @@ class SecureShoppingAgent:
             agent_involved=True,
             payer_id=user_id,
             payee_id=cart_mandate.merchant_id,
-            created_at=now.isoformat() + 'Z',
-            expires_at=expires_at.isoformat() + 'Z',
+            created_at=now.isoformat().replace('+00:00', 'Z'),
+            expires_at=expires_at.isoformat().replace('+00:00', 'Z'),
             merchant_signature=cart_mandate.merchant_signature,  # Cart MandateのMerchant署名を継承
             device_attestation=device_attestation,  # AP2ステップ23: Device Attestationを含める
             # A2A Extension拡張フィールド
@@ -510,7 +512,7 @@ class SecureShoppingAgent:
             mandate_hash=payment_mandate_hash,
             schema_version='0.1',
             issuer=self.agent_id,
-            issued_at=now.isoformat() + 'Z',
+            issued_at=now.isoformat().replace('+00:00', 'Z'),
             previous_mandate_hash=cart_mandate_hash,  # CartMandateから連鎖
             nonce=uuid.uuid4().hex,
             audit_trail=audit_trail  # 署名チェーンの証跡
@@ -571,8 +573,8 @@ class SecureShoppingAgent:
             id=f"txn_{uuid.uuid4().hex}",
             status=TransactionStatus.CAPTURED,
             payment_mandate_id=payment_mandate.id,
-            authorized_at=datetime.utcnow().isoformat() + 'Z',
-            captured_at=datetime.utcnow().isoformat() + 'Z',
+            authorized_at=datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
+            captured_at=datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
             receipt_url=f"https://example.com/receipt/{uuid.uuid4().hex}"
         )
         
