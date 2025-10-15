@@ -51,10 +51,53 @@ class Merchant:
 
         self.signature_manager = SignatureManager(self.key_manager)
 
-        # 在庫管理（簡易版）
-        self.inventory = {}
+        # 在庫管理（商品ID -> 在庫数）
+        self.inventory: Dict[str, int] = {}
 
         print(f"[Merchant] 初期化完了: {merchant_name} (ID: {merchant_id})")
+
+    def register_inventory(self, product_id: str, quantity: int) -> None:
+        """
+        商品の在庫を登録・更新
+
+        Args:
+            product_id: 商品ID
+            quantity: 在庫数
+        """
+        self.inventory[product_id] = quantity
+        print(f"[Merchant] 在庫登録: {product_id} = {quantity}")
+
+    def get_inventory(self, product_id: str) -> int:
+        """
+        商品の在庫数を取得
+
+        Args:
+            product_id: 商品ID
+
+        Returns:
+            在庫数（登録されていない場合は0）
+        """
+        return self.inventory.get(product_id, 0)
+
+    def reserve_inventory(self, product_id: str, quantity: int) -> bool:
+        """
+        在庫を予約（減らす）
+
+        Args:
+            product_id: 商品ID
+            quantity: 予約数
+
+        Returns:
+            予約が成功したかどうか
+        """
+        current_stock = self.get_inventory(product_id)
+        if current_stock < quantity:
+            print(f"[Merchant] 在庫不足: {product_id}（在庫: {current_stock}, 要求: {quantity}）")
+            return False
+
+        self.inventory[product_id] = current_stock - quantity
+        print(f"[Merchant] 在庫予約: {product_id} x {quantity}（残り: {self.inventory[product_id]}）")
+        return True
 
     def validate_cart_mandate(self, cart_mandate: CartMandate) -> bool:
         """
@@ -73,9 +116,14 @@ class Merchant:
             print(f"[Merchant] エラー: 販売者IDが一致しません")
             return False
 
-        # 2. 商品の在庫を確認（簡易版：常にOK）
+        # 2. 商品の在庫を確認
         for item in cart_mandate.items:
-            print(f"[Merchant]   商品確認: {item.name} x {item.quantity}")
+            stock = self.get_inventory(item.id)
+            print(f"[Merchant]   商品確認: {item.name} x {item.quantity} (在庫: {stock})")
+
+            if stock < item.quantity:
+                print(f"[Merchant] エラー: 在庫不足 - {item.name}（在庫: {stock}, 要求: {item.quantity}）")
+                return False
 
         # 3. 金額の整合性を確認
         # （実際のシステムでは、小計、税金、送料、合計を再計算して検証）
@@ -98,6 +146,20 @@ class Merchant:
         # Cart Mandateを検証
         if not self.validate_cart_mandate(cart_mandate):
             raise ValueError("Cart Mandateの検証に失敗しました")
+
+        # 在庫を予約（減らす）
+        print(f"[Merchant] 在庫を予約中...")
+        for item in cart_mandate.items:
+            current_stock = self.get_inventory(item.id)
+            if current_stock < item.quantity:
+                raise ValueError(
+                    f"在庫不足: {item.name}\n"
+                    f"要求数量: {item.quantity}個\n"
+                    f"現在の在庫: {current_stock}個\n"
+                    f"不足数: {item.quantity - current_stock}個"
+                )
+            if not self.reserve_inventory(item.id, item.quantity):
+                raise ValueError(f"在庫予約に失敗しました: {item.name}")
 
         # Merchant署名を作成
         print(f"[Merchant] Cart MandateにMerchant署名を追加中...")

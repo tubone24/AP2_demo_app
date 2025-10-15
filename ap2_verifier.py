@@ -338,11 +338,41 @@ class AP2Verifier:
                     }
                 )
 
-        # 5b. categories制約（簡易チェック）
-        # 実際のシステムでは商品カテゴリとIntent制約を照合
+        # 5b. categories制約（カテゴリー制約チェック）
+        if intent_mandate.constraints.categories:
+            allowed_categories = intent_mandate.constraints.categories
+            for item in cart_mandate.items:
+                if item.category and item.category not in allowed_categories:
+                    raise MandateError(
+                        error_code=AP2ErrorCode.CONSTRAINT_VIOLATION,
+                        message=f"商品カテゴリがIntent制約に違反しています: {item.category}",
+                        details={
+                            "cart_mandate_id": cart_mandate.id,
+                            "item_id": item.id,
+                            "item_name": item.name,
+                            "item_category": item.category,
+                            "allowed_categories": allowed_categories
+                        }
+                    )
+            print(f"  ✓ カテゴリー制約チェックOK")
 
-        # 5c. brands制約（簡易チェック）
-        # 実際のシステムでは商品ブランドとIntent制約を照合
+        # 5c. brands制約（ブランド制約チェック）
+        if intent_mandate.constraints.brands:
+            allowed_brands = intent_mandate.constraints.brands
+            for item in cart_mandate.items:
+                if item.brand and item.brand not in allowed_brands:
+                    raise MandateError(
+                        error_code=AP2ErrorCode.CONSTRAINT_VIOLATION,
+                        message=f"商品ブランドがIntent制約に違反しています: {item.brand}",
+                        details={
+                            "cart_mandate_id": cart_mandate.id,
+                            "item_id": item.id,
+                            "item_name": item.name,
+                            "item_brand": item.brand,
+                            "allowed_brands": allowed_brands
+                        }
+                    )
+            print(f"  ✓ ブランド制約チェックOK")
 
         print(f"  ✓ Intent制約遵守OK")
 

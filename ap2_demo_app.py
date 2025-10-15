@@ -1,6 +1,5 @@
 """
 AP2 Protocol - Streamlitデモアプリケーション
-実際のシナリオに従った動作をインタラクティブにデモ
 """
 
 import streamlit as st
@@ -85,7 +84,9 @@ def initialize_participants(
     shopping_agent_passphrase: str,
     merchant_agent_passphrase: str,
     merchant_passphrase: str,
-    credential_provider_passphrase: str,
+    cp1_passphrase: str,
+    cp2_passphrase: str,
+    cp3_passphrase: str,
     payment_processor_passphrase: str
 ):
     """
@@ -96,7 +97,9 @@ def initialize_participants(
         shopping_agent_passphrase: Shopping Agentの秘密鍵を保護するパスフレーズ
         merchant_agent_passphrase: Merchant Agentの秘密鍵を保護するパスフレーズ
         merchant_passphrase: Merchantの秘密鍵を保護するパスフレーズ
-        credential_provider_passphrase: Credential Providerの秘密鍵を保護するパスフレーズ
+        cp1_passphrase: Credential Provider 1の秘密鍵を保護するパスフレーズ
+        cp2_passphrase: Credential Provider 2の秘密鍵を保護するパスフレーズ
+        cp3_passphrase: Credential Provider 3の秘密鍵を保護するパスフレーズ
         payment_processor_passphrase: Payment Processorの秘密鍵を保護するパスフレーズ
     """
     if st.session_state.user_initialized:
@@ -156,27 +159,30 @@ def initialize_participants(
         )
 
         # Credential Providers (複数作成 - シーケンス4対応)
-        st.session_state.credential_provider_passphrase = credential_provider_passphrase
+        # 各CPは独立した鍵とパスフレーズを持つ
+        st.session_state.cp1_passphrase = cp1_passphrase
+        st.session_state.cp2_passphrase = cp2_passphrase
+        st.session_state.cp3_passphrase = cp3_passphrase
 
         # CP1: PayPal風
         cp1 = CredentialProvider(
             provider_id="cp_paypal_demo",
             provider_name="PayPal Wallet",
-            passphrase=credential_provider_passphrase
+            passphrase=cp1_passphrase
         )
 
         # CP2: Apple Pay風
         cp2 = CredentialProvider(
             provider_id="cp_applepay_demo",
             provider_name="Apple Pay",
-            passphrase=credential_provider_passphrase
+            passphrase=cp2_passphrase
         )
 
         # CP3: Google Pay風
         cp3 = CredentialProvider(
             provider_id="cp_googlepay_demo",
             provider_name="Google Pay",
-            passphrase=credential_provider_passphrase
+            passphrase=cp3_passphrase
         )
 
         # 複数のCredential Providersをリストで管理
@@ -1392,7 +1398,13 @@ def step6_cart_creation():
                             # 検証項目を直接表示
                             st.caption("🔍 Merchant検証プロセス:")
                             st.caption(f"• 販売者IDの一致確認: {unsigned_cart.merchant_id} ✓")
-                            st.caption("• 商品在庫の確認 ✓")
+
+                            # 在庫確認を詳細に表示
+                            st.caption("• 商品在庫の確認:")
+                            for item in unsigned_cart.items:
+                                current_stock = st.session_state.merchant.get_inventory(item.id)
+                                st.caption(f"  └ {item.name}: {item.quantity}個 要求 / {current_stock}個 在庫")
+
                             st.caption("• 金額整合性の確認 ✓")
                             st.caption(f"  └ 小計: {unsigned_cart.subtotal}")
                             st.caption(f"  └ 税金: {unsigned_cart.tax}")
@@ -1408,8 +1420,23 @@ def step6_cart_creation():
                             st.session_state.cart_mandate = signed_cart
                             status.update(label="Cart Mandate作成完了！", state="complete")
 
+                        except ValueError as e:
+                            # 在庫不足などの検証エラー
+                            error_message = str(e)
+                            st.error("**Cart Mandate検証エラー**")
+
+                            # エラーメッセージを整形して表示
+                            if "在庫不足" in error_message or "在庫予約" in error_message:
+                                st.error("🚫 " + error_message)
+                                st.warning("💡 **解決方法:** ステップ0に戻って在庫を追加登録するか、購入数量を減らしてください")
+                            else:
+                                st.error(f"✗ {error_message}")
+
+                            status.update(label="検証失敗", state="error")
+                            st.stop()
                         except Exception as e:
-                            st.error(f"✗ Cart Mandate検証エラー: {str(e)}")
+                            # その他の予期しないエラー
+                            st.error(f"✗ 予期しないエラーが発生しました: {str(e)}")
                             status.update(label="検証失敗", state="error")
                             st.stop()
 
@@ -1845,7 +1872,7 @@ def step7_payment_creation():
                             platform="Web",
                             os_version=None,
                             app_version="1.0.0",
-                            timestamp=webauthn_timestamp  # WebAuthn認証の実際のタイムスタンプを使用
+                            timestamp=webauthn_timestamp
                         )
 
                         st.success("✓ Device Attestation生成完了")
@@ -2371,16 +2398,6 @@ def main():
                 )
 
             with col5:
-                st.markdown("**🔑 Credential Provider**")
-                cp_pass = st.text_input(
-                    "パスフレーズ",
-                    value="credential_provider_pass",
-                    type="password",
-                    key="cp_pass",
-                    help="Credential Providerの秘密鍵を保護するパスフレーズ（8文字以上）"
-                )
-
-            with col6:
                 st.markdown("**💳 Payment Processor**")
                 pp_pass = st.text_input(
                     "パスフレーズ",
@@ -2388,6 +2405,43 @@ def main():
                     type="password",
                     key="pp_pass",
                     help="Payment Processorの秘密鍵を保護するパスフレーズ（8文字以上）"
+                )
+
+            with col6:
+                pass  # 空欄
+
+            st.markdown("**🔑 Credential Providers (3つのCPはそれぞれ独立した鍵を持ちます)**")
+
+            col_cp1, col_cp2, col_cp3 = st.columns(3)
+
+            with col_cp1:
+                st.markdown("**CP1: PayPal Wallet**")
+                cp1_pass = st.text_input(
+                    "パスフレーズ",
+                    value="cp1_paypal_pass",
+                    type="password",
+                    key="cp1_pass",
+                    help="CP1の秘密鍵を保護するパスフレーズ（8文字以上）"
+                )
+
+            with col_cp2:
+                st.markdown("**CP2: Apple Pay**")
+                cp2_pass = st.text_input(
+                    "パスフレーズ",
+                    value="cp2_applepay_pass",
+                    type="password",
+                    key="cp2_pass",
+                    help="CP2の秘密鍵を保護するパスフレーズ（8文字以上）"
+                )
+
+            with col_cp3:
+                st.markdown("**CP3: Google Pay**")
+                cp3_pass = st.text_input(
+                    "パスフレーズ",
+                    value="cp3_googlepay_pass",
+                    type="password",
+                    key="cp3_pass",
+                    help="CP3の秘密鍵を保護するパスフレーズ（8文字以上）"
                 )
 
             st.divider()
@@ -2408,8 +2462,14 @@ def main():
                 if not merchant_pass or len(merchant_pass) < 8:
                     errors.append("Merchantのパスフレーズは8文字以上にしてください")
 
-                if not cp_pass or len(cp_pass) < 8:
-                    errors.append("Credential Providerのパスフレーズは8文字以上にしてください")
+                if not cp1_pass or len(cp1_pass) < 8:
+                    errors.append("CP1のパスフレーズは8文字以上にしてください")
+
+                if not cp2_pass or len(cp2_pass) < 8:
+                    errors.append("CP2のパスフレーズは8文字以上にしてください")
+
+                if not cp3_pass or len(cp3_pass) < 8:
+                    errors.append("CP3のパスフレーズは8文字以上にしてください")
 
                 if not pp_pass or len(pp_pass) < 8:
                     errors.append("Payment Processorのパスフレーズは8文字以上にしてください")
@@ -2419,7 +2479,7 @@ def main():
                         st.error(error)
                 else:
                     # パスフレーズが正しい場合、初期化実行
-                    initialize_participants(user_pass, shopping_pass, merchant_agent_pass, merchant_pass, cp_pass, pp_pass)
+                    initialize_participants(user_pass, shopping_pass, merchant_agent_pass, merchant_pass, cp1_pass, cp2_pass, cp3_pass, pp_pass)
                     st.success("✓ 参加者の初期化が完了しました")
                     st.rerun()
 
@@ -2543,6 +2603,51 @@ def main():
             - 秘密鍵は暗号化されていますが、パスフレーズと一緒に保管しないでください
             - 実際のシステムでは、秘密鍵をエクスポートする機能は提供しないことが推奨されます
             """)
+
+            st.divider()
+
+            st.subheader("📦 在庫管理")
+
+            st.markdown("""
+            Merchantの商品在庫を登録します。実際の動作を模擬するため、各商品の在庫数を設定してください。
+            """)
+
+            # 商品リストを取得
+            merchant = st.session_state.merchant
+            merchant_agent = st.session_state.merchant_agent
+
+            st.markdown("**商品一覧と在庫設定**")
+
+            for product in merchant_agent.catalog:
+                col1, col2, col3, col4 = st.columns([3, 2, 2, 2])
+
+                with col1:
+                    st.write(f"**{product.name}**")
+                    st.caption(f"{product.description}")
+
+                with col2:
+                    st.write(f"**価格:** ${product.price.value}")
+                    st.caption(f"カテゴリー: {product.category}")
+
+                with col3:
+                    st.write(f"**ブランド:** {product.brand}")
+
+                with col4:
+                    current_stock = merchant.get_inventory(product.id)
+                    stock = st.number_input(
+                        f"在庫数",
+                        min_value=0,
+                        max_value=1000,
+                        value=current_stock if current_stock > 0 else product.stock,
+                        step=1,
+                        key=f"stock_{product.id}"
+                    )
+                    if st.button("登録", key=f"register_{product.id}"):
+                        merchant.register_inventory(product.id, stock)
+                        st.success(f"✓ {product.name}の在庫を{stock}に設定しました")
+
+            st.divider()
+
             if st.button("次のステップへ →", type="primary", use_container_width=True):
                 st.session_state.step = 1
                 st.rerun()

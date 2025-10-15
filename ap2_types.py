@@ -247,6 +247,7 @@ class CartItem:
     # AP2仕様推奨フィールド
     sku: Optional[str] = None  # Stock Keeping Unit
     category: Optional[str] = None  # 商品カテゴリー
+    brand: Optional[str] = None  # 商品ブランド（Intent制約チェック用）
     tax_rate: Optional[str] = None  # 税率（例: "0.10" = 10%）
     risk_payload: Optional[RiskPayload] = None  # 商品レベルのリスク情報
 

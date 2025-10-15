@@ -328,6 +328,7 @@ class SecureMerchantAgent:
                 # AP2仕様推奨フィールド
                 sku=f"SKU-{product.id}",
                 category=product.category,
+                brand=product.brand,  # ブランド制約チェック用
                 tax_rate=str(self.default_tax_rate),  # 例: "0.08"
                 risk_payload=item_risk_payload
             )
