@@ -8,6 +8,7 @@ demo_app_v2.mdの要件に基づくA2AメッセージとAPIリクエスト/レ�
 from typing import Any, Dict, List, Optional, Literal
 from pydantic import BaseModel, Field
 from datetime import datetime
+from enum import Enum
 
 
 # ========================================
@@ -19,6 +20,80 @@ class A2ASignature(BaseModel):
     algorithm: Literal["ed25519", "ecdsa"] = "ecdsa"
     public_key: str = Field(..., description="BASE64エンコードされた公開鍵")
     value: str = Field(..., description="BASE64エンコードされた署名値")
+
+
+# ========================================
+# Cryptographic Models (AP2完全準拠)
+# ========================================
+
+class Signature(BaseModel):
+    """
+    暗号署名
+
+    AP2仕様に準拠したECDSA署名
+    """
+    algorithm: str = Field(default="ECDSA", description="署名アルゴリズム")
+    value: str = Field(..., description="BASE64エンコードされた署名値")
+    public_key: str = Field(..., description="BASE64エンコードされた公開鍵（PEM形式）")
+    signed_at: str = Field(..., description="署名日時（ISO 8601）")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "algorithm": "ECDSA",
+                "value": "MEUCIQDx...",
+                "public_key": "LS0tLS1CRU...",
+                "signed_at": "2025-10-16T12:34:56Z"
+            }
+        }
+
+
+class AttestationType(str, Enum):
+    """デバイス証明のタイプ"""
+    BIOMETRIC = "biometric"
+    PIN = "pin"
+    PATTERN = "pattern"
+    DEVICE_CREDENTIAL = "device_credential"
+    WEBAUTHN = "webauthn"
+
+
+class DeviceAttestation(BaseModel):
+    """
+    デバイス証明
+
+    AP2ステップ20-23で使用される、デバイスが信頼されており
+    取引が改ざんされていないことを証明する暗号学的証拠
+    """
+    device_id: str = Field(..., description="デバイスの一意識別子")
+    attestation_type: AttestationType = Field(..., description="認証タイプ")
+    attestation_value: str = Field(..., description="BASE64エンコードされた証明値")
+    timestamp: str = Field(..., description="証明日時（ISO 8601）")
+    device_public_key: str = Field(..., description="デバイスの公開鍵（BASE64）")
+    challenge: str = Field(..., description="リプレイ攻撃対策のチャレンジ値")
+    platform: str = Field(..., description="プラットフォーム（iOS, Android, Web等）")
+    os_version: Optional[str] = Field(None, description="OSバージョン")
+    app_version: Optional[str] = Field(None, description="アプリバージョン")
+
+    # WebAuthn固有フィールド
+    webauthn_signature: Optional[str] = Field(None, description="WebAuthn署名データ")
+    webauthn_authenticator_data: Optional[str] = Field(None, description="WebAuthn Authenticator Data")
+    webauthn_client_data_json: Optional[str] = Field(None, description="WebAuthn Client Data JSON")
+
+    class Config:
+        use_enum_values = True
+        json_schema_extra = {
+            "example": {
+                "device_id": "device_abc123",
+                "attestation_type": "webauthn",
+                "attestation_value": "MEUCIQDx...",
+                "timestamp": "2025-10-16T12:34:56Z",
+                "device_public_key": "LS0tLS1CRU...",
+                "challenge": "random_challenge_abc123",
+                "platform": "Web",
+                "os_version": "macOS 14.0",
+                "app_version": "1.0.0"
+            }
+        }
 
 
 class A2AMessageHeader(BaseModel):

@@ -21,10 +21,9 @@ from fastapi import HTTPException
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 from v2.common.base_agent import BaseAgent, AgentPassphraseManager
-from v2.common.models import A2AMessage
+from v2.common.models import A2AMessage, Signature
 from v2.common.database import DatabaseManager, ProductCRUD, MandateCRUD
-from ap2_crypto import SignatureManager, KeyManager
-from ap2_types import Signature
+from v2.common.crypto import SignatureManager, KeyManager
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +50,7 @@ class MerchantService(BaseAgent):
         self.db_manager = DatabaseManager(database_url="sqlite+aiosqlite:////app/v2/data/ap2.db")
 
         # このMerchantの情報
-        self.merchant_id = "merchant_demo_001"
+        self.merchant_id = "did:ap2:merchant:demo_merchant"
         self.merchant_name = "AP2デモストア"
 
         logger.info(f"[{self.agent_name}] Initialized")
@@ -104,12 +103,7 @@ class MerchantService(BaseAgent):
 
                 # 4. 署名を追加
                 signed_cart_mandate = cart_mandate.copy()
-                signed_cart_mandate["merchant_signature"] = {
-                    "algorithm": signature.algorithm.lower(),
-                    "value": signature.value,
-                    "public_key": signature.public_key,
-                    "signed_at": signature.signed_at
-                }
+                signed_cart_mandate["merchant_signature"] = signature.model_dump()
 
                 # 5. データベースに保存
                 async with self.db_manager.get_session() as session:
@@ -202,12 +196,7 @@ class MerchantService(BaseAgent):
 
             # 署名を追加
             signed_cart_mandate = cart_mandate.copy()
-            signed_cart_mandate["merchant_signature"] = {
-                "algorithm": signature.algorithm.lower(),
-                "value": signature.value,
-                "public_key": signature.public_key,
-                "signed_at": signature.signed_at
-            }
+            signed_cart_mandate["merchant_signature"] = signature.model_dump()
 
             return {
                 "type": "ap2/CartMandate",
@@ -280,14 +269,15 @@ class MerchantService(BaseAgent):
         """
         CartMandateに署名
 
-        既存のap2_crypto.SignatureManagerを使用
+        v2.common.crypto.SignatureManagerを使用
         """
         # merchant_signatureフィールドを除外してから署名
         cart_data = cart_mandate.copy()
         cart_data.pop("merchant_signature", None)
         cart_data.pop("user_signature", None)
 
-        # 署名生成
-        signature = self.signature_manager.sign_mandate(cart_data, "merchant")
+        # 署名生成（agent_idから鍵IDを抽出）
+        key_id = self.agent_id.split(":")[-1]  # did:ap2:merchant -> merchant
+        signature = self.signature_manager.sign_mandate(cart_data, key_id)
 
         return signature

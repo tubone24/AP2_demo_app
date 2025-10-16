@@ -402,12 +402,14 @@ class ShoppingAgent(BaseAgent):
                 sample_products = [
                     {
                         "id": "prod_001",
+                        "sku": "SHOE-RUN-001",
                         "name": "ナイキ エアズーム ペガサス 40",
                         "price": 14800,
                         "image_url": "https://placehold.co/400x400/333/FFF?text=Nike+Pegasus"
                     },
                     {
                         "id": "prod_002",
+                        "sku": "SHOE-RUN-002",
                         "name": "アディダス ウルトラブースト 22",
                         "price": 19800,
                         "image_url": "https://placehold.co/400x400/000/FFF?text=Adidas+Ultraboost"
@@ -440,14 +442,14 @@ class ShoppingAgent(BaseAgent):
             if "prod_001" in user_input or "1" in user_input or "ナイキ" in user_input or "nike" in user_input_lower:
                 selected_product = {
                     "id": "prod_001",
-                    "sku": "nike-pegasus-40",
+                    "sku": "SHOE-RUN-001",
                     "name": "ナイキ エアズーム ペガサス 40",
                     "price": 14800,
                 }
             elif "prod_002" in user_input or "2" in user_input or "アディダス" in user_input or "adidas" in user_input_lower:
                 selected_product = {
                     "id": "prod_002",
-                    "sku": "adidas-ultraboost-22",
+                    "sku": "SHOE-RUN-002",
                     "name": "アディダス ウルトラブースト 22",
                     "price": 19800,
                 }
@@ -467,23 +469,40 @@ class ShoppingAgent(BaseAgent):
             )
             await asyncio.sleep(0.3)
 
-            # CartMandateを作成
+            # CartMandateを作成（未署名）
             cart_mandate = self._create_cart_mandate(selected_product, session)
-            session["cart_mandate"] = cart_mandate
-            session["step"] = "cart_signature_requested"
 
             yield StreamEvent(
                 type="agent_text",
-                content="カート内容を確認して、署名をお願いします。"
+                content="カート内容をMerchantに確認中..."
             )
-            await asyncio.sleep(0.2)
+            await asyncio.sleep(0.3)
 
-            # 署名リクエスト
-            yield StreamEvent(
-                type="signature_request",
-                mandate=cart_mandate,
-                mandate_type="cart"
-            )
+            # MerchantにCartMandateの署名を依頼
+            try:
+                signed_cart_mandate = await self._request_merchant_signature(cart_mandate)
+                session["cart_mandate"] = signed_cart_mandate
+                session["step"] = "cart_signature_requested"
+
+                yield StreamEvent(
+                    type="agent_text",
+                    content="Merchantの署名を確認しました。カート内容を確認して、あなたの署名をお願いします。"
+                )
+                await asyncio.sleep(0.2)
+
+                # 署名リクエスト（Merchant署名済みのCartMandateをユーザーに提示）
+                yield StreamEvent(
+                    type="signature_request",
+                    mandate=signed_cart_mandate,
+                    mandate_type="cart"
+                )
+            except Exception as e:
+                logger.error(f"[_generate_fixed_response] Merchant signature failed: {e}")
+                yield StreamEvent(
+                    type="agent_text",
+                    content=f"申し訳ありません。Merchantの署名取得に失敗しました: {str(e)}"
+                )
+                session["step"] = "error"
             return
 
         # ステップ8: CartMandate署名完了後 → PaymentMandate作成
@@ -666,3 +685,67 @@ class ShoppingAgent(BaseAgent):
         logger.info(f"[ShoppingAgent] PaymentMandate created: amount={product['price']}")
 
         return payment_mandate
+
+    async def _request_merchant_signature(self, cart_mandate: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        MerchantにCartMandateの署名を依頼
+
+        AP2仕様準拠：
+        1. Shopping AgentがCartMandateを作成（未署名）
+        2. MerchantがCartMandateに署名
+        3. Shopping AgentがMerchant署名を検証
+        """
+        logger.info(f"[ShoppingAgent] Requesting Merchant signature for CartMandate: {cart_mandate['id']}")
+
+        try:
+            # MerchantにPOST /sign/cartで署名依頼
+            response = await self.http_client.post(
+                f"{self.merchant_url}/sign/cart",
+                json={"cart_mandate": cart_mandate},
+                timeout=10.0
+            )
+            response.raise_for_status()
+            result = response.json()
+
+            # 署名済みCartMandateを取得
+            signed_cart_mandate = result.get("signed_cart_mandate")
+            if not signed_cart_mandate:
+                raise ValueError("Merchant did not return signed_cart_mandate")
+
+            # Merchant署名を検証
+            merchant_signature = signed_cart_mandate.get("merchant_signature")
+            if not merchant_signature:
+                raise ValueError("CartMandate does not contain merchant_signature")
+
+            # v2.common.models.Signatureに変換
+            from v2.common.models import Signature
+            signature_obj = Signature(
+                algorithm=merchant_signature.get("algorithm", "ECDSA").upper(),
+                value=merchant_signature["value"],
+                public_key=merchant_signature["public_key"],
+                signed_at=merchant_signature["signed_at"]
+            )
+
+            # 署名対象データ（merchant_signature除外）
+            cart_data_for_verification = signed_cart_mandate.copy()
+            cart_data_for_verification.pop("merchant_signature", None)
+            cart_data_for_verification.pop("user_signature", None)
+
+            # 署名検証
+            is_valid = self.signature_manager.verify_mandate_signature(
+                cart_data_for_verification,
+                signature_obj
+            )
+
+            if not is_valid:
+                raise ValueError("Merchant signature verification failed")
+
+            logger.info(f"[ShoppingAgent] Merchant signature verified for CartMandate: {cart_mandate['id']}")
+            return signed_cart_mandate
+
+        except httpx.HTTPError as e:
+            logger.error(f"[_request_merchant_signature] HTTP error: {e}")
+            raise ValueError(f"Failed to request Merchant signature: {e}")
+        except Exception as e:
+            logger.error(f"[_request_merchant_signature] Error: {e}", exc_info=True)
+            raise

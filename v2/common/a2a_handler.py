@@ -12,12 +12,9 @@ from datetime import datetime, timezone
 import uuid
 import logging
 
-# 親ディレクトリのap2_crypto.pyとap2_types.pyをインポート
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-from ap2_crypto import SignatureManager, KeyManager
-from ap2_types import Signature
-
-from .models import A2AMessage, A2AMessageHeader, A2ADataPart, A2ASignature
+# v2の暗号化モジュールとモデルをインポート
+from v2.common.crypto import SignatureManager, KeyManager
+from v2.common.models import A2AMessage, A2AMessageHeader, A2ADataPart, A2ASignature, Signature
 
 logger = logging.getLogger(__name__)
 

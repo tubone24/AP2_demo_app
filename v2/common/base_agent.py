@@ -15,9 +15,8 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
-# 親ディレクトリのap2_crypto.pyをインポート
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-from ap2_crypto import KeyManager, SignatureManager
+# v2の暗号化モジュールをインポート
+from v2.common.crypto import KeyManager, SignatureManager
 
 from .models import A2AMessage
 from .a2a_handler import A2AMessageHandler

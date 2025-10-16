@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 from v2.common.base_agent import BaseAgent, AgentPassphraseManager
 from v2.common.models import A2AMessage, AttestationVerifyRequest, AttestationVerifyResponse
 from v2.common.database import DatabaseManager, Attestation, PasskeyCredentialCRUD
-from ap2_crypto import DeviceAttestationManager, KeyManager
+from v2.common.crypto import DeviceAttestationManager, KeyManager
 
 logger = logging.getLogger(__name__)
 
