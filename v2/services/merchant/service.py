@@ -53,6 +53,9 @@ class MerchantService(BaseAgent):
         self.merchant_id = "did:ap2:merchant:demo_merchant"
         self.merchant_name = "AP2デモストア"
 
+        # 署名モード設定（メモリ内管理、本番環境ではDBに保存）
+        self.auto_sign_mode = True  # デフォルトは自動署名
+
         logger.info(f"[{self.agent_name}] Initialized")
 
     def register_a2a_handlers(self):
@@ -78,15 +81,25 @@ class MerchantService(BaseAgent):
             Merchant AgentがCartMandateを作成（未署名）
             → Merchantが検証して署名を追加
 
+            自動署名モード：即座に署名
+            手動署名モード：pending_merchant_signatureステータスで保存し、要承認
+
             リクエスト:
             {
               "cart_mandate": { ... }
             }
 
-            レスポンス:
+            レスポンス（自動モード）:
             {
               "signed_cart_mandate": { ... },
               "merchant_signature": { ... }
+            }
+
+            レスポンス（手動モード）:
+            {
+              "status": "pending_merchant_signature",
+              "cart_mandate_id": "...",
+              "message": "Manual approval required"
             }
             """
             try:
@@ -98,29 +111,47 @@ class MerchantService(BaseAgent):
                 # 2. 在庫確認
                 await self._check_inventory(cart_mandate)
 
-                # 3. 署名生成
-                signature = await self._sign_cart_mandate(cart_mandate)
+                # 3. 署名モードによる分岐
+                if self.auto_sign_mode:
+                    # 自動署名モード
+                    signature = await self._sign_cart_mandate(cart_mandate)
+                    signed_cart_mandate = cart_mandate.copy()
+                    signed_cart_mandate["merchant_signature"] = signature.model_dump()
 
-                # 4. 署名を追加
-                signed_cart_mandate = cart_mandate.copy()
-                signed_cart_mandate["merchant_signature"] = signature.model_dump()
+                    # データベースに保存
+                    async with self.db_manager.get_session() as session:
+                        await MandateCRUD.create(session, {
+                            "id": cart_mandate["id"],
+                            "type": "Cart",
+                            "status": "signed",
+                            "payload": signed_cart_mandate,
+                            "issuer": self.agent_id
+                        })
 
-                # 5. データベースに保存
-                async with self.db_manager.get_session() as session:
-                    await MandateCRUD.create(session, {
-                        "id": cart_mandate["id"],
-                        "type": "Cart",
-                        "status": "signed",
-                        "payload": signed_cart_mandate,
-                        "issuer": self.agent_id
-                    })
+                    logger.info(f"[Merchant] Auto-signed CartMandate: {cart_mandate['id']}")
 
-                logger.info(f"[Merchant] Signed CartMandate: {cart_mandate['id']}")
+                    return {
+                        "signed_cart_mandate": signed_cart_mandate,
+                        "merchant_signature": signed_cart_mandate["merchant_signature"]
+                    }
+                else:
+                    # 手動署名モード：承認待ちとして保存
+                    async with self.db_manager.get_session() as session:
+                        await MandateCRUD.create(session, {
+                            "id": cart_mandate["id"],
+                            "type": "Cart",
+                            "status": "pending_merchant_signature",
+                            "payload": cart_mandate,
+                            "issuer": self.agent_id
+                        })
 
-                return {
-                    "signed_cart_mandate": signed_cart_mandate,
-                    "merchant_signature": signed_cart_mandate["merchant_signature"]
-                }
+                    logger.info(f"[Merchant] CartMandate pending manual approval: {cart_mandate['id']}")
+
+                    return {
+                        "status": "pending_merchant_signature",
+                        "cart_mandate_id": cart_mandate["id"],
+                        "message": "Manual approval required by merchant"
+                    }
 
             except Exception as e:
                 logger.error(f"[sign_cart_mandate] Error: {e}", exc_info=True)
@@ -172,6 +203,267 @@ class MerchantService(BaseAgent):
             """
             # TODO: 実装（Mandateテーブルからstatus=pending_signatureを取得）
             return {"orders": []}
+
+        @self.app.get("/settings/signature-mode")
+        async def get_signature_mode():
+            """
+            GET /settings/signature-mode - 署名モード取得
+            """
+            return {
+                "auto_sign_mode": self.auto_sign_mode,
+                "mode": "auto" if self.auto_sign_mode else "manual"
+            }
+
+        @self.app.post("/settings/signature-mode")
+        async def set_signature_mode(request: Dict[str, Any]):
+            """
+            POST /settings/signature-mode - 署名モード設定
+
+            リクエスト:
+            {
+              "auto_sign_mode": true/false
+            }
+            """
+            auto_sign = request.get("auto_sign_mode", True)
+            self.auto_sign_mode = auto_sign
+            logger.info(f"[Merchant] Signature mode changed to: {'auto' if auto_sign else 'manual'}")
+
+            return {
+                "auto_sign_mode": self.auto_sign_mode,
+                "mode": "auto" if self.auto_sign_mode else "manual",
+                "message": f"Signature mode set to {'automatic' if auto_sign else 'manual'}"
+            }
+
+        @self.app.get("/cart-mandates/pending")
+        async def get_pending_cart_mandates():
+            """
+            GET /cart-mandates/pending - 署名待ちCartMandate一覧
+
+            IMPORTANT: This route must be defined BEFORE /cart-mandates/{cart_mandate_id}
+            to avoid FastAPI matching 'pending' as a path parameter
+            """
+            try:
+                async with self.db_manager.get_session() as session:
+                    mandates = await MandateCRUD.get_by_status(session, "pending_merchant_signature")
+
+                    return {
+                        "pending_cart_mandates": [
+                            {
+                                "id": m.id,
+                                "payload": m.payload,
+                                "created_at": m.issued_at.isoformat() if m.issued_at else None
+                            }
+                            for m in mandates
+                        ],
+                        "total": len(mandates)
+                    }
+
+            except Exception as e:
+                logger.error(f"[get_pending_cart_mandates] Error: {e}", exc_info=True)
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.get("/cart-mandates/{cart_mandate_id}")
+        async def get_cart_mandate(cart_mandate_id: str):
+            """
+            GET /cart-mandates/{id} - CartMandateを取得
+
+            ステータス確認とpayload取得に使用
+            """
+            try:
+                async with self.db_manager.get_session() as session:
+                    mandate = await MandateCRUD.get_by_id(session, cart_mandate_id)
+
+                    if not mandate:
+                        raise HTTPException(status_code=404, detail="CartMandate not found")
+
+                    # payloadをパース
+                    payload = json.loads(mandate.payload) if isinstance(mandate.payload, str) else mandate.payload
+
+                    return {
+                        "id": mandate.id,
+                        "status": mandate.status,
+                        "payload": payload,
+                        "created_at": mandate.issued_at.isoformat() if mandate.issued_at else None,
+                        "updated_at": mandate.updated_at.isoformat() if mandate.updated_at else None
+                    }
+
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"[get_cart_mandate] Error: {e}", exc_info=True)
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.post("/cart-mandates/{cart_mandate_id}/approve")
+        async def approve_cart_mandate(cart_mandate_id: str):
+            """
+            POST /cart-mandates/{id}/approve - CartMandate承認・署名
+            """
+            try:
+                async with self.db_manager.get_session() as session:
+                    mandate = await MandateCRUD.get_by_id(session, cart_mandate_id)
+
+                    if not mandate:
+                        raise HTTPException(status_code=404, detail="CartMandate not found")
+
+                    if mandate.status != "pending_merchant_signature":
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"CartMandate is not pending approval (status: {mandate.status})"
+                        )
+
+                    # mandate.payloadはJSON文字列なのでパース
+                    cart_mandate = json.loads(mandate.payload) if isinstance(mandate.payload, str) else mandate.payload
+
+                    # 署名生成
+                    signature = await self._sign_cart_mandate(cart_mandate)
+                    signed_cart_mandate = cart_mandate.copy()
+                    signed_cart_mandate["merchant_signature"] = signature.model_dump()
+
+                    # ステータス更新
+                    await MandateCRUD.update_status(session, cart_mandate_id, "signed", signed_cart_mandate)
+
+                    logger.info(f"[Merchant] Manually approved and signed CartMandate: {cart_mandate_id}")
+
+                    return {
+                        "status": "approved",
+                        "signed_cart_mandate": signed_cart_mandate,
+                        "merchant_signature": signed_cart_mandate["merchant_signature"]
+                    }
+
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"[approve_cart_mandate] Error: {e}", exc_info=True)
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.post("/cart-mandates/{cart_mandate_id}/reject")
+        async def reject_cart_mandate(cart_mandate_id: str, reason: Dict[str, Any] = None):
+            """
+            POST /cart-mandates/{id}/reject - CartMandate却下
+
+            リクエスト:
+            {
+              "reason": "在庫不足" (optional)
+            }
+            """
+            try:
+                async with self.db_manager.get_session() as session:
+                    mandate = await MandateCRUD.get_by_id(session, cart_mandate_id)
+
+                    if not mandate:
+                        raise HTTPException(status_code=404, detail="CartMandate not found")
+
+                    if mandate.status != "pending_merchant_signature":
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"CartMandate is not pending approval (status: {mandate.status})"
+                        )
+
+                    # ステータス更新
+                    await MandateCRUD.update_status(session, cart_mandate_id, "rejected", mandate.payload)
+
+                    rejection_reason = reason.get("reason", "No reason provided") if reason else "No reason provided"
+                    logger.info(f"[Merchant] Rejected CartMandate: {cart_mandate_id}, reason: {rejection_reason}")
+
+                    return {
+                        "status": "rejected",
+                        "cart_mandate_id": cart_mandate_id,
+                        "reason": rejection_reason
+                    }
+
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"[reject_cart_mandate] Error: {e}", exc_info=True)
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.get("/transactions")
+        async def get_transactions(status: str = None, limit: int = 100):
+            """
+            GET /transactions - トランザクション履歴
+
+            クエリパラメータ:
+            - status: ステータスフィルター（captured, failed, refunded等）
+            - limit: 結果数上限
+            """
+            try:
+                async with self.db_manager.get_session() as session:
+                    from v2.common.database import TransactionCRUD
+
+                    if status:
+                        transactions = await TransactionCRUD.get_by_status(session, status, limit)
+                    else:
+                        transactions = await TransactionCRUD.list_all(session, limit)
+
+                    return {
+                        "transactions": [t.to_dict() for t in transactions],
+                        "total": len(transactions)
+                    }
+
+            except Exception as e:
+                logger.error(f"[get_transactions] Error: {e}", exc_info=True)
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.post("/products")
+        async def create_product(product_data: Dict[str, Any]):
+            """
+            POST /products - 商品作成
+
+            リクエスト:
+            {
+              "sku": "SHOE-001",
+              "name": "商品名",
+              "description": "説明",
+              "price": 10000,  // cents単位
+              "inventory_count": 100,
+              "product_metadata": { "category": "shoes", "brand": "Nike" }
+            }
+            """
+            try:
+                async with self.db_manager.get_session() as session:
+                    # SKU重複チェック
+                    existing = await ProductCRUD.get_by_sku(session, product_data["sku"])
+                    if existing:
+                        raise HTTPException(status_code=400, detail="SKU already exists")
+
+                    # 商品作成
+                    product = await ProductCRUD.create(session, product_data)
+
+                    logger.info(f"[Merchant] Created product: {product.id}, SKU: {product.sku}")
+
+                    return product.to_dict()
+
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"[create_product] Error: {e}", exc_info=True)
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.delete("/products/{product_id}")
+        async def delete_product(product_id: str):
+            """
+            DELETE /products/{id} - 商品削除
+            """
+            try:
+                async with self.db_manager.get_session() as session:
+                    product = await ProductCRUD.get_by_id(session, product_id)
+                    if not product:
+                        raise HTTPException(status_code=404, detail="Product not found")
+
+                    await ProductCRUD.delete(session, product_id)
+
+                    logger.info(f"[Merchant] Deleted product: {product_id}")
+
+                    return {
+                        "status": "deleted",
+                        "product_id": product_id
+                    }
+
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"[delete_product] Error: {e}", exc_info=True)
+                raise HTTPException(status_code=500, detail=str(e))
 
     # ========================================
     # A2Aメッセージハンドラー

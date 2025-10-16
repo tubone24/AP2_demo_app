@@ -304,18 +304,34 @@ class MerchantAgent(BaseAgent):
                 response.raise_for_status()
                 result = response.json()
 
+                # 自動署名モードの場合
                 signed_cart_mandate = result.get("signed_cart_mandate")
-                if not signed_cart_mandate:
-                    raise ValueError("Merchant did not return signed_cart_mandate")
+                if signed_cart_mandate:
+                    logger.info(f"[MerchantAgent] CartMandate signed by Merchant: {cart_mandate['id']}")
 
-                logger.info(f"[MerchantAgent] CartMandate signed by Merchant: {cart_mandate['id']}")
+                    # 署名済みCartMandateを返却
+                    return {
+                        "type": "ap2/CartMandate",
+                        "id": cart_mandate["id"],
+                        "payload": signed_cart_mandate
+                    }
 
-                # 署名済みCartMandateを返却
-                return {
-                    "type": "ap2/CartMandate",
-                    "id": cart_mandate["id"],
-                    "payload": signed_cart_mandate
-                }
+                # 手動署名モードの場合（pending_merchant_signature）
+                if result.get("status") == "pending_merchant_signature":
+                    logger.info(f"[MerchantAgent] CartMandate pending manual approval: {cart_mandate['id']}")
+                    return {
+                        "type": "ap2/CartMandatePending",
+                        "id": cart_mandate["id"],
+                        "payload": {
+                            "cart_mandate_id": result.get("cart_mandate_id"),
+                            "status": "pending_merchant_signature",
+                            "message": result.get("message", "Manual merchant approval required"),
+                            "cart_mandate": cart_mandate  # 未署名のCartMandateも含める
+                        }
+                    }
+
+                # 予期しないレスポンス
+                raise ValueError(f"Unexpected response from Merchant: {result}")
 
             except httpx.HTTPError as e:
                 logger.error(f"[handle_cart_request] Failed to get Merchant signature: {e}")

@@ -1315,6 +1315,17 @@ class ShoppingAgent(BaseAgent):
                     logger.info(f"[ShoppingAgent] Merchant signature verified for CartMandate")
                     return signed_cart_mandate
 
+                elif response_type == "ap2/CartMandatePending":
+                    # 手動署名モード：Merchantの承認待ち
+                    pending_info = data_part["payload"]
+                    cart_mandate_id = pending_info.get("cart_mandate_id")
+                    message = pending_info.get("message", "Merchant approval required")
+                    logger.info(f"[ShoppingAgent] CartMandate is pending merchant approval: {cart_mandate_id}. Waiting for approval...")
+
+                    # Merchantの承認/拒否を待機（ポーリング）
+                    signed_cart_mandate = await self._wait_for_merchant_approval(cart_mandate_id)
+                    return signed_cart_mandate
+
                 elif response_type == "ap2/Error":
                     error_payload = data_part["payload"]
                     raise ValueError(f"Merchant Agent error: {error_payload.get('error_message')}")
@@ -1513,3 +1524,106 @@ class ShoppingAgent(BaseAgent):
         except Exception as e:
             logger.error(f"[_verify_attestation_with_cp] Error: {e}", exc_info=True)
             raise
+
+    async def _wait_for_merchant_approval(self, cart_mandate_id: str, timeout: int = 120, poll_interval: int = 3) -> Dict[str, Any]:
+        """
+        Merchantの承認/拒否を待機（ポーリング）
+
+        Args:
+            cart_mandate_id: CartMandate ID
+            timeout: 最大待機時間（秒）、デフォルト120秒
+            poll_interval: ポーリング間隔（秒）、デフォルト3秒
+
+        Returns:
+            Dict[str, Any]: 署名済みCartMandate
+
+        Raises:
+            ValueError: タイムアウトまたは拒否された場合
+        """
+        logger.info(f"[ShoppingAgent] Waiting for merchant approval for CartMandate: {cart_mandate_id}, timeout={timeout}s")
+
+        start_time = asyncio.get_event_loop().time()
+        elapsed_time = 0
+
+        while elapsed_time < timeout:
+            try:
+                # MerchantからCartMandateのステータスを取得
+                response = await self.http_client.get(
+                    f"{self.merchant_url}/cart-mandates/{cart_mandate_id}",
+                    timeout=10.0
+                )
+                response.raise_for_status()
+                result = response.json()
+
+                status = result.get("status")
+                payload = result.get("payload")
+
+                logger.debug(f"[ShoppingAgent] CartMandate {cart_mandate_id} status: {status}")
+
+                # 署名完了
+                if status == "signed":
+                    logger.info(f"[ShoppingAgent] CartMandate {cart_mandate_id} has been approved and signed by merchant")
+
+                    # Merchant署名を検証
+                    merchant_signature = payload.get("merchant_signature")
+                    if not merchant_signature:
+                        raise ValueError("CartMandate does not contain merchant_signature")
+
+                    # v2.common.models.Signatureに変換
+                    from v2.common.models import Signature
+                    signature_obj = Signature(
+                        algorithm=merchant_signature.get("algorithm", "ECDSA").upper(),
+                        value=merchant_signature["value"],
+                        public_key=merchant_signature["public_key"],
+                        signed_at=merchant_signature["signed_at"]
+                    )
+
+                    # 署名対象データ（merchant_signature除外）
+                    cart_data_for_verification = payload.copy()
+                    cart_data_for_verification.pop("merchant_signature", None)
+                    cart_data_for_verification.pop("user_signature", None)
+
+                    # 署名検証
+                    is_valid = self.signature_manager.verify_mandate_signature(
+                        cart_data_for_verification,
+                        signature_obj
+                    )
+
+                    if not is_valid:
+                        raise ValueError("Merchant signature verification failed")
+
+                    logger.info(f"[ShoppingAgent] Merchant signature verified for CartMandate: {cart_mandate_id}")
+                    return payload
+
+                # 拒否された
+                elif status == "rejected":
+                    logger.warning(f"[ShoppingAgent] CartMandate {cart_mandate_id} has been rejected by merchant")
+                    raise ValueError(f"CartMandateがMerchantに拒否されました（ID: {cart_mandate_id}）")
+
+                # まだpending - 待機
+                elif status == "pending_merchant_signature":
+                    logger.debug(f"[ShoppingAgent] CartMandate {cart_mandate_id} is still pending, waiting...")
+                    await asyncio.sleep(poll_interval)
+                    elapsed_time = asyncio.get_event_loop().time() - start_time
+                    continue
+
+                # 予期しないステータス
+                else:
+                    logger.warning(f"[ShoppingAgent] Unexpected CartMandate status: {status}")
+                    await asyncio.sleep(poll_interval)
+                    elapsed_time = asyncio.get_event_loop().time() - start_time
+                    continue
+
+            except httpx.HTTPError as e:
+                logger.error(f"[_wait_for_merchant_approval] HTTP error while checking status: {e}")
+                await asyncio.sleep(poll_interval)
+                elapsed_time = asyncio.get_event_loop().time() - start_time
+                continue
+
+            except Exception as e:
+                logger.error(f"[_wait_for_merchant_approval] Error while checking status: {e}")
+                raise
+
+        # タイムアウト
+        logger.error(f"[ShoppingAgent] Timeout waiting for merchant approval for CartMandate: {cart_mandate_id}")
+        raise ValueError(f"Merchantの承認待ちがタイムアウトしました（ID: {cart_mandate_id}、{timeout}秒経過）。Merchant Dashboardで承認してください。")

@@ -370,6 +370,16 @@ class ProductCRUD:
         result = await session.execute(select(Product).limit(limit))
         return list(result.scalars().all())
 
+    @staticmethod
+    async def delete(session: AsyncSession, product_id: str) -> bool:
+        """商品削除"""
+        product = await ProductCRUD.get_by_id(session, product_id)
+        if product:
+            await session.delete(product)
+            await session.commit()
+            return True
+        return False
+
 
 class MandateCRUD:
     """Mandate CRUD操作"""
@@ -397,15 +407,25 @@ class MandateCRUD:
         return result.scalar_one_or_none()
 
     @staticmethod
-    async def update_status(session: AsyncSession, mandate_id: str, status: str) -> Optional[Mandate]:
-        """Mandateステータス更新"""
+    async def update_status(session: AsyncSession, mandate_id: str, status: str, payload: Dict[str, Any] = None) -> Optional[Mandate]:
+        """Mandateステータス更新（オプションでpayloadも更新）"""
         mandate = await MandateCRUD.get_by_id(session, mandate_id)
         if mandate:
             mandate.status = status
+            if payload is not None:
+                mandate.payload = json.dumps(payload)
             mandate.updated_at = datetime.now(timezone.utc)
             await session.commit()
             await session.refresh(mandate)
         return mandate
+
+    @staticmethod
+    async def get_by_status(session: AsyncSession, status: str, limit: int = 100) -> List[Mandate]:
+        """ステータスでMandate取得"""
+        result = await session.execute(
+            select(Mandate).where(Mandate.status == status).order_by(Mandate.issued_at.desc()).limit(limit)
+        )
+        return list(result.scalars().all())
 
 
 class TransactionCRUD:
@@ -445,6 +465,22 @@ class TransactionCRUD:
             await session.commit()
             await session.refresh(transaction)
         return transaction
+
+    @staticmethod
+    async def get_by_status(session: AsyncSession, status: str, limit: int = 100) -> List[Transaction]:
+        """ステータスでTransaction取得"""
+        result = await session.execute(
+            select(Transaction).where(Transaction.status == status).order_by(Transaction.created_at.desc()).limit(limit)
+        )
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def list_all(session: AsyncSession, limit: int = 100) -> List[Transaction]:
+        """全Transaction取得"""
+        result = await session.execute(
+            select(Transaction).order_by(Transaction.created_at.desc()).limit(limit)
+        )
+        return list(result.scalars().all())
 
 
 class PasskeyCredentialCRUD:

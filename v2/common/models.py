@@ -133,6 +133,7 @@ class A2ADataPart(BaseModel):
         "ap2/IntentMandate",
         "ap2/CartMandate",
         "ap2/CartRequest",
+        "ap2/CartMandatePending",
         "ap2/PaymentMandate",
         "ap2/PaymentResult",
         "ap2/ProductSearch",
