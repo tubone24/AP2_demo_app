@@ -301,9 +301,55 @@ class ProductCRUD:
     @staticmethod
     async def search(session: AsyncSession, query: str, limit: int = 10) -> List[Product]:
         """商品検索（名前または説明で部分一致）"""
-        stmt = select(Product).where(
-            (Product.name.contains(query)) | (Product.description.contains(query))
-        ).limit(limit)
+        from sqlalchemy import or_
+        import re
+        import logging
+
+        logger = logging.getLogger(__name__)
+
+        # クエリを単語に分割して柔軟な検索を実現
+        # 「ランニングシューズが欲しい」→「ランニングシューズ」「ランニング」「シューズ」
+        keywords = []
+
+        # まず助詞・助動詞を除去（簡易版）
+        # 「欲しい」「ください」「たい」なども除去
+        stop_words = ['が', 'を', 'に', 'へ', 'と', 'で', 'から', 'や', 'も', 'は', 'の',
+                      'です', 'ます', 'たい', 'ほしい', '欲しい', 'ください', '下さい']
+
+        cleaned_query = query
+        for stop_word in stop_words:
+            cleaned_query = cleaned_query.replace(stop_word, ' ')
+
+        logger.info(f"[ProductCRUD.search] Original query: '{query}' -> Cleaned: '{cleaned_query}'")
+
+        # スペースで分割して2文字以上のキーワードを抽出
+        words = [w.strip() for w in cleaned_query.split() if len(w.strip()) >= 2]
+
+        if words:
+            keywords = words
+        else:
+            # スペースで分割できない場合、元のクエリを使用
+            keywords = [query]
+
+        # さらに、元のクエリも検索対象に追加（完全一致の可能性のため）
+        if query not in keywords:
+            keywords.append(query)
+
+        logger.info(f"[ProductCRUD.search] Extracted keywords: {keywords}")
+
+        # 各キーワードで名前または説明を検索（OR条件）
+        conditions = []
+        for keyword in keywords:
+            if keyword:  # 空文字列を除外
+                conditions.append(Product.name.contains(keyword))
+                conditions.append(Product.description.contains(keyword))
+
+        if not conditions:
+            # フォールバック: 全商品を返す
+            stmt = select(Product).limit(limit)
+        else:
+            stmt = select(Product).where(or_(*conditions)).limit(limit)
+
         result = await session.execute(stmt)
         return list(result.scalars().all())
 

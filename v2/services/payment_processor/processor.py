@@ -258,29 +258,21 @@ class PaymentProcessorService(BaseAgent):
         amount = payment_mandate.get("amount", {})
         payment_method = payment_mandate.get("payment_method", {})
 
-        # モック処理：ランダムに成功/失敗を決定（実際は常に成功させる）
-        import random
-        success_rate = 0.95  # 95%成功
-
-        if random.random() < success_rate:
-            # 成功
-            result = {
-                "status": "captured",
-                "transaction_id": transaction_id,
-                "amount": amount,
-                "payment_method": payment_method,
-                "authorized_at": datetime.now(timezone.utc).isoformat(),
-                "captured_at": datetime.now(timezone.utc).isoformat()
-            }
-            logger.info(f"[PaymentProcessor] Payment succeeded: {transaction_id}")
-        else:
-            # 失敗
-            result = {
-                "status": "failed",
-                "transaction_id": transaction_id,
-                "error": "Insufficient funds (mock error)"
-            }
-            logger.warning(f"[PaymentProcessor] Payment failed: {transaction_id}")
+        # モック処理：デモ用に常に成功させる
+        # 本番環境では実際の決済ゲートウェイ（Stripe, Square等）と統合
+        result = {
+            "status": "captured",
+            "transaction_id": transaction_id,
+            "amount": amount,
+            "payment_method": payment_method,
+            "payer_id": payment_mandate.get("payer_id"),
+            "payee_id": payment_mandate.get("payee_id"),
+            "cart_mandate_id": payment_mandate.get("cart_mandate_id"),
+            "intent_mandate_id": payment_mandate.get("intent_mandate_id"),
+            "authorized_at": datetime.now(timezone.utc).isoformat(),
+            "captured_at": datetime.now(timezone.utc).isoformat()
+        }
+        logger.info(f"[PaymentProcessor] Payment succeeded: {transaction_id}, amount={amount}")
 
         return result
 

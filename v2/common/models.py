@@ -132,7 +132,9 @@ class A2ADataPart(BaseModel):
     type: Literal[
         "ap2/IntentMandate",
         "ap2/CartMandate",
+        "ap2/CartRequest",
         "ap2/PaymentMandate",
+        "ap2/PaymentResult",
         "ap2/ProductSearch",
         "ap2/ProductList",
         "ap2/SignatureRequest",

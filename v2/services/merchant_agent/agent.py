@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 from v2.common.base_agent import BaseAgent, AgentPassphraseManager
 from v2.common.models import A2AMessage
 from v2.common.database import DatabaseManager, ProductCRUD
+from v2.common.seed_data import seed_products, seed_users
 
 logger = logging.getLogger(__name__)
 
@@ -56,8 +57,26 @@ class MerchantAgent(BaseAgent):
         self.merchant_url = "http://merchant:8002"
 
         # このMerchantの情報（固定）
-        self.merchant_id = "merchant_demo_001"
+        self.merchant_id = "did:ap2:merchant:demo_merchant"
         self.merchant_name = "AP2デモストア"
+
+        # 起動イベントハンドラー登録
+        @self.app.on_event("startup")
+        async def startup_event():
+            """起動時の初期化処理"""
+            logger.info(f"[{self.agent_name}] Running startup tasks...")
+
+            # データベース初期化
+            await self.db_manager.init_db()
+            logger.info(f"[{self.agent_name}] Database initialized")
+
+            # サンプルデータシード
+            try:
+                await seed_products(self.db_manager)
+                await seed_users(self.db_manager)
+                logger.info(f"[{self.agent_name}] Sample data seeded successfully")
+            except Exception as e:
+                logger.warning(f"[{self.agent_name}] Sample data seeding warning: {e}")
 
         logger.info(f"[{self.agent_name}] Initialized")
 
@@ -68,9 +87,11 @@ class MerchantAgent(BaseAgent):
         Merchant Agentが受信するA2Aメッセージ：
         - ap2/IntentMandate: Shopping Agentからの購入意図
         - ap2/ProductSearchRequest: 商品検索依頼
+        - ap2/CartRequest: Shopping Agentからのカート作成・署名依頼
         """
         self.a2a_handler.register_handler("ap2/IntentMandate", self.handle_intent_mandate)
         self.a2a_handler.register_handler("ap2/ProductSearchRequest", self.handle_product_search_request)
+        self.a2a_handler.register_handler("ap2/CartRequest", self.handle_cart_request)
 
     def register_endpoints(self):
         """
@@ -98,7 +119,7 @@ class MerchantAgent(BaseAgent):
                     if category:
                         products = [
                             p for p in products
-                            if p.metadata and json.loads(p.metadata).get("category") == category
+                            if p.product_metadata and json.loads(p.product_metadata).get("category") == category
                         ]
 
                     return {
@@ -209,8 +230,18 @@ class MerchantAgent(BaseAgent):
 
         # Intent内容から商品を検索
         intent_text = intent_mandate.get("intent", "")
+        logger.info(f"[MerchantAgent] Searching products with intent: '{intent_text}'")
+
         async with self.db_manager.get_session() as session:
+            # まず全商品を確認
+            all_products = await ProductCRUD.list_all(session, limit=10)
+            logger.info(f"[MerchantAgent] Total products in database: {len(all_products)}")
+            if all_products:
+                logger.info(f"[MerchantAgent] Sample product names: {[p.name for p in all_products[:3]]}")
+
+            # Intent検索実行
             products = await ProductCRUD.search(session, intent_text, limit=5)
+            logger.info(f"[MerchantAgent] Found {len(products)} products matching intent")
 
         # 商品リストをレスポンス
         return {
@@ -244,6 +275,70 @@ class MerchantAgent(BaseAgent):
             }
         }
 
+    async def handle_cart_request(self, message: A2AMessage) -> Dict[str, Any]:
+        """
+        CartRequestを受信（Shopping Agentから）
+
+        AP2仕様準拠（Steps 10-12）：
+        1. Merchant Agentが商品選択情報を受信
+        2. Merchant AgentがCartMandateを作成（未署名）
+        3. Merchant AgentがMerchantに署名依頼（HTTP）
+        4. Merchant Agentが署名済みCartMandateを返却
+        """
+        logger.info("[MerchantAgent] Received CartRequest")
+        cart_request = message.dataPart.payload
+
+        try:
+            # CartMandateを作成（未署名）
+            cart_mandate = await self._create_cart_mandate(cart_request)
+
+            logger.info(f"[MerchantAgent] Created CartMandate: {cart_mandate['id']}")
+
+            # MerchantにCartMandateの署名を依頼（HTTP）
+            try:
+                response = await self.http_client.post(
+                    f"{self.merchant_url}/sign/cart",
+                    json={"cart_mandate": cart_mandate},
+                    timeout=10.0
+                )
+                response.raise_for_status()
+                result = response.json()
+
+                signed_cart_mandate = result.get("signed_cart_mandate")
+                if not signed_cart_mandate:
+                    raise ValueError("Merchant did not return signed_cart_mandate")
+
+                logger.info(f"[MerchantAgent] CartMandate signed by Merchant: {cart_mandate['id']}")
+
+                # 署名済みCartMandateを返却
+                return {
+                    "type": "ap2/CartMandate",
+                    "id": cart_mandate["id"],
+                    "payload": signed_cart_mandate
+                }
+
+            except httpx.HTTPError as e:
+                logger.error(f"[handle_cart_request] Failed to get Merchant signature: {e}")
+                return {
+                    "type": "ap2/Error",
+                    "id": str(uuid.uuid4()),
+                    "payload": {
+                        "error_code": "merchant_signature_failed",
+                        "error_message": f"Failed to get Merchant signature: {str(e)}"
+                    }
+                }
+
+        except Exception as e:
+            logger.error(f"[handle_cart_request] Error: {e}", exc_info=True)
+            return {
+                "type": "ap2/Error",
+                "id": str(uuid.uuid4()),
+                "payload": {
+                    "error_code": "cart_creation_failed",
+                    "error_message": str(e)
+                }
+            }
+
     # ========================================
     # CartMandate作成
     # ========================================
@@ -273,7 +368,7 @@ class MerchantAgent(BaseAgent):
                 unit_price_cents = product.price
                 total_price_cents = unit_price_cents * quantity
 
-                metadata_dict = json.loads(product.metadata) if product.metadata else {}
+                metadata_dict = json.loads(product.product_metadata) if product.product_metadata else {}
 
                 cart_items.append({
                     "id": f"item_{uuid.uuid4().hex[:8]}",

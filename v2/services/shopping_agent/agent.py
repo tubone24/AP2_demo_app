@@ -387,44 +387,49 @@ class ShoppingAgent(BaseAgent):
             )
             return
 
-        # ステップ6: 署名完了後、商品検索
+        # ステップ6: 署名完了後、商品検索（Merchant AgentへA2A通信）
         elif current_step == "intent_signature_requested":
             if "署名完了" in user_input or "signed" in user_input_lower or user_input_lower == "ok":
                 session["step"] = "intent_signed"
 
                 yield StreamEvent(
                     type="agent_text",
-                    content="署名ありがとうございます！商品を検索中..."
+                    content="署名ありがとうございます！Merchant Agentに商品を検索依頼中..."
                 )
                 await asyncio.sleep(0.5)
 
-                # Merchant Agentに商品検索依頼（固定応答）
-                sample_products = [
-                    {
-                        "id": "prod_001",
-                        "sku": "SHOE-RUN-001",
-                        "name": "ナイキ エアズーム ペガサス 40",
-                        "price": 14800,
-                        "image_url": "https://placehold.co/400x400/333/FFF?text=Nike+Pegasus"
-                    },
-                    {
-                        "id": "prod_002",
-                        "sku": "SHOE-RUN-002",
-                        "name": "アディダス ウルトラブースト 22",
-                        "price": 19800,
-                        "image_url": "https://placehold.co/400x400/000/FFF?text=Adidas+Ultraboost"
-                    }
-                ]
+                # Merchant AgentにIntentMandateを送信して商品検索依頼（A2A通信）
+                try:
+                    products = await self._search_products_via_merchant_agent(session["intent_mandate"])
 
-                yield StreamEvent(
-                    type="cart_options",
-                    items=sample_products
-                )
+                    if not products:
+                        yield StreamEvent(
+                            type="agent_text",
+                            content="申し訳ありません。条件に合う商品が見つかりませんでした。"
+                        )
+                        session["step"] = "error"
+                        return
 
-                yield StreamEvent(
-                    type="agent_text",
-                    content="上記の商品が見つかりました。どちらか選択してください。"
-                )
+                    # 商品リストをセッションに保存
+                    session["available_products"] = products
+
+                    yield StreamEvent(
+                        type="cart_options",
+                        items=products
+                    )
+
+                    yield StreamEvent(
+                        type="agent_text",
+                        content="上記の商品が見つかりました。どちらか選択してください。"
+                    )
+                except Exception as e:
+                    logger.error(f"[_generate_fixed_response] Product search via Merchant Agent failed: {e}")
+                    yield StreamEvent(
+                        type="agent_text",
+                        content=f"申し訳ありません。商品検索に失敗しました: {str(e)}"
+                    )
+                    session["step"] = "error"
+                    return
 
                 session["step"] = "product_selection"
                 return
@@ -435,29 +440,46 @@ class ShoppingAgent(BaseAgent):
                 )
                 return
 
-        # ステップ7: 商品選択後 → CartMandate作成
+        # ステップ7: 商品選択後 → CartMandate作成（Merchant Agentを経由）
         elif current_step == "product_selection":
-            # 商品IDをパース（"prod_001"や"1"など）
+            # 利用可能な商品リストから選択
+            available_products = session.get("available_products", [])
+            if not available_products:
+                yield StreamEvent(
+                    type="agent_text",
+                    content="申し訳ありません。商品リストが見つかりません。最初からやり直してください。"
+                )
+                session["step"] = "error"
+                return
+
+            # 商品選択（番号または商品名）
             selected_product = None
-            if "prod_001" in user_input or "1" in user_input or "ナイキ" in user_input or "nike" in user_input_lower:
-                selected_product = {
-                    "id": "prod_001",
-                    "sku": "SHOE-RUN-001",
-                    "name": "ナイキ エアズーム ペガサス 40",
-                    "price": 14800,
-                }
-            elif "prod_002" in user_input or "2" in user_input or "アディダス" in user_input or "adidas" in user_input_lower:
-                selected_product = {
-                    "id": "prod_002",
-                    "sku": "SHOE-RUN-002",
-                    "name": "アディダス ウルトラブースト 22",
-                    "price": 19800,
-                }
+            user_input_clean = user_input.strip()
+
+            # 番号で選択（1, 2, 3...）
+            if user_input_clean.isdigit():
+                index = int(user_input_clean) - 1
+                if 0 <= index < len(available_products):
+                    selected_product = available_products[index]
+
+            # 商品IDで選択（"prod_001"など）
+            if not selected_product:
+                for product in available_products:
+                    if product.get("id") in user_input:
+                        selected_product = product
+                        break
+
+            # 商品名で選択（部分一致）
+            if not selected_product:
+                for product in available_products:
+                    if user_input_lower in product.get("name", "").lower():
+                        selected_product = product
+                        break
 
             if not selected_product:
                 yield StreamEvent(
                     type="agent_text",
-                    content="商品が認識できませんでした。「1」または「2」、または商品名を入力してください。"
+                    content=f"商品が認識できませんでした。番号（1〜{len(available_products)}）または商品名を入力してください。"
                 )
                 return
 
@@ -469,24 +491,25 @@ class ShoppingAgent(BaseAgent):
             )
             await asyncio.sleep(0.3)
 
-            # CartMandateを作成（未署名）
-            cart_mandate = self._create_cart_mandate(selected_product, session)
-
             yield StreamEvent(
                 type="agent_text",
-                content="カート内容をMerchantに確認中..."
+                content="Merchant Agentにカート作成・署名を依頼中..."
             )
             await asyncio.sleep(0.3)
 
-            # MerchantにCartMandateの署名を依頼
+            # Merchant AgentにCartRequestを送信（A2A通信）
+            # Merchant AgentがCartMandateを作成し、Merchantに署名依頼して、署名済みCartMandateを返却
             try:
-                signed_cart_mandate = await self._request_merchant_signature(cart_mandate)
+                signed_cart_mandate = await self._request_cart_from_merchant_agent(
+                    selected_product,
+                    session
+                )
                 session["cart_mandate"] = signed_cart_mandate
                 session["step"] = "cart_signature_requested"
 
                 yield StreamEvent(
                     type="agent_text",
-                    content="Merchantの署名を確認しました。カート内容を確認して、あなたの署名をお願いします。"
+                    content="Merchant Agentを経由してMerchantの署名を確認しました。カート内容を確認して、あなたの署名をお願いします。"
                 )
                 await asyncio.sleep(0.2)
 
@@ -497,10 +520,10 @@ class ShoppingAgent(BaseAgent):
                     mandate_type="cart"
                 )
             except Exception as e:
-                logger.error(f"[_generate_fixed_response] Merchant signature failed: {e}")
+                logger.error(f"[_generate_fixed_response] CartMandate request via Merchant Agent failed: {e}")
                 yield StreamEvent(
                     type="agent_text",
-                    content=f"申し訳ありません。Merchantの署名取得に失敗しました: {str(e)}"
+                    content=f"申し訳ありません。Merchant Agentを経由したCartMandateの取得に失敗しました: {str(e)}"
                 )
                 session["step"] = "error"
             return
@@ -544,25 +567,50 @@ class ShoppingAgent(BaseAgent):
         # ステップ9: PaymentMandate署名完了後 → 決済処理
         elif current_step == "payment_signature_requested":
             if "署名完了" in user_input or "signed" in user_input_lower or user_input_lower == "ok":
-                session["step"] = "payment_signed"
+                session["step"] = "payment_processing"
 
                 yield StreamEvent(
                     type="agent_text",
                     content="決済を処理中..."
                 )
-                await asyncio.sleep(1.0)
+                await asyncio.sleep(0.5)
 
-                # 決済処理（簡易版）
-                transaction_id = f"txn_{uuid.uuid4().hex[:8]}"
-                session["transaction_id"] = transaction_id
+                # Payment ProcessorにPaymentMandateを送信（A2A通信）
+                try:
+                    payment_result = await self._process_payment_via_payment_processor(
+                        session["payment_mandate"]
+                    )
 
-                yield StreamEvent(
-                    type="agent_text",
-                    content=f"✅ 決済が完了しました！\n\n取引ID: {transaction_id}\n商品: {session['selected_product']['name']}\n金額: ¥{session['selected_product']['price']:,}\n\nご購入ありがとうございました！"
-                )
+                    if payment_result.get("status") == "captured":
+                        transaction_id = payment_result.get("transaction_id")
+                        receipt_url = payment_result.get("receipt_url")
 
-                # セッションをリセット
-                session["step"] = "completed"
+                        session["transaction_id"] = transaction_id
+
+                        yield StreamEvent(
+                            type="agent_text",
+                            content=f"✅ 決済が完了しました！\n\n取引ID: {transaction_id}\n商品: {session['selected_product']['name']}\n金額: ¥{session['selected_product']['price']:,}\n\n{receipt_url}\n\nご購入ありがとうございました！"
+                        )
+
+                        # セッションをリセット
+                        session["step"] = "completed"
+                    else:
+                        # 決済失敗
+                        error_message = payment_result.get("error", "決済処理に失敗しました")
+                        yield StreamEvent(
+                            type="agent_text",
+                            content=f"❌ 決済に失敗しました: {error_message}\n\nもう一度お試しください。"
+                        )
+                        session["step"] = "payment_failed"
+
+                except Exception as e:
+                    logger.error(f"[_generate_fixed_response] Payment processing failed: {e}")
+                    yield StreamEvent(
+                        type="agent_text",
+                        content=f"❌ 決済処理中にエラーが発生しました: {str(e)}"
+                    )
+                    session["step"] = "payment_failed"
+
                 return
             else:
                 yield StreamEvent(
@@ -685,6 +733,221 @@ class ShoppingAgent(BaseAgent):
         logger.info(f"[ShoppingAgent] PaymentMandate created: amount={product['price']}")
 
         return payment_mandate
+
+    async def _process_payment_via_payment_processor(self, payment_mandate: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Payment ProcessorにPaymentMandateを送信して決済処理を依頼
+
+        AP2仕様準拠：
+        1. Shopping AgentがPaymentMandateをPayment Processorに送信（A2A通信）
+        2. Payment Processorが決済処理を実行
+        3. Payment Processorが決済結果を返却
+        """
+        logger.info(f"[ShoppingAgent] Requesting payment processing for PaymentMandate: {payment_mandate['id']}")
+
+        try:
+            # A2Aメッセージを作成（署名付き）
+            message = self.a2a_handler.create_response_message(
+                recipient="did:ap2:agent:payment_processor",
+                data_type="ap2/PaymentMandate",
+                data_id=payment_mandate["id"],
+                payload=payment_mandate,
+                sign=True
+            )
+
+            # Payment ProcessorにA2Aメッセージを送信
+            response = await self.http_client.post(
+                f"{self.payment_processor_url}/a2a/message",
+                json=message.model_dump(by_alias=True),
+                timeout=30.0
+            )
+            response.raise_for_status()
+            result = response.json()
+
+            # A2Aレスポンスからpayloadを抽出
+            if isinstance(result, dict) and "dataPart" in result:
+                data_part = result["dataPart"]
+                # @typeエイリアスを使用
+                response_type = data_part.get("@type") or data_part.get("type")
+
+                if response_type == "ap2/PaymentResult":
+                    payload = data_part["payload"]
+                    logger.info(f"[ShoppingAgent] Payment processing completed: status={payload.get('status')}")
+                    return payload
+                elif response_type == "ap2/Error":
+                    error_payload = data_part["payload"]
+                    raise ValueError(f"Payment Processor error: {error_payload.get('error_message')}")
+                else:
+                    raise ValueError(f"Unexpected response type: {response_type}")
+            else:
+                raise ValueError("Invalid response format from Payment Processor")
+
+        except httpx.HTTPError as e:
+            logger.error(f"[_process_payment_via_payment_processor] HTTP error: {e}")
+            raise ValueError(f"Failed to process payment: {e}")
+        except Exception as e:
+            logger.error(f"[_process_payment_via_payment_processor] Error: {e}", exc_info=True)
+            raise
+
+    async def _search_products_via_merchant_agent(self, intent_mandate: Dict[str, Any]) -> list[Dict[str, Any]]:
+        """
+        Merchant AgentにIntentMandateを送信して商品検索を依頼
+
+        AP2仕様準拠（Step 8-9）：
+        1. Shopping AgentがIntentMandateをMerchant Agentに送信（A2A通信）
+        2. Merchant AgentがIntentMandateに基づいて商品検索
+        3. Merchant Agentが商品リストを返却（ap2/ProductList）
+        """
+        logger.info(f"[ShoppingAgent] Searching products via Merchant Agent for IntentMandate: {intent_mandate['id']}")
+
+        try:
+            # A2Aメッセージを作成（署名付き）
+            message = self.a2a_handler.create_response_message(
+                recipient="did:ap2:agent:merchant_agent",
+                data_type="ap2/IntentMandate",
+                data_id=intent_mandate["id"],
+                payload=intent_mandate,
+                sign=True
+            )
+
+            # Merchant AgentにA2Aメッセージを送信
+            response = await self.http_client.post(
+                f"{self.merchant_agent_url}/a2a/message",
+                json=message.model_dump(by_alias=True),
+                timeout=30.0
+            )
+            response.raise_for_status()
+            result = response.json()
+
+            # A2Aレスポンスからproductsを抽出
+            if isinstance(result, dict) and "dataPart" in result:
+                data_part = result["dataPart"]
+                # @typeエイリアスを使用
+                response_type = data_part.get("@type") or data_part.get("type")
+                if response_type == "ap2/ProductList":
+                    products = data_part["payload"].get("products", [])
+                    logger.info(f"[ShoppingAgent] Received {len(products)} products from Merchant Agent")
+                    return products
+                else:
+                    raise ValueError(f"Unexpected response type: {response_type}")
+            else:
+                raise ValueError("Invalid response format from Merchant Agent")
+
+        except httpx.HTTPError as e:
+            logger.error(f"[_search_products_via_merchant_agent] HTTP error: {e}")
+            raise ValueError(f"Failed to search products via Merchant Agent: {e}")
+        except Exception as e:
+            logger.error(f"[_search_products_via_merchant_agent] Error: {e}", exc_info=True)
+            raise
+
+    async def _request_cart_from_merchant_agent(
+        self,
+        selected_product: Dict[str, Any],
+        session: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Merchant AgentにCartRequestを送信してCartMandateを作成・署名依頼
+
+        AP2仕様準拠（Steps 10-12）：
+        1. Shopping AgentがCartRequest（商品選択情報）をMerchant Agentに送信（A2A通信）
+        2. Merchant AgentがCartMandateを作成
+        3. Merchant AgentがMerchantに署名依頼
+        4. Merchant Agentが署名済みCartMandateを返却
+        """
+        logger.info(f"[ShoppingAgent] Requesting CartMandate from Merchant Agent for product: {selected_product.get('id')}")
+
+        try:
+            # CartRequest作成
+            cart_request = {
+                "intent_mandate_id": session.get("intent_mandate", {}).get("id"),
+                "items": [
+                    {
+                        "product_id": selected_product.get("id"),
+                        "quantity": 1
+                    }
+                ],
+                "shipping_address": {
+                    "recipient": "山田太郎",
+                    "postal_code": "150-0001",
+                    "address_line1": "東京都渋谷区神宮前1-1-1",
+                    "address_line2": "サンプルマンション101",
+                    "country": "JP"
+                }
+            }
+
+            # A2Aメッセージを作成（署名付き）
+            message = self.a2a_handler.create_response_message(
+                recipient="did:ap2:agent:merchant_agent",
+                data_type="ap2/CartRequest",
+                data_id=str(uuid.uuid4()),
+                payload=cart_request,
+                sign=True
+            )
+
+            # Merchant AgentにA2Aメッセージを送信
+            response = await self.http_client.post(
+                f"{self.merchant_agent_url}/a2a/message",
+                json=message.model_dump(by_alias=True),
+                timeout=30.0
+            )
+            response.raise_for_status()
+            result = response.json()
+
+            # A2AレスポンスからCartMandateを抽出
+            if isinstance(result, dict) and "dataPart" in result:
+                data_part = result["dataPart"]
+                # @typeエイリアスを使用
+                response_type = data_part.get("@type") or data_part.get("type")
+
+                if response_type == "ap2/CartMandate":
+                    signed_cart_mandate = data_part["payload"]
+                    logger.info(f"[ShoppingAgent] Received signed CartMandate from Merchant Agent: {signed_cart_mandate.get('id')}")
+
+                    # Merchant署名を検証
+                    merchant_signature = signed_cart_mandate.get("merchant_signature")
+                    if not merchant_signature:
+                        raise ValueError("CartMandate does not contain merchant_signature")
+
+                    # v2.common.models.Signatureに変換
+                    from v2.common.models import Signature
+                    signature_obj = Signature(
+                        algorithm=merchant_signature.get("algorithm", "ECDSA").upper(),
+                        value=merchant_signature["value"],
+                        public_key=merchant_signature["public_key"],
+                        signed_at=merchant_signature["signed_at"]
+                    )
+
+                    # 署名対象データ（merchant_signature除外）
+                    cart_data_for_verification = signed_cart_mandate.copy()
+                    cart_data_for_verification.pop("merchant_signature", None)
+                    cart_data_for_verification.pop("user_signature", None)
+
+                    # 署名検証
+                    is_valid = self.signature_manager.verify_mandate_signature(
+                        cart_data_for_verification,
+                        signature_obj
+                    )
+
+                    if not is_valid:
+                        raise ValueError("Merchant signature verification failed")
+
+                    logger.info(f"[ShoppingAgent] Merchant signature verified for CartMandate")
+                    return signed_cart_mandate
+
+                elif response_type == "ap2/Error":
+                    error_payload = data_part["payload"]
+                    raise ValueError(f"Merchant Agent error: {error_payload.get('error_message')}")
+                else:
+                    raise ValueError(f"Unexpected response type: {response_type}")
+            else:
+                raise ValueError("Invalid response format from Merchant Agent")
+
+        except httpx.HTTPError as e:
+            logger.error(f"[_request_cart_from_merchant_agent] HTTP error: {e}")
+            raise ValueError(f"Failed to request CartMandate from Merchant Agent: {e}")
+        except Exception as e:
+            logger.error(f"[_request_cart_from_merchant_agent] Error: {e}", exc_info=True)
+            raise
 
     async def _request_merchant_signature(self, cart_mandate: Dict[str, Any]) -> Dict[str, Any]:
         """
