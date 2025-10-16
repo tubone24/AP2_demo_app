@@ -21,116 +21,124 @@ from v2.common.database import DatabaseManager, ProductCRUD, User
 
 SAMPLE_PRODUCTS = [
     {
-        "sku": "SHOE-RUN-001",
-        "name": "ナイキ エアズーム ペガサス 40",
-        "description": "軽量で反発力のあるランニングシューズ。毎日のトレーニングに最適。",
-        "price": 1480000,  # 14,800円 (in cents)
-        "inventory_count": 50,
-        "metadata": {
-            "category": "Running Shoes",
-            "brand": "Nike",
-            "color": "Black/White",
-            "sizes": ["25.0", "25.5", "26.0", "26.5", "27.0", "27.5", "28.0"],
-            "image_url": "https://placehold.co/400x400/333/FFF?text=Nike+Pegasus"
-        }
-    },
-    {
-        "sku": "SHOE-RUN-002",
-        "name": "アディダス ウルトラブースト 22",
-        "description": "最高のクッション性とエネルギーリターンを提供する革新的なランニングシューズ。",
-        "price": 1980000,  # 19,800円
-        "inventory_count": 30,
-        "metadata": {
-            "category": "Running Shoes",
-            "brand": "Adidas",
-            "color": "Core Black",
-            "sizes": ["25.0", "25.5", "26.0", "26.5", "27.0", "27.5", "28.0"],
-            "image_url": "https://placehold.co/400x400/000/FFF?text=Adidas+Ultraboost"
-        }
-    },
-    {
-        "sku": "SHOE-TRAIL-001",
-        "name": "サロモン スピードクロス 5",
-        "description": "過酷なトレイルに対応する強力なグリップとプロテクション。",
-        "price": 1650000,  # 16,500円
-        "inventory_count": 20,
-        "metadata": {
-            "category": "Trail Running Shoes",
-            "brand": "Salomon",
-            "color": "Black/Red",
-            "sizes": ["25.5", "26.0", "26.5", "27.0", "27.5", "28.0"],
-            "image_url": "https://placehold.co/400x400/C00/FFF?text=Salomon+Speedcross"
-        }
-    },
-    {
-        "sku": "WEAR-SHIRT-001",
-        "name": "ナイキ ドライフィット ランニングシャツ",
-        "description": "速乾性に優れたテクニカルシャツ。長時間のランでも快適。",
-        "price": 450000,  # 4,500円
+        "sku": "MUGI-KEYCHAIN-001",
+        "name": "むぎぼーアクリルキーホルダー",
+        "description": "かわいいむぎぼーのアクリルキーホルダー。バッグやポーチに付けて持ち歩けます。",
+        "price": 80000,  # 800円 (in cents)
         "inventory_count": 100,
         "metadata": {
-            "category": "Running Apparel",
-            "brand": "Nike",
-            "color": "Navy Blue",
-            "sizes": ["S", "M", "L", "XL"],
-            "image_url": "https://placehold.co/400x400/00008B/FFF?text=Nike+Shirt"
+            "category": "Keychains",
+            "brand": "Mugibow Official",
+            "color": "Multicolor",
+            "size": "約5cm",
+            "material": "アクリル",
+            "image_url": "/assets/むぎぼーアクリルキーホルダー.png"
         }
     },
     {
-        "sku": "WEAR-SHORTS-001",
-        "name": "アディダス ランニングショーツ",
-        "description": "軽量で動きやすいランニングショーツ。リフレクター付き。",
-        "price": 380000,  # 3,800円
+        "sku": "MUGI-CLOCK-001",
+        "name": "むぎぼー時計",
+        "description": "むぎぼーデザインのかわいい壁掛け時計。お部屋を明るく彩ります。",
+        "price": 350000,  # 3,500円
+        "inventory_count": 30,
+        "metadata": {
+            "category": "Clocks",
+            "brand": "Mugibow Official",
+            "color": "White/Yellow",
+            "size": "直径25cm",
+            "type": "壁掛け時計",
+            "image_url": "/assets/むぎぼー時計.png"
+        }
+    },
+    {
+        "sku": "MUGI-CALENDAR-001",
+        "name": "むぎぼーカレンダー",
+        "description": "むぎぼーの1年カレンダー。毎月違うむぎぼーのイラストが楽しめます。",
+        "price": 150000,  # 1,500円
+        "inventory_count": 50,
+        "metadata": {
+            "category": "Calendars",
+            "brand": "Mugibow Official",
+            "color": "Full Color",
+            "size": "A4サイズ",
+            "year": "2025",
+            "image_url": "/assets/むぎぼーカレンダー.png"
+        }
+    },
+    {
+        "sku": "MUGI-MUG-001",
+        "name": "むぎぼーマグカップ",
+        "description": "むぎぼーがプリントされたかわいいマグカップ。毎日のティータイムが楽しくなります。",
+        "price": 120000,  # 1,200円
         "inventory_count": 80,
         "metadata": {
-            "category": "Running Apparel",
-            "brand": "Adidas",
-            "color": "Black",
-            "sizes": ["S", "M", "L", "XL"],
-            "image_url": "https://placehold.co/400x400/000/FFF?text=Adidas+Shorts"
+            "category": "Mug Cups",
+            "brand": "Mugibow Official",
+            "color": "White",
+            "capacity": "350ml",
+            "material": "陶器",
+            "image_url": "/assets/むぎぼーマグカップ.png"
         }
     },
     {
-        "sku": "ACC-WATCH-001",
-        "name": "ガーミン Forerunner 255",
-        "description": "GPS内蔵ランニングウォッチ。心拍計、トレーニング分析機能搭載。",
-        "price": 4980000,  # 49,800円
-        "inventory_count": 15,
+        "sku": "MUGI-STICKER-001",
+        "name": "むぎぼーステッカー",
+        "description": "むぎぼーのステッカーセット（5枚入り）。ノートやスマホケースに貼れます。",
+        "price": 50000,  # 500円
+        "inventory_count": 200,
         "metadata": {
-            "category": "Running Accessories",
-            "brand": "Garmin",
-            "color": "Black",
-            "features": ["GPS", "Heart Rate Monitor", "Training Analysis", "Music Storage"],
-            "image_url": "https://placehold.co/400x400/008/FFF?text=Garmin+255"
+            "category": "Stickers",
+            "brand": "Mugibow Official",
+            "color": "Multicolor",
+            "pack_size": 5,
+            "size": "各約5cm",
+            "material": "耐水ステッカー",
+            "image_url": "/assets/むぎぼーステッカー.png"
         }
     },
     {
-        "sku": "ACC-HYDRATION-001",
-        "name": "サロモン ハイドレーションパック",
-        "description": "500mlボトル2本付き。長距離ランに最適なハイドレーションパック。",
-        "price": 980000,  # 9,800円
-        "inventory_count": 25,
-        "metadata": {
-            "category": "Running Accessories",
-            "brand": "Salomon",
-            "color": "Black/Blue",
-            "capacity": "5L",
-            "image_url": "https://placehold.co/400x400/00F/FFF?text=Hydration+Pack"
-        }
-    },
-    {
-        "sku": "ACC-SOCKS-001",
-        "name": "ナイキ エリート ランニングソックス (3足セット)",
-        "description": "クッション性とサポート性を兼ね備えたプレミアムソックス。",
+        "sku": "MUGI-TSHIRT-001",
+        "name": "むぎぼーTシャツ",
+        "description": "むぎぼーがプリントされたコットンTシャツ。普段着にぴったり。",
         "price": 280000,  # 2,800円
-        "inventory_count": 150,
+        "inventory_count": 60,
         "metadata": {
-            "category": "Running Accessories",
-            "brand": "Nike",
-            "color": "Assorted",
-            "pack_size": 3,
-            "sizes": ["M", "L"],
-            "image_url": "https://placehold.co/400x400/888/FFF?text=Nike+Socks"
+            "category": "Mugibow Apparel",
+            "brand": "Mugibow Official",
+            "color": "White",
+            "sizes": ["S", "M", "L", "XL"],
+            "material": "コットン100%",
+            "image_url": "https://placehold.co/400x400/FFF/FFD700?text=むぎぼーTシャツ"
+        }
+    },
+    {
+        "sku": "MUGI-TOTE-001",
+        "name": "むぎぼートートバッグ",
+        "description": "むぎぼーがプリントされた大きめトートバッグ。お買い物やお出かけに便利。",
+        "price": 180000,  # 1,800円
+        "inventory_count": 70,
+        "metadata": {
+            "category": "Mugibow Bags",
+            "brand": "Mugibow Official",
+            "color": "Natural",
+            "size": "縦40cm×横35cm",
+            "material": "キャンバス",
+            "image_url": "https://placehold.co/400x400/F5F5DC/FFD700?text=むぎぼートート"
+        }
+    },
+    {
+        "sku": "MUGI-POUCH-001",
+        "name": "むぎぼーポーチ",
+        "description": "むぎぼー柄のかわいいポーチ。小物入れやペンケースとして使えます。",
+        "price": 95000,  # 950円
+        "inventory_count": 120,
+        "metadata": {
+            "category": "Mugibow Pouches",
+            "brand": "Mugibow Official",
+            "color": "Yellow/White",
+            "size": "幅20cm×高さ12cm",
+            "material": "ポリエステル",
+            "image_url": "https://placehold.co/400x400/FFD700/FFF?text=むぎぼーポーチ"
         }
     },
 ]

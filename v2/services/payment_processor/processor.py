@@ -197,6 +197,35 @@ class PaymentProcessorService(BaseAgent):
                 logger.error(f"[refund_transaction] Error: {e}", exc_info=True)
                 raise HTTPException(status_code=400, detail=str(e))
 
+        @self.app.get("/receipts/{transaction_id}.pdf")
+        async def get_receipt_pdf(transaction_id: str):
+            """
+            GET /receipts/{transaction_id}.pdf - 領収書PDFダウンロード
+
+            領収書PDFファイルを返却する
+            """
+            try:
+                from fastapi.responses import FileResponse
+
+                receipts_dir = Path("/app/v2/data/receipts")
+                receipt_file_path = receipts_dir / f"{transaction_id}.pdf"
+
+                if not receipt_file_path.exists():
+                    logger.warning(f"[get_receipt_pdf] Receipt not found: {receipt_file_path}")
+                    raise HTTPException(status_code=404, detail="Receipt not found")
+
+                return FileResponse(
+                    path=str(receipt_file_path),
+                    media_type="application/pdf",
+                    filename=f"receipt_{transaction_id}.pdf"
+                )
+
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"[get_receipt_pdf] Error: {e}", exc_info=True)
+                raise HTTPException(status_code=500, detail=str(e))
+
     # ========================================
     # A2Aメッセージハンドラー
     # ========================================
@@ -396,14 +425,114 @@ class PaymentProcessorService(BaseAgent):
         payment_mandate: Dict[str, Any]
     ) -> str:
         """
-        レシート生成
+        レシート生成（実際のPDF生成）
 
-        簡易版：レシートURLを返す
-        本番環境では既存のreceipt_generator.pyを使用してPDF生成
+        v2/common/receipt_generator.pyを使用してPDF領収書を生成し、
+        ファイルシステムに保存して、アクセス可能なURLを返す
         """
-        # レシートURL（モック）
-        receipt_url = f"https://receipts.ap2-demo.com/{transaction_id}.pdf"
+        try:
+            # receipt_generatorをインポート
+            from v2.common.receipt_generator import generate_receipt_pdf
 
-        logger.info(f"[PaymentProcessor] Generated receipt: {receipt_url}")
+            # トランザクション結果を取得（_process_payment_mockの結果から）
+            async with self.db_manager.get_session() as session:
+                transaction = await TransactionCRUD.get_by_id(session, transaction_id)
+                if not transaction:
+                    logger.warning(f"[PaymentProcessor] Transaction not found for receipt generation: {transaction_id}")
+                    # フォールバック: モックURL
+                    return f"https://receipts.ap2-demo.com/{transaction_id}.pdf"
 
-        return receipt_url
+                transaction_dict = transaction.to_dict()
+
+                # トランザクションイベントから決済結果を取得
+                events = transaction_dict.get("events", [])
+                payment_result = None
+                for event in events:
+                    if event.get("type") == "payment_processed":
+                        payment_result = event.get("result", {})
+                        break
+
+                if not payment_result:
+                    logger.warning(f"[PaymentProcessor] Payment result not found in transaction events")
+                    return f"https://receipts.ap2-demo.com/{transaction_id}.pdf"
+
+            # CartMandateを取得（payment_mandateにcart_mandate_idがある）
+            cart_mandate_id = payment_mandate.get("cart_mandate_id")
+            cart_mandate = None
+            if cart_mandate_id:
+                async with self.db_manager.get_session() as session:
+                    from v2.common.database import MandateCRUD
+                    import json
+                    cart_mandate_record = await MandateCRUD.get_by_id(session, cart_mandate_id)
+                    if cart_mandate_record:
+                        # payloadがJSON文字列の場合はパース
+                        if isinstance(cart_mandate_record.payload, str):
+                            cart_mandate = json.loads(cart_mandate_record.payload)
+                        else:
+                            cart_mandate = cart_mandate_record.payload
+
+            # CartMandateが取得できない場合は簡易版を作成
+            if not cart_mandate:
+                logger.warning(f"[PaymentProcessor] CartMandate not found, creating simplified version")
+                amount = payment_mandate.get("amount", {})
+                cart_mandate = {
+                    "id": cart_mandate_id or "unknown",
+                    "merchant_name": "Demo Merchant",
+                    "merchant_id": payment_mandate.get("payee_id", "unknown"),
+                    "items": [
+                        {
+                            "name": "商品",
+                            "quantity": 1,
+                            "unit_price": amount,
+                            "total_price": amount
+                        }
+                    ],
+                    "subtotal": amount,
+                    "tax": {"value": "0", "currency": amount.get("currency", "JPY")},
+                    "shipping": {
+                        "cost": {"value": "0", "currency": amount.get("currency", "JPY")}
+                    },
+                    "total": amount
+                }
+
+            # トランザクション結果を整形（receipt_generator.generate_receipt_pdf用）
+            transaction_result = {
+                "id": transaction_id,
+                "status": payment_result.get("status", "captured"),
+                "authorized_at": payment_result.get("authorized_at", "N/A"),
+                "captured_at": payment_result.get("captured_at", "N/A")
+            }
+
+            # ユーザー名を取得（payer_idから簡易的に取得、または固定値）
+            payer_id = payment_mandate.get("payer_id", "user_demo_001")
+            user_name = "デモユーザー"  # 簡易版：固定値
+            # TODO: user_idからユーザー名を取得する仕組みを実装
+
+            # PDFを生成
+            pdf_buffer = generate_receipt_pdf(
+                transaction_result=transaction_result,
+                cart_mandate=cart_mandate,
+                payment_mandate=payment_mandate,
+                user_name=user_name
+            )
+
+            # PDFをファイルシステムに保存
+            import os
+            receipts_dir = Path("/app/v2/data/receipts")
+            receipts_dir.mkdir(parents=True, exist_ok=True)
+
+            receipt_file_path = receipts_dir / f"{transaction_id}.pdf"
+            with open(receipt_file_path, "wb") as f:
+                f.write(pdf_buffer.getvalue())
+
+            logger.info(f"[PaymentProcessor] Generated receipt PDF: {receipt_file_path}")
+
+            # URLを生成（Docker環境でPayment Processorのエンドポイント経由でアクセス）
+            receipt_url = f"http://payment_processor:8004/receipts/{transaction_id}.pdf"
+
+            return receipt_url
+
+        except Exception as e:
+            logger.error(f"[_generate_receipt] Failed to generate PDF receipt: {e}", exc_info=True)
+            # フォールバック: モックURL
+            return f"https://receipts.ap2-demo.com/{transaction_id}.pdf"

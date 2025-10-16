@@ -171,7 +171,7 @@ export default function ChatPage() {
                     こんにちは！AP2 Shopping Agentです
                   </p>
                   <p className="text-sm">
-                    何をお探しですか？例えば「ランニングシューズが欲しい」のように教えてください。
+                    何をお探しですか？例えば「むぎぼーグッズが欲しい」のように教えてください。
                   </p>
                 </div>
               )}

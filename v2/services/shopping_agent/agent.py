@@ -34,6 +34,7 @@ from v2.common.models import (
     ProductSearchRequest,
 )
 from v2.common.database import DatabaseManager, MandateCRUD, TransactionCRUD
+from v2.common.risk_assessment import RiskAssessmentEngine
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +90,9 @@ class ShoppingAgent(BaseAgent):
 
         # セッション管理（簡易版 - インメモリ）
         self.sessions: Dict[str, Dict[str, Any]] = {}
+
+        # リスク評価エンジン
+        self.risk_engine = RiskAssessmentEngine()
 
         logger.info(f"[{self.agent_name}] Initialized")
 
@@ -278,7 +282,7 @@ class ShoppingAgent(BaseAgent):
                 await asyncio.sleep(0.3)
                 yield StreamEvent(
                     type="agent_text",
-                    content="何をお探しですか？例えば「ランニングシューズが欲しい」のように教えてください。"
+                    content="何をお探しですか？例えば「むぎぼーのグッズが欲しい」のように教えてください。"
                 )
                 session["step"] = "ask_intent"
                 return
@@ -330,7 +334,7 @@ class ShoppingAgent(BaseAgent):
                 await asyncio.sleep(0.3)
                 yield StreamEvent(
                     type="agent_text",
-                    content="カテゴリーを指定しますか？（例：Running Shoes, Sports Apparel）\n指定しない場合は「スキップ」と入力してください。"
+                    content="カテゴリーを指定しますか？（例：カレンダー）\n指定しない場合は「スキップ」と入力してください。"
                 )
                 session["step"] = "ask_categories"
             else:
@@ -360,7 +364,7 @@ class ShoppingAgent(BaseAgent):
             await asyncio.sleep(0.3)
             yield StreamEvent(
                 type="agent_text",
-                content="ブランドを指定しますか？（例：Nike, Adidas）\n指定しない場合は「スキップ」と入力してください。"
+                content="ブランドを指定しますか？\n指定しない場合は「スキップ」と入力してください。"
             )
             session["step"] = "ask_brands"
             return
@@ -1073,11 +1077,12 @@ class ShoppingAgent(BaseAgent):
 
     def _create_payment_mandate(self, session: Dict[str, Any]) -> Dict[str, Any]:
         """
-        PaymentMandateを作成
+        PaymentMandateを作成（リスク評価統合版）
 
         AP2仕様準拠（Step 19）：
         - トークン化された支払い方法を使用
         - セキュアトークンをPaymentMandateに含める
+        - リスク評価を実施してリスクスコアと不正指標を追加
         """
         now = datetime.now(timezone.utc)
         product = session.get("selected_product", {})
@@ -1090,6 +1095,7 @@ class ShoppingAgent(BaseAgent):
             logger.error("[ShoppingAgent] No tokenized payment method available")
             raise ValueError("No tokenized payment method available")
 
+        # PaymentMandateを作成（リスク評価前の基本情報）
         payment_mandate = {
             "id": f"payment_{uuid.uuid4().hex[:8]}",
             "type": "PaymentMandate",
@@ -1106,12 +1112,56 @@ class ShoppingAgent(BaseAgent):
                 "type": tokenized_payment_method.get("type", "card"),
                 "token": tokenized_payment_method["token"],  # セキュアトークン（AP2 Step 17-18でトークン化済み）
                 "last4": tokenized_payment_method.get("last4", "0000"),
-                "brand": tokenized_payment_method.get("brand", "unknown")
+                "brand": tokenized_payment_method.get("brand", "unknown"),
+                "expiry_month": tokenized_payment_method.get("expiry_month"),
+                "expiry_year": tokenized_payment_method.get("expiry_year")
             },
+            "transaction_type": "human_not_present",  # CNP取引
+            "agent_involved": True,  # Shopping Agent経由
             "created_at": now.isoformat().replace('+00:00', 'Z')
         }
 
-        logger.info(f"[ShoppingAgent] PaymentMandate created: amount={product['price']}, payment_method={tokenized_payment_method.get('brand')} ****{tokenized_payment_method.get('last4')}, token={tokenized_payment_method['token'][:20]}...")
+        # リスク評価を実施
+        try:
+            logger.info("[ShoppingAgent] Performing risk assessment...")
+            risk_result = self.risk_engine.assess_payment_mandate(
+                payment_mandate=payment_mandate,
+                cart_mandate=session.get("cart_mandate"),
+                intent_mandate=session.get("intent_mandate")
+            )
+
+            # リスク評価結果をPaymentMandateに追加
+            payment_mandate["risk_score"] = risk_result.risk_score
+            payment_mandate["fraud_indicators"] = risk_result.fraud_indicators
+
+            logger.info(
+                f"[ShoppingAgent] Risk assessment completed: "
+                f"score={risk_result.risk_score}, "
+                f"recommendation={risk_result.recommendation}, "
+                f"indicators={risk_result.fraud_indicators}"
+            )
+
+            # 高リスクの場合は警告ログ
+            if risk_result.recommendation == "decline":
+                logger.warning(
+                    f"[ShoppingAgent] High-risk transaction detected! "
+                    f"score={risk_result.risk_score}, "
+                    f"recommendation={risk_result.recommendation}"
+                )
+
+        except Exception as e:
+            logger.error(f"[ShoppingAgent] Risk assessment failed: {e}", exc_info=True)
+            # リスク評価失敗時はデフォルト値を設定
+            payment_mandate["risk_score"] = 50  # 中リスク
+            payment_mandate["fraud_indicators"] = ["risk_assessment_failed"]
+
+        logger.info(
+            f"[ShoppingAgent] PaymentMandate created: "
+            f"amount={product['price']}, "
+            f"payment_method={tokenized_payment_method.get('brand')} ****{tokenized_payment_method.get('last4')}, "
+            f"token={tokenized_payment_method['token'][:20]}..., "
+            f"risk_score={payment_mandate.get('risk_score')}"
+        )
 
         return payment_mandate
 
