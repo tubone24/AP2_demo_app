@@ -54,7 +54,7 @@ class CredentialProviderService(BaseAgent):
         # Device Attestation Manager（既存のap2_crypto.pyを使用）
         self.attestation_manager = DeviceAttestationManager(self.key_manager)
 
-        # 支払い方法データ（簡易版 - インメモリ）
+        # 支払い方法データ（インメモリ）
         self.payment_methods: Dict[str, List[Dict[str, Any]]] = {
             "user_demo_001": [
                 {
@@ -81,6 +81,10 @@ class CredentialProviderService(BaseAgent):
                 }
             ]
         }
+
+        # トークンストア（AP2仕様準拠：トークン→支払い方法のマッピング）
+        # 本番環境ではRedis等のKVストアやデータベースを使用
+        self.token_store: Dict[str, Dict[str, Any]] = {}
 
         logger.info(f"[{self.agent_name}] Initialized")
 
@@ -414,24 +418,27 @@ class CredentialProviderService(BaseAgent):
                     )
 
                 # 一時トークン生成（AP2トランザクション用）
-                # 実際の実装では、暗号学的に安全なトークンを生成し、有効期限を設定
+                # 暗号学的に安全なトークンを生成し、有効期限を設定
                 from datetime import timedelta
+                import secrets
                 now = datetime.now(timezone.utc)
                 expires_at = now + timedelta(minutes=15)  # 15分間有効
 
-                # トークン生成（簡易版）
-                token_data = {
+                # 暗号学的に安全なトークン生成
+                # secrets.token_urlsafe()を使用（cryptographically strong random）
+                random_bytes = secrets.token_urlsafe(32)  # 32バイト = 256ビット
+                secure_token = f"tok_{uuid.uuid4().hex[:8]}_{random_bytes[:24]}"
+
+                # トークンストアに保存（AP2仕様準拠）
+                self.token_store[secure_token] = {
                     "user_id": user_id,
                     "payment_method_id": payment_method_id,
+                    "payment_method": payment_method,
                     "issued_at": now.isoformat(),
                     "expires_at": expires_at.isoformat()
                 }
 
-                import base64
-                token_b64 = base64.b64encode(json.dumps(token_data).encode()).decode()
-                secure_token = f"tok_{uuid.uuid4().hex[:8]}_{token_b64[:16]}"
-
-                logger.info(f"[tokenize_payment_method] Generated token for payment method: {payment_method_id}")
+                logger.info(f"[tokenize_payment_method] Generated secure token for payment method: {payment_method_id}")
 
                 return {
                     "token": secure_token,
@@ -482,27 +489,42 @@ class CredentialProviderService(BaseAgent):
 
                 logger.info(f"[verify_credentials] Verifying token for payer: {payer_id}")
 
-                # トークンをパース（簡易版：Base64デコード）
-                # 実際のトークン形式: "tok_{uuid}_{base64}"
+                # トークン形式チェック
                 if not token.startswith("tok_"):
                     raise ValueError(f"Invalid token format: {token[:20]}")
 
-                # トークンから支払い方法IDを取得（簡易版）
-                # 実際の実装では、トークンストアからマッピングを取得
-                # ここではpayer_idから対応する支払い方法を検索
-                user_payment_methods = self.payment_methods.get(payer_id, [])
-                if not user_payment_methods:
-                    logger.error(f"[verify_credentials] No payment methods found for user: {payer_id}")
+                # トークンストアから支払い方法を取得（AP2仕様準拠）
+                token_data = self.token_store.get(token)
+                if not token_data:
+                    logger.error(f"[verify_credentials] Token not found in store: {token[:20]}...")
                     return {
                         "verified": False,
-                        "error": "No payment methods registered for user"
+                        "error": "Token not found or expired"
                     }
 
-                # 最初の支払い方法を使用（簡易版）
-                # 実際の実装では、トークンから正確な支払い方法を特定
-                payment_method = user_payment_methods[0]
+                # トークン有効期限チェック
+                expires_at = datetime.fromisoformat(token_data["expires_at"])
+                if datetime.now(timezone.utc) > expires_at:
+                    logger.warning(f"[verify_credentials] Token expired: {token[:20]}...")
+                    # 期限切れトークンを削除
+                    del self.token_store[token]
+                    return {
+                        "verified": False,
+                        "error": "Token expired"
+                    }
 
-                logger.info(f"[verify_credentials] Token verified: payment_method_id={payment_method['id']}")
+                # トークンのユーザーIDとpayer_idの一致チェック
+                if token_data["user_id"] != payer_id:
+                    logger.error(f"[verify_credentials] User ID mismatch: token={token_data['user_id']}, payer={payer_id}")
+                    return {
+                        "verified": False,
+                        "error": "User ID mismatch"
+                    }
+
+                # トークンから正確な支払い方法を取得
+                payment_method = token_data["payment_method"]
+
+                logger.info(f"[verify_credentials] Token verified: payment_method_id={payment_method['id']}, user_id={payer_id}")
 
                 return {
                     "verified": True,
@@ -568,25 +590,22 @@ class CredentialProviderService(BaseAgent):
 
     def _generate_token(self, payment_mandate: Dict[str, Any], attestation: Dict[str, Any]) -> str:
         """
-        トークン発行
+        認証トークン発行（WebAuthn attestation検証後）
 
-        簡易版：UUIDベースのトークン
-        本番環境ではJWT等を使用
+        AP2仕様準拠：
+        - 暗号学的に安全なトークンを生成
+        - トークンは一時的（有効期限付き）
         """
-        token_data = {
-            "payment_mandate_id": payment_mandate.get("id"),
-            "user_id": payment_mandate.get("payer_id"),
-            "attestation_type": attestation.get("attestation_type", "passkey"),
-            "issued_at": datetime.now(timezone.utc).isoformat()
-        }
+        import secrets
 
-        # 簡易トークン（Base64エンコードされたJSON）
-        import base64
-        token = base64.b64encode(json.dumps(token_data).encode()).decode()
+        # 暗号学的に安全なトークン生成
+        # secrets.token_urlsafe()を使用（cryptographically strong random）
+        random_bytes = secrets.token_urlsafe(32)  # 32バイト = 256ビット
+        secure_token = f"cred_token_{uuid.uuid4().hex[:8]}_{random_bytes[:24]}"
 
-        logger.info(f"[CredentialProvider] Generated token for user: {payment_mandate.get('payer_id')}")
+        logger.info(f"[CredentialProvider] Generated attestation token for user: {payment_mandate.get('payer_id')}")
 
-        return f"cred_token_{token[:32]}"
+        return secure_token
 
     async def _save_attestation(
         self,

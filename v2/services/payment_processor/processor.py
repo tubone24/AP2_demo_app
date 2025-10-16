@@ -118,7 +118,7 @@ class PaymentProcessorService(BaseAgent):
 
                 # 5. レスポンス生成
                 if result["status"] == "captured":
-                    # レシート生成（簡易版）
+                    # レシート生成（PDF形式）
                     receipt_url = await self._generate_receipt(transaction_id, payment_mandate)
 
                     return ProcessPaymentResponse(

@@ -165,11 +165,15 @@ class ShoppingAgent(BaseAgent):
         @self.app.get("/products")
         async def get_products(query: str = "", limit: int = 10):
             """
-            GET /products - 商品検索（Merchant Agentへプロキシ）
+            GET /products - 商品検索（デバッグ用エンドポイント）
+
+            注意: このエンドポイントは開発/テスト用です。
+            実際のAP2フローでは、_search_products_via_merchant_agent()メソッドを使用して
+            A2A通信でMerchant Agentに商品検索を依頼します。
             """
             try:
-                # Merchant Agentに商品検索をA2A経由で依頼
-                # （簡易版：直接HTTPで問い合わせ）
+                # デバッグ用：直接Merchant Agentの/searchエンドポイントにHTTPアクセス
+                # 本来のフローでは使用されません
                 response = await self.http_client.get(
                     f"{self.merchant_agent_url}/search",
                     params={"query": query, "limit": limit}
@@ -872,9 +876,9 @@ class ShoppingAgent(BaseAgent):
                 )
                 await asyncio.sleep(0.5)
 
-                # WebAuthn challengeを生成（簡易版）
+                # WebAuthn challengeを生成（暗号学的に安全）
                 import secrets
-                challenge = secrets.token_urlsafe(32)
+                challenge = secrets.token_urlsafe(32)  # 32バイト = 256ビット
                 session["webauthn_challenge"] = challenge
 
                 yield StreamEvent(
@@ -955,7 +959,7 @@ class ShoppingAgent(BaseAgent):
 
                             yield StreamEvent(
                                 type="agent_text",
-                                content=f"✅ 決済が完了しました！\n\n取引ID: {transaction_id}\n商品: {session['selected_product']['name']}\n金額: ¥{session['selected_product']['price']:,}\n\n{receipt_url}\n\nご購入ありがとうございました！"
+                                content=f"✅ 決済が完了しました！\n\n取引ID: {transaction_id}\n商品: {session['selected_product']['name']}\n金額: ¥{session['selected_product']['price'] // 100:,}\n\n{receipt_url}\n\nご購入ありがとうございました！"
                             )
 
                             # セッションをリセット
