@@ -62,20 +62,38 @@ export function SignaturePromptModal({
   const renderMandateDetails = () => {
     switch (mandate_type) {
       case "intent":
-        const intentMandate = mandate as IntentMandate;
+        const intentMandate = mandate as any; // バックエンドの実際の構造に合わせる
+        const constraints = intentMandate.constraints || {};
+        const maxAmount = constraints.max_amount || {};
         return (
           <div className="space-y-2">
+            {intentMandate.intent && (
+              <div className="flex justify-between">
+                <span className="text-sm text-muted-foreground">購入意図</span>
+                <span className="text-sm font-medium">
+                  {intentMandate.intent}
+                </span>
+              </div>
+            )}
             <div className="flex justify-between">
               <span className="text-sm text-muted-foreground">最大金額</span>
               <span className="text-sm font-medium">
-                {intentMandate.max_amount?.currency} {parseFloat(intentMandate.max_amount?.value || "0").toLocaleString()}
+                ¥{parseFloat(maxAmount.value || "0").toLocaleString()}
               </span>
             </div>
-            {intentMandate.allowed_merchants && intentMandate.allowed_merchants.length > 0 && (
+            {constraints.categories && constraints.categories.length > 0 && (
               <div className="flex justify-between">
-                <span className="text-sm text-muted-foreground">許可店舗</span>
+                <span className="text-sm text-muted-foreground">カテゴリー</span>
                 <span className="text-sm font-medium">
-                  {intentMandate.allowed_merchants.join(", ")}
+                  {constraints.categories.join(", ")}
+                </span>
+              </div>
+            )}
+            {constraints.brands && constraints.brands.length > 0 && (
+              <div className="flex justify-between">
+                <span className="text-sm text-muted-foreground">ブランド</span>
+                <span className="text-sm font-medium">
+                  {constraints.brands.join(", ")}
                 </span>
               </div>
             )}
@@ -91,17 +109,18 @@ export function SignaturePromptModal({
         );
 
       case "cart":
-        const cartMandate = mandate as CartMandate;
+        const cartMandate = mandate as any; // バックエンドの実際の構造に合わせる
+        const total = cartMandate.total || {}; // バックエンドでは "total" キーを使用
         return (
           <div className="space-y-3">
             <div className="flex justify-between">
               <span className="text-sm text-muted-foreground">店舗</span>
-              <span className="text-sm font-medium">{cartMandate.merchant_id}</span>
+              <span className="text-sm font-medium">{cartMandate.merchant_id || cartMandate.merchant_name}</span>
             </div>
             <Separator />
             <div className="space-y-2">
               <span className="text-sm font-semibold">カート内容</span>
-              {cartMandate.items?.map((item, index) => (
+              {cartMandate.items?.map((item: any, index: number) => (
                 <div key={index} className="flex justify-between text-sm">
                   <span className="text-muted-foreground">
                     {item.name} x {item.quantity}
@@ -116,7 +135,7 @@ export function SignaturePromptModal({
             <div className="flex justify-between font-semibold">
               <span>合計</span>
               <span className="text-lg">
-                {cartMandate.total_amount?.currency} {parseFloat(cartMandate.total_amount?.value || "0").toLocaleString()}
+                {total.currency} ¥{parseFloat(total.value || "0").toLocaleString()}
               </span>
             </div>
           </div>
