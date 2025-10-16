@@ -59,3 +59,4 @@ keys/*.pem
 keys/*.key
 keys/*.enc
 !keys/.gitkeep
+data/receipts/txn_*.pdf
