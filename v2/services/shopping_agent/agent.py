@@ -35,6 +35,7 @@ from v2.common.models import (
 )
 from v2.common.database import DatabaseManager, MandateCRUD, TransactionCRUD
 from v2.common.risk_assessment import RiskAssessmentEngine
+from v2.common.crypto import WebAuthnChallengeManager
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +95,9 @@ class ShoppingAgent(BaseAgent):
         # リスク評価エンジン
         self.risk_engine = RiskAssessmentEngine()
 
+        # WebAuthn challenge管理（Intent/Consent署名用）
+        self.webauthn_challenge_manager = WebAuthnChallengeManager(challenge_ttl_seconds=60)
+
         logger.info(f"[{self.agent_name}] Initialized")
 
     def register_a2a_handlers(self):
@@ -113,6 +117,278 @@ class ShoppingAgent(BaseAgent):
         """
         Shopping Agent固有エンドポイントの登録
         """
+
+        @self.app.post("/intent/challenge")
+        async def generate_intent_challenge(request: Dict[str, Any]):
+            """
+            POST /intent/challenge - Intent署名用のWebAuthn challengeを生成
+
+            専門家の指摘に対応：IntentMandateはユーザーPasskey署名を使用する
+
+            リクエスト:
+            {
+                "user_id": "user_demo_001",
+                "intent_data": { ...IntentMandate基本情報... }
+            }
+
+            レスポンス:
+            {
+                "challenge_id": "ch_abc123...",
+                "challenge": "base64url_encoded_challenge",
+                "intent_data": { ...署名対象データ... }
+            }
+            """
+            try:
+                user_id = request.get("user_id", "user_demo_001")
+                intent_data = request.get("intent_data", {})
+
+                # WebAuthn challengeを生成
+                challenge_info = self.webauthn_challenge_manager.generate_challenge(
+                    user_id=user_id,
+                    context="intent_mandate_signature"
+                )
+
+                logger.info(f"[ShoppingAgent] Generated challenge for Intent signature: user={user_id}, challenge_id={challenge_info['challenge_id']}")
+
+                return {
+                    "challenge_id": challenge_info["challenge_id"],
+                    "challenge": challenge_info["challenge"],
+                    "intent_data": intent_data,
+                    "rp_id": "localhost",  # デモ環境
+                    "timeout": 60000  # 60秒
+                }
+
+            except Exception as e:
+                logger.error(f"[generate_intent_challenge] Error: {e}", exc_info=True)
+                raise HTTPException(status_code=500, detail=f"Failed to generate challenge: {e}")
+
+        @self.app.post("/intent/submit")
+        async def submit_signed_intent_mandate(request: Dict[str, Any]):
+            """
+            POST /intent/submit - Passkey署名付きIntentMandateを受け取る
+
+            専門家の指摘に対応：IntentMandateはフロントエンドから送信されたPasskey署名を使用
+
+            リクエスト:
+            {
+                "intent_mandate": { ...IntentMandate基本情報... },
+                "passkey_signature": {
+                    "challenge_id": "ch_abc123...",
+                    "challenge": "base64url...",
+                    "clientDataJSON": "base64url...",
+                    "authenticatorData": "base64url...",
+                    "signature": "base64url...",
+                    "userHandle": "base64url..."
+                }
+            }
+
+            レスポンス:
+            {
+                "status": "success",
+                "intent_mandate_id": "intent_abc123"
+            }
+            """
+            try:
+                intent_mandate = request.get("intent_mandate", {})
+                passkey_signature = request.get("passkey_signature", {})
+
+                if not intent_mandate:
+                    raise HTTPException(status_code=400, detail="intent_mandate is required")
+
+                if not passkey_signature:
+                    raise HTTPException(status_code=400, detail="passkey_signature is required")
+
+                # challengeを検証・消費
+                challenge_id = passkey_signature.get("challenge_id")
+                challenge = passkey_signature.get("challenge")
+                user_id = intent_mandate.get("user_id", "user_demo_001")
+
+                is_valid_challenge = self.webauthn_challenge_manager.verify_and_consume_challenge(
+                    challenge_id=challenge_id,
+                    challenge=challenge,
+                    user_id=user_id
+                )
+
+                if not is_valid_challenge:
+                    raise HTTPException(status_code=400, detail="Invalid or expired challenge")
+
+                # IntentMandateにPasskey署名を追加
+                intent_mandate["passkey_signature"] = passkey_signature
+
+                # データベースに保存（A2A通信で使用）
+                async with self.db_manager.get_session() as session:
+                    await MandateCRUD.create(session, {
+                        "id": intent_mandate["id"],
+                        "type": "Intent",
+                        "status": "signed",
+                        "payload": intent_mandate,
+                        "issuer": user_id
+                    })
+
+                logger.info(f"[ShoppingAgent] IntentMandate with Passkey signature saved: id={intent_mandate['id']}, user={user_id}")
+
+                return {
+                    "status": "success",
+                    "intent_mandate_id": intent_mandate["id"]
+                }
+
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"[submit_signed_intent_mandate] Error: {e}", exc_info=True)
+                raise HTTPException(status_code=500, detail=f"Failed to submit IntentMandate: {e}")
+
+        @self.app.post("/consent/challenge")
+        async def generate_consent_challenge(request: Dict[str, Any]):
+            """
+            POST /consent/challenge - Consent署名用のWebAuthn challengeを生成
+
+            専門家の指摘対応：ConsentメッセージもユーザーPasskey署名を使用する
+
+            リクエスト:
+            {
+                "user_id": "user_demo_001",
+                "cart_mandate_id": "cart_abc123",
+                "intent_message_id": "msg_abc123"
+            }
+
+            レスポンス:
+            {
+                "challenge_id": "ch_xyz789...",
+                "challenge": "base64url_encoded_challenge",
+                "consent_data": { ...署名対象データ... }
+            }
+            """
+            try:
+                user_id = request.get("user_id", "user_demo_001")
+                cart_mandate_id = request.get("cart_mandate_id")
+                intent_message_id = request.get("intent_message_id")
+
+                if not cart_mandate_id:
+                    raise HTTPException(status_code=400, detail="cart_mandate_id is required")
+
+                if not intent_message_id:
+                    raise HTTPException(status_code=400, detail="intent_message_id is required")
+
+                # WebAuthn challengeを生成
+                challenge_info = self.webauthn_challenge_manager.generate_challenge(
+                    user_id=user_id,
+                    context="consent_signature"
+                )
+
+                logger.info(f"[ShoppingAgent] Generated challenge for Consent signature: user={user_id}, challenge_id={challenge_info['challenge_id']}")
+
+                return {
+                    "challenge_id": challenge_info["challenge_id"],
+                    "challenge": challenge_info["challenge"],
+                    "consent_data": {
+                        "cart_mandate_id": cart_mandate_id,
+                        "intent_message_id": intent_message_id,
+                        "user_id": user_id
+                    },
+                    "rp_id": "localhost",  # デモ環境
+                    "timeout": 60000  # 60秒
+                }
+
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"[generate_consent_challenge] Error: {e}", exc_info=True)
+                raise HTTPException(status_code=500, detail=f"Failed to generate consent challenge: {e}")
+
+        @self.app.post("/consent/submit")
+        async def submit_signed_consent(request: Dict[str, Any]):
+            """
+            POST /consent/submit - Passkey署名付きConsentメッセージを受け取る
+
+            専門家の指摘対応：ConsentはIntentとCartの両方への参照を持ち、Passkey署名される
+
+            リクエスト:
+            {
+                "consent": {
+                    "consent_id": "consent_abc123",
+                    "cart_mandate_id": "cart_abc123",
+                    "intent_message_id": "msg_abc123",
+                    "user_id": "user_demo_001",
+                    "approved": true,
+                    "timestamp": "2025-10-17T12:34:56Z"
+                },
+                "passkey_signature": {
+                    "challenge_id": "ch_xyz789...",
+                    "challenge": "base64url...",
+                    "clientDataJSON": "base64url...",
+                    "authenticatorData": "base64url...",
+                    "signature": "base64url...",
+                    "userHandle": "base64url..."
+                }
+            }
+
+            レスポンス:
+            {
+                "status": "success",
+                "consent_id": "consent_abc123"
+            }
+            """
+            try:
+                consent = request.get("consent", {})
+                passkey_signature = request.get("passkey_signature", {})
+
+                if not consent:
+                    raise HTTPException(status_code=400, detail="consent is required")
+
+                if not passkey_signature:
+                    raise HTTPException(status_code=400, detail="passkey_signature is required")
+
+                # challengeを検証・消費
+                challenge_id = passkey_signature.get("challenge_id")
+                challenge = passkey_signature.get("challenge")
+                user_id = consent.get("user_id", "user_demo_001")
+
+                is_valid_challenge = self.webauthn_challenge_manager.verify_and_consume_challenge(
+                    challenge_id=challenge_id,
+                    challenge=challenge,
+                    user_id=user_id
+                )
+
+                if not is_valid_challenge:
+                    raise HTTPException(status_code=400, detail="Invalid or expired challenge")
+
+                # ConsentにPasskey署名を追加
+                consent["passkey_signature"] = passkey_signature
+
+                # 署名対象データのハッシュを計算（検証用）
+                import hashlib
+                consent_data_str = json.dumps({
+                    "cart_mandate_id": consent["cart_mandate_id"],
+                    "intent_message_id": consent["intent_message_id"],
+                    "user_id": consent["user_id"],
+                    "approved": consent["approved"],
+                    "timestamp": consent["timestamp"]
+                }, sort_keys=True)
+                consent["signed_data_hash"] = hashlib.sha256(consent_data_str.encode()).hexdigest()
+
+                # データベースに保存
+                async with self.db_manager.get_session() as session:
+                    await MandateCRUD.create(session, {
+                        "id": consent["consent_id"],
+                        "type": "Consent",
+                        "status": "signed",
+                        "payload": consent,
+                        "issuer": user_id
+                    })
+
+                logger.info(f"[ShoppingAgent] Consent with Passkey signature saved: id={consent['consent_id']}, user={user_id}, approved={consent['approved']}")
+
+                return {
+                    "status": "success",
+                    "consent_id": consent["consent_id"]
+                }
+
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"[submit_signed_consent] Error: {e}", exc_info=True)
+                raise HTTPException(status_code=500, detail=f"Failed to submit Consent: {e}")
 
         @self.app.post("/chat/stream")
         async def chat_stream(request: ChatStreamRequest):
@@ -427,7 +703,10 @@ class ShoppingAgent(BaseAgent):
 
                 # Merchant AgentにIntentMandateを送信して商品検索依頼（A2A通信）
                 try:
-                    products = await self._search_products_via_merchant_agent(session["intent_mandate"])
+                    products = await self._search_products_via_merchant_agent(
+                        session["intent_mandate"],
+                        session  # intent_message_idを保存するためにsessionを渡す
+                    )
 
                     if not products:
                         yield StreamEvent(
@@ -1015,9 +1294,15 @@ class ShoppingAgent(BaseAgent):
         """
         IntentMandateを作成（セッション情報を使用）
 
+        専門家の指摘対応：
+        - サーバー署名は使用しない（これまでの実装の誤り）
+        - ユーザーPasskey署名はフロントエンドで追加される
+        - このメソッドは署名なしのIntentMandateを返す
+
         AP2仕様準拠（Step 3-4）：
-        - Userの公開鍵を取得
-        - IntentMandateに署名を追加
+        - IntentMandateはユーザーのPasskey（WebAuthn）で署名される
+        - フロントエンドがWebAuthn APIを使用して署名を生成
+        - 署名付きIntentMandateは /intent/submit エンドポイントに送信される
         """
         now = datetime.now(timezone.utc)
         expires_at = now + timedelta(hours=1)
@@ -1031,7 +1316,8 @@ class ShoppingAgent(BaseAgent):
         user_id = "user_demo_001"
 
         # IntentMandate基本情報（署名前）
-        intent_mandate_base = {
+        # フロントエンドがPasskey署名を追加する前の状態
+        intent_mandate_unsigned = {
             "id": f"intent_{uuid.uuid4().hex[:8]}",
             "type": "IntentMandate",
             "version": "0.2",
@@ -1051,32 +1337,24 @@ class ShoppingAgent(BaseAgent):
             "expires_at": expires_at.isoformat().replace('+00:00', 'Z')
         }
 
-        # User公開鍵を取得
+        # User公開鍵を取得（WebAuthn Passkey公開鍵のプレースホルダー）
+        # 実際の公開鍵はPasskey署名と一緒にフロントエンドから送信される
         try:
             user_public_key_pem = self.key_manager.get_public_key_pem(user_id)
-            intent_mandate_base["user_public_key"] = user_public_key_pem
+            intent_mandate_unsigned["user_public_key"] = user_public_key_pem
         except Exception as e:
             logger.warning(f"[ShoppingAgent] Failed to get user public key: {e}. Using placeholder.")
-            intent_mandate_base["user_public_key"] = "user_public_key_placeholder"
+            intent_mandate_unsigned["user_public_key"] = "user_public_key_placeholder"
 
-        # User署名を生成
-        try:
-            user_signature = self.signature_manager.sign_mandate(intent_mandate_base, user_id)
-            intent_mandate = intent_mandate_base.copy()
-            intent_mandate["user_signature"] = user_signature.model_dump()
+        logger.info(
+            f"[ShoppingAgent] IntentMandate created (unsigned, awaiting Passkey signature): "
+            f"id={intent_mandate_unsigned['id']}, max_amount={max_amount}, "
+            f"categories={categories}, brands={brands}"
+        )
 
-            logger.info(
-                f"[ShoppingAgent] IntentMandate created with user signature: "
-                f"id={intent_mandate['id']}, max_amount={max_amount}, "
-                f"categories={categories}, brands={brands}"
-            )
-        except Exception as e:
-            logger.error(f"[ShoppingAgent] Failed to sign IntentMandate: {e}. Returning unsigned mandate.")
-            # 署名失敗時は署名なしで返す（デモ環境での互換性）
-            intent_mandate = intent_mandate_base
-            logger.warning("[ShoppingAgent] IntentMandate created without user signature (fallback)")
-
-        return intent_mandate
+        # 重要：サーバー署名は使用しない
+        # フロントエンドがWebAuthn Passkeyで署名を追加する
+        return intent_mandate_unsigned
 
     def _create_cart_mandate(self, product: Dict[str, Any], session: Dict[str, Any]) -> Dict[str, Any]:
         """CartMandateを作成"""
@@ -1261,14 +1539,21 @@ class ShoppingAgent(BaseAgent):
             logger.error(f"[_process_payment_via_payment_processor] Error: {e}", exc_info=True)
             raise
 
-    async def _search_products_via_merchant_agent(self, intent_mandate: Dict[str, Any]) -> list[Dict[str, Any]]:
+    async def _search_products_via_merchant_agent(
+        self,
+        intent_mandate: Dict[str, Any],
+        session: Dict[str, Any]
+    ) -> list[Dict[str, Any]]:
         """
         Merchant AgentにIntentMandateを送信して商品検索を依頼
 
+        専門家の指摘対応：IntentのA2AメッセージIDを保存してトレーサビリティを確保
+
         AP2仕様準拠（Step 8-9）：
         1. Shopping AgentがIntentMandateをMerchant Agentに送信（A2A通信）
-        2. Merchant AgentがIntentMandateに基づいて商品検索
-        3. Merchant Agentが商品リストを返却（ap2/ProductList）
+        2. A2AメッセージのmessageIdをセッションに保存（intent_message_id）
+        3. Merchant AgentがIntentMandateに基づいて商品検索
+        4. Merchant Agentが商品リストを返却（ap2/ProductList）
         """
         logger.info(f"[ShoppingAgent] Searching products via Merchant Agent for IntentMandate: {intent_mandate['id']}")
 
@@ -1280,6 +1565,15 @@ class ShoppingAgent(BaseAgent):
                 data_id=intent_mandate["id"],
                 payload=intent_mandate,
                 sign=True
+            )
+
+            # 重要：A2AメッセージIDを保存（CartMandateとConsentから参照）
+            intent_message_id = message.header.message_id
+            session["intent_message_id"] = intent_message_id
+
+            logger.info(
+                f"[ShoppingAgent] Intent A2A message created: "
+                f"message_id={intent_message_id}, intent_mandate_id={intent_mandate['id']}"
             )
 
             # Merchant AgentにA2Aメッセージを送信
@@ -1330,8 +1624,10 @@ class ShoppingAgent(BaseAgent):
 
         try:
             # CartRequest作成
+            # 専門家の指摘対応：intent_message_idを追加してトレーサビリティを確保
             cart_request = {
                 "intent_mandate_id": session.get("intent_mandate", {}).get("id"),
+                "intent_message_id": session.get("intent_message_id"),  # A2AメッセージID参照
                 "items": [
                     {
                         "product_id": selected_product.get("id"),
@@ -1346,6 +1642,12 @@ class ShoppingAgent(BaseAgent):
                     "country": "JP"
                 }
             }
+
+            logger.info(
+                f"[ShoppingAgent] CartRequest created: "
+                f"intent_mandate_id={cart_request['intent_mandate_id']}, "
+                f"intent_message_id={cart_request['intent_message_id']}"
+            )
 
             # A2Aメッセージを作成（署名付き）
             message = self.a2a_handler.create_response_message(

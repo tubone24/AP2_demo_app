@@ -10,6 +10,7 @@ import base64
 import hashlib
 import os
 import struct
+import uuid
 from typing import Tuple, Optional, Dict, Any
 from datetime import datetime, timezone
 from pathlib import Path
@@ -38,6 +39,94 @@ class CryptoError(Exception):
 
 
 # ========================================
+# JSON正規化（Canonicalization）ユーティリティ
+# ========================================
+
+def canonicalize_json(
+    data: Dict[str, Any],
+    exclude_keys: Optional[list] = None
+) -> str:
+    """
+    JSONデータを正規化（Canonicalization）
+
+    A2A/AP2仕様準拠：
+    - キーをアルファベット順にソート
+    - 余分な空白を削除（separators=(',', ':')）
+    - UTF-8エンコーディング
+    - Enumを.valueに変換
+
+    Args:
+        data: 正規化するデータ
+        exclude_keys: 除外するキー（例：['signature', 'proof']）
+
+    Returns:
+        str: 正規化されたJSON文字列
+    """
+    # 1. 除外キーを削除
+    data_copy = data.copy() if isinstance(data, dict) else data
+    if exclude_keys and isinstance(data_copy, dict):
+        for key in exclude_keys:
+            data_copy.pop(key, None)
+
+    # 2. Enumを.valueに変換
+    def convert_enums(obj: Any) -> Any:
+        if isinstance(obj, dict):
+            return {key: convert_enums(value) for key, value in obj.items()}
+        elif isinstance(obj, list):
+            return [convert_enums(item) for item in obj]
+        elif hasattr(obj, 'value'):  # Enumの場合
+            return obj.value
+        else:
+            return obj
+
+    converted_data = convert_enums(data_copy)
+
+    # 3. Canonical JSON文字列を生成
+    # RFC 8785 (JSON Canonicalization Scheme) 準拠
+    canonical_json = json.dumps(
+        converted_data,
+        sort_keys=True,
+        separators=(',', ':'),
+        ensure_ascii=False
+    )
+
+    return canonical_json
+
+
+def canonicalize_a2a_message(
+    a2a_message_dict: Dict[str, Any]
+) -> str:
+    """
+    A2Aメッセージを正規化
+
+    署名対象データを作成：
+    - header.proof または header.signature を除外
+    - その他のフィールドは保持
+
+    Args:
+        a2a_message_dict: A2Aメッセージの辞書表現
+
+    Returns:
+        str: 正規化されたJSON文字列
+    """
+    message_copy = {}
+    for key, value in a2a_message_dict.items():
+        if isinstance(value, dict):
+            message_copy[key] = value.copy()
+        else:
+            message_copy[key] = value
+
+    # header.proof と header.signature を除外
+    if 'header' in message_copy and isinstance(message_copy['header'], dict):
+        header_copy = message_copy['header'].copy()
+        header_copy.pop('proof', None)
+        header_copy.pop('signature', None)
+        message_copy['header'] = header_copy
+
+    return canonicalize_json(message_copy)
+
+
+# ========================================
 # Mandate Hash計算ユーティリティ
 # ========================================
 
@@ -58,40 +147,16 @@ def compute_mandate_hash(
     Returns:
         str: SHA-256ハッシュ（hex形式またはbase64形式）
     """
-    # 1. 署名フィールドを除外（署名前の状態でハッシュ化）
-    mandate_copy = mandate.copy()
-    mandate_copy.pop('user_signature', None)
-    mandate_copy.pop('merchant_signature', None)
-    mandate_copy.pop('mandate_metadata', None)  # メタデータも除外（ハッシュ自体を含むため）
-
-    # 2. Enumを.valueに変換
-    def convert_enums(data: Any) -> Any:
-        if isinstance(data, dict):
-            return {key: convert_enums(value) for key, value in data.items()}
-        elif isinstance(data, list):
-            return [convert_enums(item) for item in data]
-        elif hasattr(data, 'value'):  # Enumの場合
-            return data.value
-        else:
-            return data
-
-    converted_mandate = convert_enums(mandate_copy)
-
-    # 3. Canonical JSON文字列を生成
-    # - キーをアルファベット順にソート
-    # - 余分なスペースを削除
-    # - UTF-8エンコーディング
-    canonical_json = json.dumps(
-        converted_mandate,
-        sort_keys=True,
-        separators=(',', ':'),
-        ensure_ascii=False
+    # 署名フィールドを除外してCanonical JSONを生成
+    canonical_json = canonicalize_json(
+        mandate,
+        exclude_keys=['user_signature', 'merchant_signature', 'mandate_metadata', 'proof']
     )
 
-    # 4. SHA-256ハッシュを計算
+    # SHA-256ハッシュを計算
     hash_bytes = hashlib.sha256(canonical_json.encode('utf-8')).digest()
 
-    # 5. 指定された形式で返す
+    # 指定された形式で返す
     if hash_format == 'base64':
         return base64.b64encode(hash_bytes).decode('utf-8')
     elif hash_format == 'hex':
@@ -320,13 +385,15 @@ class SignatureManager:
     データの署名と検証を管理
     """
 
-    def __init__(self, key_manager: KeyManager):
+    def __init__(self, key_manager: KeyManager, timestamp_tolerance_seconds: int = 300):
         """
         Args:
             key_manager: 鍵管理インスタンス
+            timestamp_tolerance_seconds: タイムスタンプ許容範囲（秒）デフォルト300秒=5分
         """
         self.key_manager = key_manager
         self.backend = default_backend()
+        self.timestamp_tolerance_seconds = timestamp_tolerance_seconds
 
     def _convert_enums(self, data: Any) -> Any:
         """
@@ -357,18 +424,64 @@ class SignatureManager:
         Returns:
             bytes: SHA-256ハッシュ
         """
-        # データをJSON文字列に変換（決定論的な順序で）
+        # Canonical JSON を使用してハッシュ化
         if isinstance(data, dict):
-            # Enumを.valueに変換
-            converted_data = self._convert_enums(data)
-            json_str = json.dumps(converted_data, sort_keys=True, ensure_ascii=False)
+            canonical_json = canonicalize_json(data)
         elif isinstance(data, str):
-            json_str = data
+            canonical_json = data
         else:
-            json_str = str(data)
+            canonical_json = str(data)
 
         # SHA-256でハッシュ化
-        return hashlib.sha256(json_str.encode('utf-8')).digest()
+        return hashlib.sha256(canonical_json.encode('utf-8')).digest()
+
+    def verify_timestamp(
+        self,
+        timestamp_str: str,
+        tolerance_seconds: Optional[int] = None
+    ) -> bool:
+        """
+        タイムスタンプを検証（リプレイ攻撃対策）
+
+        Args:
+            timestamp_str: ISO 8601形式のタイムスタンプ
+            tolerance_seconds: 許容範囲（秒）、Noneの場合はデフォルト値を使用
+
+        Returns:
+            bool: タイムスタンプが有効な場合True
+
+        Raises:
+            ValueError: タイムスタンプの形式が不正な場合
+        """
+        try:
+            # ISO 8601形式をパース
+            # "2025-10-16T12:34:56Z" -> datetime
+            timestamp_str_normalized = timestamp_str.replace('Z', '+00:00')
+            message_time = datetime.fromisoformat(timestamp_str_normalized)
+
+            # タイムゾーン情報がない場合はUTCとして扱う
+            if message_time.tzinfo is None:
+                message_time = message_time.replace(tzinfo=timezone.utc)
+
+            # 現在時刻
+            now = datetime.now(timezone.utc)
+
+            # 時刻差を計算
+            time_diff = abs((now - message_time).total_seconds())
+
+            # 許容範囲を決定
+            tolerance = tolerance_seconds if tolerance_seconds is not None else self.timestamp_tolerance_seconds
+
+            if time_diff > tolerance:
+                print(f"[SignatureManager] タイムスタンプ検証失敗: 時刻差={time_diff:.0f}秒（許容={tolerance}秒）")
+                return False
+
+            print(f"[SignatureManager] タイムスタンプ検証成功: 時刻差={time_diff:.0f}秒")
+            return True
+
+        except ValueError as e:
+            print(f"[SignatureManager] タイムスタンプのパースエラー: {e}")
+            raise ValueError(f"Invalid timestamp format: {timestamp_str}")
 
     def sign_data(
         self,
@@ -536,8 +649,9 @@ class SignatureManager:
         """
         A2Aメッセージ全体に署名（メッセージレベル署名）
 
-        A2A Extension仕様に準拠したメッセージレベル署名を生成。
-        header.signatureフィールドを除外してCanonical JSONから署名を作成。
+        A2A仕様準拠：
+        - header.proof と header.signature を除外してCanonical JSONから署名を作成
+        - canonicalize_a2a_message() 関数を使用
 
         Args:
             a2a_message_dict: A2Aメッセージの辞書表現（headerを含む）
@@ -548,22 +662,11 @@ class SignatureManager:
         """
         print(f"[SignatureManager] A2Aメッセージに署名中（送信者: {sender_key_id}）")
 
-        # メッセージのコピーを作成
-        message_copy = {}
-        for key, value in a2a_message_dict.items():
-            if isinstance(value, dict):
-                message_copy[key] = value.copy()
-            else:
-                message_copy[key] = value
-
-        # header.signatureフィールドを除外（署名前の状態）
-        if 'header' in message_copy and isinstance(message_copy['header'], dict):
-            header_copy = message_copy['header'].copy()
-            header_copy.pop('signature', None)
-            message_copy['header'] = header_copy
+        # Canonical JSON文字列を生成（header.proof/signatureを除外）
+        canonical_json = canonicalize_a2a_message(a2a_message_dict)
 
         # 署名を作成
-        return self.sign_data(message_copy, sender_key_id)
+        return self.sign_data(canonical_json, sender_key_id)
 
     def verify_a2a_message_signature(
         self,
@@ -572,6 +675,10 @@ class SignatureManager:
     ) -> bool:
         """
         A2Aメッセージの署名を検証
+
+        A2A仕様準拠：
+        - header.proof と header.signature を除外してCanonical JSONで検証
+        - canonicalize_a2a_message() 関数を使用
 
         Args:
             a2a_message_dict: A2Aメッセージの辞書表現
@@ -582,22 +689,11 @@ class SignatureManager:
         """
         print(f"[SignatureManager] A2Aメッセージ署名を検証中...")
 
-        # メッセージのコピーを作成
-        message_copy = {}
-        for key, value in a2a_message_dict.items():
-            if isinstance(value, dict):
-                message_copy[key] = value.copy()
-            else:
-                message_copy[key] = value
-
-        # header.signatureフィールドを除外（署名時と同じ状態にする）
-        if 'header' in message_copy and isinstance(message_copy['header'], dict):
-            header_copy = message_copy['header'].copy()
-            header_copy.pop('signature', None)
-            message_copy['header'] = header_copy
+        # Canonical JSON文字列を生成（header.proof/signatureを除外）
+        canonical_json = canonicalize_a2a_message(a2a_message_dict)
 
         # 署名を検証
-        return self.verify_signature(message_copy, signature)
+        return self.verify_signature(canonical_json, signature)
 
 
 class SecureStorage:
@@ -754,6 +850,128 @@ class SecureStorage:
             raise CryptoError(f"復号化に失敗しました（パスフレーズが正しくない可能性があります）: {e}")
 
 
+class WebAuthnChallengeManager:
+    """
+    WebAuthn Challenge管理クラス
+
+    サーバ生成のnonce（challenge）を管理し、リプレイ攻撃を防ぐ。
+
+    仕様：
+    - challengeはサーバ側で生成し、一度のみ使用可能
+    - 使用後は無効化される
+    - 有効期限あり（デフォルト60秒）
+    """
+
+    def __init__(self, challenge_ttl_seconds: int = 60):
+        """
+        Args:
+            challenge_ttl_seconds: challengeの有効期限（秒）
+        """
+        self.challenge_ttl_seconds = challenge_ttl_seconds
+        # challenge_id -> {challenge: str, issued_at: datetime, used: bool, user_id: str}
+        self._challenges: Dict[str, Dict[str, Any]] = {}
+
+    def generate_challenge(self, user_id: str, context: Optional[str] = None) -> Dict[str, str]:
+        """
+        新しいchallengeを生成
+
+        Args:
+            user_id: ユーザーID
+            context: コンテキスト情報（例："intent_signature", "cart_consent"）
+
+        Returns:
+            Dict containing: challenge_id, challenge (Base64URL encoded)
+        """
+        # 32バイト（256ビット）のランダムなchallenge
+        challenge_bytes = os.urandom(32)
+        challenge = base64.urlsafe_b64encode(challenge_bytes).decode('utf-8').rstrip('=')
+
+        # challenge IDを生成
+        challenge_id = f"ch_{uuid.uuid4().hex[:16]}"
+
+        # 保存
+        self._challenges[challenge_id] = {
+            "challenge": challenge,
+            "issued_at": datetime.now(timezone.utc),
+            "used": False,
+            "user_id": user_id,
+            "context": context
+        }
+
+        print(f"[WebAuthnChallengeManager] Challenge生成: id={challenge_id}, user={user_id}, context={context}")
+
+        return {
+            "challenge_id": challenge_id,
+            "challenge": challenge
+        }
+
+    def verify_and_consume_challenge(
+        self,
+        challenge_id: str,
+        challenge: str,
+        user_id: str
+    ) -> bool:
+        """
+        challengeを検証して消費（一度のみ使用可能）
+
+        Args:
+            challenge_id: Challenge ID
+            challenge: 受信したchallenge値
+            user_id: ユーザーID
+
+        Returns:
+            bool: 検証成功の場合True
+        """
+        stored = self._challenges.get(challenge_id)
+
+        if not stored:
+            print(f"[WebAuthnChallengeManager] Challenge not found: {challenge_id}")
+            return False
+
+        # 有効期限チェック
+        now = datetime.now(timezone.utc)
+        age = (now - stored["issued_at"]).total_seconds()
+        if age > self.challenge_ttl_seconds:
+            print(f"[WebAuthnChallengeManager] Challenge expired: age={age:.0f}s")
+            del self._challenges[challenge_id]
+            return False
+
+        # 使用済みチェック
+        if stored["used"]:
+            print(f"[WebAuthnChallengeManager] Challenge already used: {challenge_id}")
+            return False
+
+        # challenge値チェック
+        if stored["challenge"] != challenge:
+            print(f"[WebAuthnChallengeManager] Challenge mismatch")
+            return False
+
+        # ユーザーIDチェック
+        if stored["user_id"] != user_id:
+            print(f"[WebAuthnChallengeManager] User ID mismatch")
+            return False
+
+        # 使用済みマーク
+        stored["used"] = True
+
+        print(f"[WebAuthnChallengeManager] Challenge verified and consumed: {challenge_id}")
+        return True
+
+    def cleanup_expired_challenges(self):
+        """期限切れのchallengeを削除"""
+        now = datetime.now(timezone.utc)
+        expired = [
+            cid for cid, data in self._challenges.items()
+            if (now - data["issued_at"]).total_seconds() > self.challenge_ttl_seconds
+        ]
+
+        for cid in expired:
+            del self._challenges[cid]
+
+        if expired:
+            print(f"[WebAuthnChallengeManager] Cleaned up {len(expired)} expired challenges")
+
+
 class DeviceAttestationManager:
     """
     Device Attestation管理クラス
@@ -773,6 +991,9 @@ class DeviceAttestationManager:
     def generate_challenge(self) -> str:
         """
         チャレンジ値を生成（リプレイ攻撃対策）
+
+        注意: この関数は互換性のために残していますが、
+        新しいコードではWebAuthnChallengeManagerを使用してください。
 
         Returns:
             str: ランダムなチャレンジ値（Base64）

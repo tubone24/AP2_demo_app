@@ -14,7 +14,7 @@ import logging
 
 # v2の暗号化モジュールとモデルをインポート
 from v2.common.crypto import SignatureManager, KeyManager
-from v2.common.models import A2AMessage, A2AMessageHeader, A2ADataPart, A2ASignature, Signature
+from v2.common.models import A2AMessage, A2AMessageHeader, A2ADataPart, A2ASignature, A2AProof, Signature
 
 logger = logging.getLogger(__name__)
 
@@ -63,44 +63,82 @@ class A2AMessageHandler:
         """
         A2Aメッセージの署名を検証
 
+        A2A仕様準拠：proof構造を優先的に使用、後方互換性のためsignatureもサポート
+
         Args:
             message: 検証するA2Aメッセージ
 
         Returns:
             bool: 署名が有効な場合True
         """
-        if not message.header.signature:
-            logger.warning("[A2AHandler] メッセージに署名がありません")
-            return False
+        # proof構造を優先的に使用（A2A仕様準拠）
+        if message.header.proof:
+            try:
+                # Pydanticモデルを辞書に変換（署名検証用）
+                message_dict = message.model_dump(by_alias=True)
 
-        try:
-            # Pydanticモデルを辞書に変換（署名検証用）
-            message_dict = message.model_dump(by_alias=True)
+                # Signatureオブジェクトに変換（ap2_crypto用）
+                proof = message.header.proof
+                signature_obj = Signature(
+                    algorithm=proof.algorithm.upper(),
+                    value=proof.signatureValue,
+                    public_key=proof.publicKey,
+                    signed_at=proof.created
+                )
 
-            # Signatureオブジェクトに変換（ap2_crypto用）
-            sig = message.header.signature
-            signature_obj = Signature(
-                algorithm=sig.algorithm.upper(),
-                value=sig.value,
-                public_key=sig.public_key,
-                signed_at=message.header.timestamp
-            )
+                # 署名検証（ap2_crypto.SignatureManagerを使用）
+                is_valid = self.signature_manager.verify_a2a_message_signature(
+                    message_dict,
+                    signature_obj
+                )
 
-            # 署名検証（ap2_crypto.SignatureManagerを使用）
-            is_valid = self.signature_manager.verify_a2a_message_signature(
-                message_dict,
-                signature_obj
-            )
+                if is_valid:
+                    logger.info(f"[A2AHandler] proof署名検証成功: sender={message.header.sender}")
+                else:
+                    logger.warning(f"[A2AHandler] proof署名検証失敗: sender={message.header.sender}")
 
-            if is_valid:
-                logger.info(f"[A2AHandler] 署名検証成功: sender={message.header.sender}")
-            else:
-                logger.warning(f"[A2AHandler] 署名検証失敗: sender={message.header.sender}")
+                return is_valid
 
-            return is_valid
+            except Exception as e:
+                logger.error(f"[A2AHandler] proof署名検証エラー: {e}", exc_info=True)
+                return False
 
-        except Exception as e:
-            logger.error(f"[A2AHandler] 署名検証エラー: {e}", exc_info=True)
+        # 後方互換性：旧形式のsignatureをサポート（非推奨）
+        elif message.header.signature:
+            logger.warning("[A2AHandler] 旧形式のsignature使用（非推奨）。proof構造への移行を推奨")
+
+            try:
+                # Pydanticモデルを辞書に変換（署名検証用）
+                message_dict = message.model_dump(by_alias=True)
+
+                # Signatureオブジェクトに変換（ap2_crypto用）
+                sig = message.header.signature
+                signature_obj = Signature(
+                    algorithm=sig.algorithm.upper(),
+                    value=sig.value,
+                    public_key=sig.public_key,
+                    signed_at=message.header.timestamp
+                )
+
+                # 署名検証（ap2_crypto.SignatureManagerを使用）
+                is_valid = self.signature_manager.verify_a2a_message_signature(
+                    message_dict,
+                    signature_obj
+                )
+
+                if is_valid:
+                    logger.info(f"[A2AHandler] signature署名検証成功: sender={message.header.sender}")
+                else:
+                    logger.warning(f"[A2AHandler] signature署名検証失敗: sender={message.header.sender}")
+
+                return is_valid
+
+            except Exception as e:
+                logger.error(f"[A2AHandler] signature署名検証エラー: {e}", exc_info=True)
+                return False
+
+        else:
+            logger.warning("[A2AHandler] メッセージにproof/signatureがありません")
             return False
 
     async def handle_message(self, message: A2AMessage) -> Dict[str, Any]:
@@ -158,6 +196,8 @@ class A2AMessageHandler:
         """
         レスポンスA2Aメッセージを作成
 
+        A2A仕様準拠：proof構造を使用
+
         Args:
             recipient: 送信先エージェントDID
             data_type: データタイプ (e.g., "ap2/CartMandate")
@@ -169,11 +209,12 @@ class A2AMessageHandler:
             A2AMessage: 署名済みレスポンスメッセージ
         """
         # ヘッダー作成
+        timestamp = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
         header = A2AMessageHeader(
             message_id=str(uuid.uuid4()),
             sender=self.agent_id,
             recipient=recipient,
-            timestamp=datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
+            timestamp=timestamp,
             schema_version="0.2"
         )
 
@@ -187,7 +228,7 @@ class A2AMessageHandler:
         # メッセージ作成
         message = A2AMessage(header=header, dataPart=data_part)
 
-        # 署名
+        # 署名（A2A仕様準拠：proof構造を使用）
         if sign:
             message_dict = message.model_dump(by_alias=True)
 
@@ -197,11 +238,13 @@ class A2AMessageHandler:
             # 署名生成（ap2_crypto.SignatureManagerを使用）
             signature_obj = self.signature_manager.sign_a2a_message(message_dict, key_id)
 
-            # Pydanticモデルに変換
-            message.header.signature = A2ASignature(
+            # A2AProof構造に変換（A2A仕様準拠）
+            message.header.proof = A2AProof(
                 algorithm=signature_obj.algorithm.lower(),
-                public_key=signature_obj.public_key,
-                value=signature_obj.value
+                signatureValue=signature_obj.value,
+                publicKey=signature_obj.public_key,
+                created=timestamp,
+                proofPurpose="authentication"
             )
 
         logger.info(
