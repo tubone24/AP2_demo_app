@@ -232,6 +232,31 @@ class CredentialProviderService(BaseAgent):
                         details={"error": "Missing credential_id"}
                     )
 
+                # AP2 Step 20-22, 23: モックattestation対応（デモ環境用）
+                if credential_id.startswith("mock_credential_id_"):
+                    logger.info(f"[verify_attestation] Mock attestation detected, skipping verification")
+
+                    # トークン発行
+                    token = self._generate_token(payment_mandate, attestation)
+
+                    # データベースに保存
+                    await self._save_attestation(
+                        user_id=payment_mandate.get("payer_id", "unknown"),
+                        attestation_raw=attestation,
+                        verified=True,
+                        token=token
+                    )
+
+                    return AttestationVerifyResponse(
+                        verified=True,
+                        token=token,
+                        details={
+                            "attestation_type": "mock_passkey",
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                            "mode": "demo"
+                        }
+                    )
+
                 # データベースから登録済みPasskeyを取得
                 async with self.db_manager.get_session() as session:
                     passkey_credential = await PasskeyCredentialCRUD.get_by_credential_id(
@@ -346,6 +371,158 @@ class CredentialProviderService(BaseAgent):
             except Exception as e:
                 logger.error(f"[add_payment_method] Error: {e}", exc_info=True)
                 raise HTTPException(status_code=400, detail=str(e))
+
+        @self.app.post("/payment-methods/tokenize")
+        async def tokenize_payment_method(tokenize_request: Dict[str, Any]):
+            """
+            POST /payment-methods/tokenize - 支払い方法のトークン化
+
+            AP2仕様準拠（Step 17-18）：
+            選択された支払い方法に対して一時的なセキュアトークンを生成
+
+            リクエスト:
+            {
+              "user_id": "user_demo_001",
+              "payment_method_id": "pm_001",
+              "transaction_context"?: { ... }  // オプション
+            }
+
+            レスポンス:
+            {
+              "token": "tok_xxx",
+              "payment_method_id": "pm_001",
+              "brand": "visa",
+              "last4": "4242",
+              "expires_at": "2025-10-16T12:34:56Z"
+            }
+            """
+            try:
+                user_id = tokenize_request["user_id"]
+                payment_method_id = tokenize_request["payment_method_id"]
+
+                # 支払い方法を取得
+                user_payment_methods = self.payment_methods.get(user_id, [])
+                payment_method = next(
+                    (pm for pm in user_payment_methods if pm["id"] == payment_method_id),
+                    None
+                )
+
+                if not payment_method:
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"Payment method not found: {payment_method_id}"
+                    )
+
+                # 一時トークン生成（AP2トランザクション用）
+                # 実際の実装では、暗号学的に安全なトークンを生成し、有効期限を設定
+                from datetime import timedelta
+                now = datetime.now(timezone.utc)
+                expires_at = now + timedelta(minutes=15)  # 15分間有効
+
+                # トークン生成（簡易版）
+                token_data = {
+                    "user_id": user_id,
+                    "payment_method_id": payment_method_id,
+                    "issued_at": now.isoformat(),
+                    "expires_at": expires_at.isoformat()
+                }
+
+                import base64
+                token_b64 = base64.b64encode(json.dumps(token_data).encode()).decode()
+                secure_token = f"tok_{uuid.uuid4().hex[:8]}_{token_b64[:16]}"
+
+                logger.info(f"[tokenize_payment_method] Generated token for payment method: {payment_method_id}")
+
+                return {
+                    "token": secure_token,
+                    "payment_method_id": payment_method_id,
+                    "brand": payment_method.get("brand", "unknown"),
+                    "last4": payment_method.get("last4", "0000"),
+                    "type": payment_method.get("type", "card"),
+                    "expires_at": expires_at.isoformat().replace('+00:00', 'Z')
+                }
+
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"[tokenize_payment_method] Error: {e}", exc_info=True)
+                raise HTTPException(status_code=400, detail=str(e))
+
+        @self.app.post("/credentials/verify")
+        async def verify_credentials(verify_request: Dict[str, Any]):
+            """
+            POST /credentials/verify - トークン検証と認証情報提供
+
+            AP2仕様準拠（Step 26-27）：
+            Payment Processorからトークンを受信し、検証して支払い方法情報を返却
+
+            リクエスト:
+            {
+              "token": "tok_xxx",
+              "payer_id": "user_demo_001",
+              "amount": { "value": "10000.00", "currency": "JPY" }
+            }
+
+            レスポンス:
+            {
+              "verified": true,
+              "credential_info": {
+                "payment_method_id": "pm_001",
+                "type": "card",
+                "brand": "visa",
+                "last4": "4242",
+                "holder_name": "山田太郎"
+              }
+            }
+            """
+            try:
+                token = verify_request["token"]
+                payer_id = verify_request["payer_id"]
+                amount = verify_request.get("amount", {})
+
+                logger.info(f"[verify_credentials] Verifying token for payer: {payer_id}")
+
+                # トークンをパース（簡易版：Base64デコード）
+                # 実際のトークン形式: "tok_{uuid}_{base64}"
+                if not token.startswith("tok_"):
+                    raise ValueError(f"Invalid token format: {token[:20]}")
+
+                # トークンから支払い方法IDを取得（簡易版）
+                # 実際の実装では、トークンストアからマッピングを取得
+                # ここではpayer_idから対応する支払い方法を検索
+                user_payment_methods = self.payment_methods.get(payer_id, [])
+                if not user_payment_methods:
+                    logger.error(f"[verify_credentials] No payment methods found for user: {payer_id}")
+                    return {
+                        "verified": False,
+                        "error": "No payment methods registered for user"
+                    }
+
+                # 最初の支払い方法を使用（簡易版）
+                # 実際の実装では、トークンから正確な支払い方法を特定
+                payment_method = user_payment_methods[0]
+
+                logger.info(f"[verify_credentials] Token verified: payment_method_id={payment_method['id']}")
+
+                return {
+                    "verified": True,
+                    "credential_info": {
+                        "payment_method_id": payment_method["id"],
+                        "type": payment_method.get("type", "card"),
+                        "brand": payment_method.get("brand", "unknown"),
+                        "last4": payment_method.get("last4", "0000"),
+                        "holder_name": payment_method.get("holder_name", "Unknown"),
+                        "expiry_month": payment_method.get("expiry_month"),
+                        "expiry_year": payment_method.get("expiry_year")
+                    }
+                }
+
+            except Exception as e:
+                logger.error(f"[verify_credentials] Error: {e}", exc_info=True)
+                return {
+                    "verified": False,
+                    "error": str(e)
+                }
 
     # ========================================
     # A2Aメッセージハンドラー

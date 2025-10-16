@@ -9,6 +9,13 @@ export function useSSEChat() {
   const [currentAgentMessage, setCurrentAgentMessage] = useState("");
   const [signatureRequest, setSignatureRequest] = useState<SignatureRequestEvent | null>(null);
   const [currentProducts, setCurrentProducts] = useState<Product[]>([]);
+
+  // 新しいリッチコンテンツ用のstate
+  const [credentialProviders, setCredentialProviders] = useState<any[]>([]);
+  const [shippingFormRequest, setShippingFormRequest] = useState<any | null>(null);
+  const [paymentMethods, setPaymentMethods] = useState<any[]>([]);
+  const [webauthnRequest, setWebauthnRequest] = useState<any | null>(null);
+
   const abortControllerRef = useRef<AbortController | null>(null);
 
   // セッションIDを管理（会話を通じて同じIDを使用）
@@ -18,6 +25,10 @@ export function useSSEChat() {
     // 前回のストリーミング結果をクリア
     setCurrentProducts([]);
     setCurrentAgentMessage("");
+    setCredentialProviders([]);
+    setShippingFormRequest(null);
+    setPaymentMethods([]);
+    setWebauthnRequest(null);
 
     // ユーザーメッセージを追加
     const userMessage: ChatMessage = {
@@ -127,6 +138,34 @@ export function useSSEChat() {
                   setCurrentAgentMessage(agentMessageContent);
                   break;
 
+                case "credential_provider_selection":
+                  // Credential Provider選択リクエスト
+                  const cpEvent = event as any;
+                  setCredentialProviders(cpEvent.providers || []);
+                  break;
+
+                case "shipping_form_request":
+                  // 配送先フォームリクエスト
+                  const shippingEvent = event as any;
+                  setShippingFormRequest(shippingEvent.form_schema);
+                  break;
+
+                case "payment_method_selection":
+                  // 支払い方法選択リクエスト
+                  const paymentEvent = event as any;
+                  setPaymentMethods(paymentEvent.payment_methods || []);
+                  break;
+
+                case "webauthn_request":
+                  // WebAuthn認証リクエスト
+                  const webauthnEvent = event as any;
+                  setWebauthnRequest({
+                    challenge: webauthnEvent.challenge,
+                    rp_id: webauthnEvent.rp_id,
+                    timeout: webauthnEvent.timeout,
+                  });
+                  break;
+
                 case "done":
                   // エージェントメッセージを確定
                   if (agentMessageContent) {
@@ -202,6 +241,10 @@ export function useSSEChat() {
     currentAgentMessage,
     currentProducts,
     signatureRequest,
+    credentialProviders,
+    shippingFormRequest,
+    paymentMethods,
+    webauthnRequest,
     sendMessage,
     clearSignatureRequest,
     stopStreaming,

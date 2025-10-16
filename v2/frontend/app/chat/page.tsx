@@ -6,6 +6,7 @@ import { ChatMessage } from "@/components/chat/ChatMessage";
 import { ChatInput } from "@/components/chat/ChatInput";
 import { SignaturePromptModal } from "@/components/chat/SignaturePromptModal";
 import { PasskeyRegistration } from "@/components/auth/PasskeyRegistration";
+import { PasskeyAuthentication } from "@/components/auth/PasskeyAuthentication";
 import { ProductCarousel } from "@/components/product/ProductCarousel";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Card, CardContent } from "@/components/ui/card";
@@ -20,6 +21,10 @@ export default function ChatPage() {
     currentAgentMessage,
     currentProducts,
     signatureRequest,
+    credentialProviders,
+    shippingFormRequest,
+    paymentMethods,
+    webauthnRequest,
     sendMessage,
     clearSignatureRequest,
     stopStreaming,
@@ -116,6 +121,25 @@ export default function ChatPage() {
     }
   };
 
+  // WebAuthn認証成功時の処理
+  const handleWebAuthnAuthenticated = async (attestation: any) => {
+    console.log("WebAuthn authentication completed:", attestation);
+
+    try {
+      // 認証完了をエージェントに自動通知
+      sendMessage("認証完了");
+    } catch (error: any) {
+      console.error("WebAuthn error:", error);
+      sendMessage("デバイス認証処理中にエラーが発生しました。");
+    }
+  };
+
+  // WebAuthn認証失敗時の処理
+  const handleWebAuthnError = (error: string) => {
+    console.error("WebAuthn authentication failed:", error);
+    sendMessage(`デバイス認証に失敗しました: ${error}`);
+  };
+
   return (
     <div className="flex flex-col h-screen bg-background">
       {/* ヘッダー */}
@@ -186,6 +210,136 @@ export default function ChatPage() {
                   </div>
                 </div>
               )}
+
+              {/* Credential Provider選択（isStreamingの外） */}
+              {credentialProviders.length > 0 && (
+                <div className="mb-4">
+                  <div className="flex gap-3">
+                    <Avatar className="w-8 h-8 flex-shrink-0">
+                      <AvatarFallback className="bg-green-500">
+                        <Bot className="w-4 h-4 text-white" />
+                      </AvatarFallback>
+                    </Avatar>
+                    <div className="w-full max-w-[600px] space-y-2">
+                      {credentialProviders.map((provider: any, index: number) => (
+                        <Card
+                          key={provider.id}
+                          className="cursor-pointer hover:bg-accent transition-colors"
+                          onClick={() => sendMessage(String(index + 1))}
+                        >
+                          <CardContent className="p-4">
+                            <div className="flex items-center gap-3">
+                              <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center text-xl font-bold">
+                                {index + 1}
+                              </div>
+                              <div className="flex-1">
+                                <h3 className="font-semibold">{provider.name}</h3>
+                                <p className="text-sm text-muted-foreground">{provider.description}</p>
+                                <p className="text-xs text-muted-foreground mt-1">
+                                  対応: {provider.supported_methods.join(", ")}
+                                </p>
+                              </div>
+                            </div>
+                          </CardContent>
+                        </Card>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* 配送先フォーム（isStreamingの外） */}
+              {shippingFormRequest && (
+                <div className="mb-4">
+                  <div className="flex gap-3">
+                    <Avatar className="w-8 h-8 flex-shrink-0">
+                      <AvatarFallback className="bg-green-500">
+                        <Bot className="w-4 h-4 text-white" />
+                      </AvatarFallback>
+                    </Avatar>
+                    <div className="w-full max-w-[600px]">
+                      <Card>
+                        <CardContent className="p-4 space-y-3">
+                          {shippingFormRequest.fields.map((field: any) => (
+                            <div key={field.name}>
+                              <label className="block text-sm font-medium mb-1">
+                                {field.label}
+                                {field.required && <span className="text-red-500 ml-1">*</span>}
+                              </label>
+                              {field.type === "select" ? (
+                                <select
+                                  className="w-full px-3 py-2 border rounded-md"
+                                  defaultValue={field.default}
+                                >
+                                  {field.options.map((opt: any) => (
+                                    <option key={opt.value} value={opt.value}>
+                                      {opt.label}
+                                    </option>
+                                  ))}
+                                </select>
+                              ) : (
+                                <input
+                                  type={field.type}
+                                  placeholder={field.placeholder}
+                                  className="w-full px-3 py-2 border rounded-md"
+                                  required={field.required}
+                                />
+                              )}
+                            </div>
+                          ))}
+                          <button
+                            onClick={() => {
+                              // デモ用：固定値を送信
+                              sendMessage("デモ配送先");
+                            }}
+                            className="w-full px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90"
+                          >
+                            配送先を確定
+                          </button>
+                        </CardContent>
+                      </Card>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* 支払い方法選択（isStreamingの外） */}
+              {paymentMethods.length > 0 && (
+                <div className="mb-4">
+                  <div className="flex gap-3">
+                    <Avatar className="w-8 h-8 flex-shrink-0">
+                      <AvatarFallback className="bg-green-500">
+                        <Bot className="w-4 h-4 text-white" />
+                      </AvatarFallback>
+                    </Avatar>
+                    <div className="w-full max-w-[600px] space-y-2">
+                      {paymentMethods.map((method: any, index: number) => (
+                        <Card
+                          key={method.id}
+                          className="cursor-pointer hover:bg-accent transition-colors"
+                          onClick={() => sendMessage(String(index + 1))}
+                        >
+                          <CardContent className="p-4">
+                            <div className="flex items-center gap-3">
+                              <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center text-xl font-bold">
+                                {index + 1}
+                              </div>
+                              <div className="flex-1">
+                                <h3 className="font-semibold">
+                                  {method.brand?.toUpperCase()} **** {method.last4}
+                                </h3>
+                                <p className="text-sm text-muted-foreground">
+                                  {method.type === "card" ? "クレジットカード" : method.type}
+                                </p>
+                              </div>
+                            </div>
+                          </CardContent>
+                        </Card>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
             </ScrollArea>
           </CardContent>
 
@@ -219,6 +373,18 @@ export default function ChatPage() {
           signatureRequest={signatureRequest}
           onSign={handleSign}
           onCancel={clearSignatureRequest}
+        />
+      )}
+
+      {/* WebAuthn認証モーダル */}
+      {webauthnRequest && (
+        <PasskeyAuthentication
+          open={!!webauthnRequest}
+          challenge={webauthnRequest.challenge}
+          rpId={webauthnRequest.rp_id}
+          timeout={webauthnRequest.timeout}
+          onAuthenticated={handleWebAuthnAuthenticated}
+          onError={handleWebAuthnError}
         />
       )}
     </div>

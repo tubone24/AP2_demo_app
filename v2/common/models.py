@@ -181,12 +181,37 @@ class StreamEvent(BaseModel):
     { "type": "agent_text", "content": "..." }
     { "type": "signature_request", "mandate": { ...IntentMandate... }, "mandate_type": "intent" }
     { "type": "cart_options", "items": [...] }
+    { "type": "shipping_form_request", "form_schema": {...} }
+    { "type": "payment_method_selection", "payment_methods": [...] }
+    { "type": "credential_provider_selection", "providers": [...] }
+    { "type": "webauthn_request", "challenge": "...", "rp_id": "...", "timeout": 60000 }
     """
-    type: Literal["agent_text", "signature_request", "cart_options", "error", "done"]
+    type: Literal[
+        "agent_text",
+        "signature_request",
+        "cart_options",
+        "shipping_form_request",
+        "payment_method_selection",
+        "credential_provider_selection",
+        "webauthn_request",
+        "error",
+        "done"
+    ]
     content: Optional[str] = None
     mandate: Optional[Dict[str, Any]] = None
     mandate_type: Optional[Literal["intent", "cart", "payment"]] = None
     items: Optional[List[Dict[str, Any]]] = None
+
+    # リッチコンテンツ用フィールド
+    form_schema: Optional[Dict[str, Any]] = None  # 配送先フォームスキーマ
+    payment_methods: Optional[List[Dict[str, Any]]] = None  # 支払い方法リスト
+    providers: Optional[List[Dict[str, Any]]] = None  # Credential Providerリスト
+
+    # WebAuthn用フィールド
+    challenge: Optional[str] = None
+    rp_id: Optional[str] = None
+    timeout: Optional[int] = None
+
     error: Optional[str] = None
 
 

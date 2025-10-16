@@ -14,6 +14,7 @@ from typing import Dict, Any, Optional
 from datetime import datetime, timezone
 import logging
 
+import httpx
 from fastapi import HTTPException
 
 # 親ディレクトリを追加
@@ -46,6 +47,12 @@ class PaymentProcessorService(BaseAgent):
 
         # データベースマネージャー（絶対パスを使用）
         self.db_manager = DatabaseManager(database_url="sqlite+aiosqlite:////app/v2/data/ap2.db")
+
+        # HTTPクライアント（Credential Providerとの通信用）
+        self.http_client = httpx.AsyncClient(timeout=30.0)
+
+        # Credential Providerエンドポイント（Docker Compose環境想定）
+        self.credential_provider_url = "http://credential_provider:8003"
 
         logger.info(f"[{self.agent_name}] Initialized")
 
@@ -251,12 +258,45 @@ class PaymentProcessorService(BaseAgent):
         """
         決済処理（モック）
 
+        AP2仕様準拠（Step 26-27）：
+        1. PaymentMandateからトークンを抽出
+        2. Credential Providerにトークン検証・認証情報要求
+        3. 検証成功後、決済処理を実行
+
         本番環境では実際の決済ゲートウェイ（Stripe, Square等）と統合
         """
         logger.info(f"[PaymentProcessor] Processing payment (mock): {transaction_id}")
 
         amount = payment_mandate.get("amount", {})
         payment_method = payment_mandate.get("payment_method", {})
+
+        # AP2 Step 26-27: Credential Providerにトークン検証を依頼
+        token = payment_method.get("token")
+        if not token:
+            logger.error(f"[PaymentProcessor] No token found in payment_method")
+            return {
+                "status": "failed",
+                "transaction_id": transaction_id,
+                "error": "No payment method token provided"
+            }
+
+        try:
+            # Credential Providerにトークン検証・認証情報要求
+            credential_info = await self._verify_credential_with_cp(
+                token=token,
+                payer_id=payment_mandate.get("payer_id"),
+                amount=amount
+            )
+
+            logger.info(f"[PaymentProcessor] Credential verified: {credential_info.get('payment_method_id')}")
+
+        except Exception as e:
+            logger.error(f"[PaymentProcessor] Credential verification failed: {e}")
+            return {
+                "status": "failed",
+                "transaction_id": transaction_id,
+                "error": f"Credential verification failed: {str(e)}"
+            }
 
         # モック処理：デモ用に常に成功させる
         # 本番環境では実際の決済ゲートウェイ（Stripe, Square等）と統合
@@ -270,7 +310,8 @@ class PaymentProcessorService(BaseAgent):
             "cart_mandate_id": payment_mandate.get("cart_mandate_id"),
             "intent_mandate_id": payment_mandate.get("intent_mandate_id"),
             "authorized_at": datetime.now(timezone.utc).isoformat(),
-            "captured_at": datetime.now(timezone.utc).isoformat()
+            "captured_at": datetime.now(timezone.utc).isoformat(),
+            "credential_verified": True  # AP2 Step 26-27で検証済み
         }
         logger.info(f"[PaymentProcessor] Payment succeeded: {transaction_id}, amount={amount}")
 
@@ -300,6 +341,54 @@ class PaymentProcessorService(BaseAgent):
             })
 
         logger.info(f"[PaymentProcessor] Transaction saved: {transaction_id}")
+
+    async def _verify_credential_with_cp(
+        self,
+        token: str,
+        payer_id: str,
+        amount: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Credential Providerにトークン検証・認証情報要求
+
+        AP2仕様準拠（Step 26-27）：
+        1. Payment ProcessorがトークンをCredential Providerに送信
+        2. Credential Providerがトークンを検証
+        3. Credential Providerが認証情報（支払い方法の詳細）を返却
+        """
+        logger.info(f"[PaymentProcessor] Verifying credential with Credential Provider: token={token[:20]}...")
+
+        try:
+            # Credential ProviderにPOST /credentials/verifyでトークン検証依頼
+            response = await self.http_client.post(
+                f"{self.credential_provider_url}/credentials/verify",
+                json={
+                    "token": token,
+                    "payer_id": payer_id,
+                    "amount": amount
+                },
+                timeout=10.0
+            )
+            response.raise_for_status()
+            result = response.json()
+
+            # 検証結果を取得
+            if not result.get("verified"):
+                raise ValueError(f"Credential verification failed: {result.get('error', 'Unknown error')}")
+
+            credential_info = result.get("credential_info", {})
+            if not credential_info:
+                raise ValueError("Credential Provider did not return credential_info")
+
+            logger.info(f"[PaymentProcessor] Credential verification succeeded: payment_method_id={credential_info.get('payment_method_id')}")
+            return credential_info
+
+        except httpx.HTTPError as e:
+            logger.error(f"[_verify_credential_with_cp] HTTP error: {e}")
+            raise ValueError(f"Failed to verify credential with Credential Provider: {e}")
+        except Exception as e:
+            logger.error(f"[_verify_credential_with_cp] Error: {e}", exc_info=True)
+            raise
 
     async def _generate_receipt(
         self,

@@ -65,8 +65,27 @@ class ShoppingAgent(BaseAgent):
         # エージェントエンドポイント（Docker Compose環境想定）
         self.merchant_agent_url = "http://merchant_agent:8001"
         self.merchant_url = "http://merchant:8002"
-        self.credential_provider_url = "http://credential_provider:8003"
         self.payment_processor_url = "http://payment_processor:8004"
+
+        # 複数のCredential Providerに対応
+        self.credential_providers = [
+            {
+                "id": "cp_demo_001",
+                "name": "AP2 Demo Credential Provider",
+                "url": "http://credential_provider:8003",
+                "description": "デモ用Credential Provider（Passkey対応）",
+                "logo_url": "https://example.com/cp_demo_logo.png",
+                "supported_methods": ["card", "passkey"]
+            },
+            {
+                "id": "cp_demo_002",
+                "name": "Alternative Credential Provider",
+                "url": "http://credential_provider:8003",  # デモ環境では同じ
+                "description": "代替Credential Provider",
+                "logo_url": "https://example.com/cp_alt_logo.png",
+                "supported_methods": ["card"]
+            }
+        ]
 
         # セッション管理（簡易版 - インメモリ）
         self.sessions: Dict[str, Dict[str, Any]] = {}
@@ -491,6 +510,276 @@ class ShoppingAgent(BaseAgent):
             )
             await asyncio.sleep(0.3)
 
+            # AP2 Step 2-3: Credential Provider選択
+            yield StreamEvent(
+                type="agent_text",
+                content="決済に使用するCredential Providerを選択してください。"
+            )
+            await asyncio.sleep(0.2)
+
+            # Credential Providerリストをリッチコンテンツで送信
+            yield StreamEvent(
+                type="credential_provider_selection",
+                providers=self.credential_providers
+            )
+
+            session["step"] = "select_credential_provider"
+            return
+
+        # ステップ7.1: Credential Provider選択
+        elif current_step == "select_credential_provider":
+            user_input_clean = user_input.strip()
+            selected_provider = None
+
+            # 番号で選択
+            if user_input_clean.isdigit():
+                index = int(user_input_clean) - 1
+                if 0 <= index < len(self.credential_providers):
+                    selected_provider = self.credential_providers[index]
+
+            # IDで選択
+            if not selected_provider:
+                for provider in self.credential_providers:
+                    if provider["id"] in user_input:
+                        selected_provider = provider
+                        break
+
+            if not selected_provider:
+                yield StreamEvent(
+                    type="agent_text",
+                    content=f"Credential Providerが認識できませんでした。番号（1〜{len(self.credential_providers)}）を入力してください。"
+                )
+                return
+
+            session["selected_credential_provider"] = selected_provider
+
+            yield StreamEvent(
+                type="agent_text",
+                content=f"{selected_provider['name']}を選択しました。"
+            )
+            await asyncio.sleep(0.3)
+
+            # AP2 Step 4: 配送先入力（CartMandate作成前に必須）
+            yield StreamEvent(
+                type="agent_text",
+                content="配送先を入力してください。最終的な価格（送料込み）を確定するために必要です。"
+            )
+            await asyncio.sleep(0.2)
+
+            # 配送先フォームをリッチコンテンツで送信
+            yield StreamEvent(
+                type="shipping_form_request",
+                form_schema={
+                    "type": "shipping_address",
+                    "fields": [
+                        {
+                            "name": "recipient",
+                            "label": "受取人名",
+                            "type": "text",
+                            "required": True,
+                            "placeholder": "山田太郎"
+                        },
+                        {
+                            "name": "postal_code",
+                            "label": "郵便番号",
+                            "type": "text",
+                            "required": True,
+                            "placeholder": "150-0001",
+                            "pattern": "\\d{3}-?\\d{4}"
+                        },
+                        {
+                            "name": "address_line1",
+                            "label": "住所1（都道府県・市区町村・番地）",
+                            "type": "text",
+                            "required": True,
+                            "placeholder": "東京都渋谷区神宮前1-1-1"
+                        },
+                        {
+                            "name": "address_line2",
+                            "label": "住所2（建物名・部屋番号）",
+                            "type": "text",
+                            "required": False,
+                            "placeholder": "サンプルマンション101"
+                        },
+                        {
+                            "name": "country",
+                            "label": "国",
+                            "type": "select",
+                            "required": True,
+                            "options": [
+                                {"value": "JP", "label": "日本"},
+                                {"value": "US", "label": "アメリカ"},
+                                {"value": "GB", "label": "イギリス"}
+                            ],
+                            "default": "JP"
+                        }
+                    ]
+                }
+            )
+
+            session["step"] = "input_shipping_address"
+            return
+
+        # ステップ7.2: 配送先入力完了 → 支払い方法取得
+        elif current_step == "input_shipping_address":
+            # JSONとしてパース（フロントエンドからJSONで送信される想定）
+            try:
+                import json as json_lib
+                if user_input.strip().startswith("{"):
+                    shipping_address = json_lib.loads(user_input)
+                else:
+                    # デモ用：固定値を使用
+                    shipping_address = {
+                        "recipient": "山田太郎",
+                        "postal_code": "150-0001",
+                        "address_line1": "東京都渋谷区神宮前1-1-1",
+                        "address_line2": "サンプルマンション101",
+                        "country": "JP"
+                    }
+
+                session["shipping_address"] = shipping_address
+
+                yield StreamEvent(
+                    type="agent_text",
+                    content=f"配送先を設定しました：{shipping_address['recipient']} 様"
+                )
+                await asyncio.sleep(0.3)
+
+            except Exception as e:
+                logger.warning(f"[_generate_fixed_response] Failed to parse shipping address: {e}")
+                # デモ用：固定値を使用
+                session["shipping_address"] = {
+                    "recipient": "山田太郎",
+                    "postal_code": "150-0001",
+                    "address_line1": "東京都渋谷区神宮前1-1-1",
+                    "address_line2": "サンプルマンション101",
+                    "country": "JP"
+                }
+
+                yield StreamEvent(
+                    type="agent_text",
+                    content="配送先を設定しました（デモ用固定値）。"
+                )
+                await asyncio.sleep(0.3)
+
+            # AP2 Step 6-7: Credential Providerから支払い方法を取得
+            yield StreamEvent(
+                type="agent_text",
+                content="Credential Providerから利用可能な支払い方法を取得中..."
+            )
+            await asyncio.sleep(0.3)
+
+            try:
+                # 選択されたCredential Providerから支払い方法を取得
+                selected_cp = session.get("selected_credential_provider", self.credential_providers[0])
+                payment_methods = await self._get_payment_methods_from_cp("user_demo_001", selected_cp["url"])
+
+                if not payment_methods:
+                    yield StreamEvent(
+                        type="agent_text",
+                        content="申し訳ありません。利用可能な支払い方法が見つかりませんでした。"
+                    )
+                    session["step"] = "error"
+                    return
+
+                session["available_payment_methods"] = payment_methods
+                session["step"] = "select_payment_method"
+
+                # 支払い方法をリッチコンテンツで表示
+                yield StreamEvent(
+                    type="agent_text",
+                    content="以下の支払い方法から選択してください。"
+                )
+                await asyncio.sleep(0.2)
+
+                yield StreamEvent(
+                    type="payment_method_selection",
+                    payment_methods=payment_methods
+                )
+                return
+
+            except Exception as e:
+                logger.error(f"[_generate_fixed_response] Payment methods retrieval failed: {e}")
+                yield StreamEvent(
+                    type="agent_text",
+                    content=f"申し訳ありません。支払い方法の取得に失敗しました: {str(e)}"
+                )
+                session["step"] = "error"
+                return
+
+        # ステップ7.5: 支払い方法選択 → CartMandate作成
+        elif current_step == "select_payment_method":
+            available_payment_methods = session.get("available_payment_methods", [])
+            if not available_payment_methods:
+                yield StreamEvent(
+                    type="agent_text",
+                    content="申し訳ありません。支払い方法リストが見つかりません。"
+                )
+                session["step"] = "error"
+                return
+
+            # 支払い方法選択（番号）
+            user_input_clean = user_input.strip()
+            selected_payment_method = None
+
+            if user_input_clean.isdigit():
+                index = int(user_input_clean) - 1
+                if 0 <= index < len(available_payment_methods):
+                    selected_payment_method = available_payment_methods[index]
+
+            if not selected_payment_method:
+                yield StreamEvent(
+                    type="agent_text",
+                    content=f"支払い方法が認識できませんでした。番号（1〜{len(available_payment_methods)}）を入力してください。"
+                )
+                return
+
+            session["selected_payment_method"] = selected_payment_method
+
+            yield StreamEvent(
+                type="agent_text",
+                content=f"{selected_payment_method['brand'].upper()} ****{selected_payment_method['last4']}を選択しました。"
+            )
+            await asyncio.sleep(0.3)
+
+            # AP2 Step 17-18: 支払い方法のトークン化
+            yield StreamEvent(
+                type="agent_text",
+                content="Credential Providerで支払い方法をトークン化中..."
+            )
+            await asyncio.sleep(0.3)
+
+            try:
+                # 選択されたCredential Providerを使用してトークン化
+                selected_cp = session.get("selected_credential_provider", self.credential_providers[0])
+                tokenized_payment_method = await self._tokenize_payment_method(
+                    "user_demo_001",
+                    selected_payment_method['id'],
+                    selected_cp["url"]
+                )
+
+                # トークン化された支払い方法をセッションに保存（元の情報も保持）
+                session["tokenized_payment_method"] = {
+                    **selected_payment_method,
+                    "token": tokenized_payment_method["token"],
+                    "token_expires_at": tokenized_payment_method["expires_at"]
+                }
+
+                yield StreamEvent(
+                    type="agent_text",
+                    content="支払い方法のトークン化が完了しました。"
+                )
+                await asyncio.sleep(0.3)
+
+            except Exception as e:
+                logger.error(f"[_generate_fixed_response] Payment method tokenization failed: {e}")
+                yield StreamEvent(
+                    type="agent_text",
+                    content=f"申し訳ありません。支払い方法のトークン化に失敗しました: {str(e)}"
+                )
+                session["step"] = "error"
+                return
+
             yield StreamEvent(
                 type="agent_text",
                 content="Merchant Agentにカート作成・署名を依頼中..."
@@ -501,7 +790,7 @@ class ShoppingAgent(BaseAgent):
             # Merchant AgentがCartMandateを作成し、Merchantに署名依頼して、署名済みCartMandateを返却
             try:
                 signed_cart_mandate = await self._request_cart_from_merchant_agent(
-                    selected_product,
+                    session["selected_product"],
                     session
                 )
                 session["cart_mandate"] = signed_cart_mandate
@@ -564,53 +853,33 @@ class ShoppingAgent(BaseAgent):
                 )
                 return
 
-        # ステップ9: PaymentMandate署名完了後 → 決済処理
+        # ステップ9: PaymentMandate署名完了後 → WebAuthn Device Attestation要求（AP2 Step 20-22）
         elif current_step == "payment_signature_requested":
             if "署名完了" in user_input or "signed" in user_input_lower or user_input_lower == "ok":
-                session["step"] = "payment_processing"
+                session["step"] = "webauthn_attestation_requested"
 
                 yield StreamEvent(
                     type="agent_text",
-                    content="決済を処理中..."
+                    content="決済の署名ありがとうございます！セキュリティのため、デバイス認証（WebAuthn/Passkey）を実施します。"
                 )
                 await asyncio.sleep(0.5)
 
-                # Payment ProcessorにPaymentMandateを送信（A2A通信）
-                try:
-                    payment_result = await self._process_payment_via_payment_processor(
-                        session["payment_mandate"]
-                    )
+                # WebAuthn challengeを生成（簡易版）
+                import secrets
+                challenge = secrets.token_urlsafe(32)
+                session["webauthn_challenge"] = challenge
 
-                    if payment_result.get("status") == "captured":
-                        transaction_id = payment_result.get("transaction_id")
-                        receipt_url = payment_result.get("receipt_url")
+                yield StreamEvent(
+                    type="webauthn_request",
+                    challenge=challenge,
+                    rp_id="localhost",
+                    timeout=60000
+                )
 
-                        session["transaction_id"] = transaction_id
-
-                        yield StreamEvent(
-                            type="agent_text",
-                            content=f"✅ 決済が完了しました！\n\n取引ID: {transaction_id}\n商品: {session['selected_product']['name']}\n金額: ¥{session['selected_product']['price']:,}\n\n{receipt_url}\n\nご購入ありがとうございました！"
-                        )
-
-                        # セッションをリセット
-                        session["step"] = "completed"
-                    else:
-                        # 決済失敗
-                        error_message = payment_result.get("error", "決済処理に失敗しました")
-                        yield StreamEvent(
-                            type="agent_text",
-                            content=f"❌ 決済に失敗しました: {error_message}\n\nもう一度お試しください。"
-                        )
-                        session["step"] = "payment_failed"
-
-                except Exception as e:
-                    logger.error(f"[_generate_fixed_response] Payment processing failed: {e}")
-                    yield StreamEvent(
-                        type="agent_text",
-                        content=f"❌ 決済処理中にエラーが発生しました: {str(e)}"
-                    )
-                    session["step"] = "payment_failed"
-
+                yield StreamEvent(
+                    type="agent_text",
+                    content="デバイス認証を完了してから「認証完了」と入力してください。\n（デモ環境では「認証完了」と入力するとスキップできます）"
+                )
                 return
             else:
                 yield StreamEvent(
@@ -619,7 +888,104 @@ class ShoppingAgent(BaseAgent):
                 )
                 return
 
-        # ステップ10: 完了後
+        # ステップ10: WebAuthn Attestation完了後 → Credential Providerへ検証依頼（AP2 Step 23）
+        elif current_step == "webauthn_attestation_requested":
+            if "認証完了" in user_input or "attestation" in user_input_lower or user_input_lower == "ok":
+                session["step"] = "attestation_verifying"
+
+                yield StreamEvent(
+                    type="agent_text",
+                    content="デバイス認証を確認しています..."
+                )
+                await asyncio.sleep(0.5)
+
+                # WebAuthn attestationをモック（実際はフロントエンドから送信される）
+                mock_attestation = {
+                    "challenge": session.get("webauthn_challenge", ""),
+                    "rawId": "mock_credential_id_" + uuid.uuid4().hex[:16],
+                    "type": "public-key",
+                    "attestation_type": "passkey",
+                    "response": {
+                        "authenticatorData": "mock_authenticator_data",
+                        "clientDataJSON": "mock_client_data_json",
+                        "signature": "mock_signature"
+                    }
+                }
+
+                # AP2 Step 23: PaymentMandate + AttestationをCredential Providerに送信
+                try:
+                    # 選択されたCredential ProviderのURLを取得
+                    selected_cp = session.get("selected_credential_provider", self.credential_providers[0])
+
+                    verification_result = await self._verify_attestation_with_cp(
+                        session["payment_mandate"],
+                        mock_attestation,
+                        selected_cp["url"]
+                    )
+
+                    if verification_result.get("verified"):
+                        logger.info(f"[ShoppingAgent] WebAuthn attestation verified by Credential Provider")
+                        session["attestation_token"] = verification_result.get("token")
+                        session["step"] = "payment_processing"
+
+                        yield StreamEvent(
+                            type="agent_text",
+                            content="✅ デバイス認証が完了しました。決済を処理中..."
+                        )
+                        await asyncio.sleep(0.5)
+
+                        # Payment ProcessorにPaymentMandateを送信（A2A通信）
+                        payment_result = await self._process_payment_via_payment_processor(
+                            session["payment_mandate"]
+                        )
+
+                        if payment_result.get("status") == "captured":
+                            transaction_id = payment_result.get("transaction_id")
+                            receipt_url = payment_result.get("receipt_url")
+
+                            session["transaction_id"] = transaction_id
+
+                            yield StreamEvent(
+                                type="agent_text",
+                                content=f"✅ 決済が完了しました！\n\n取引ID: {transaction_id}\n商品: {session['selected_product']['name']}\n金額: ¥{session['selected_product']['price']:,}\n\n{receipt_url}\n\nご購入ありがとうございました！"
+                            )
+
+                            # セッションをリセット
+                            session["step"] = "completed"
+                        else:
+                            # 決済失敗
+                            error_message = payment_result.get("error", "決済処理に失敗しました")
+                            yield StreamEvent(
+                                type="agent_text",
+                                content=f"❌ 決済に失敗しました: {error_message}\n\nもう一度お試しください。"
+                            )
+                            session["step"] = "payment_failed"
+
+                    else:
+                        # デバイス認証失敗
+                        yield StreamEvent(
+                            type="agent_text",
+                            content=f"❌ デバイス認証に失敗しました。もう一度お試しください。"
+                        )
+                        session["step"] = "attestation_failed"
+
+                except Exception as e:
+                    logger.error(f"[_generate_fixed_response] Attestation verification or payment processing failed: {e}")
+                    yield StreamEvent(
+                        type="agent_text",
+                        content=f"❌ 処理中にエラーが発生しました: {str(e)}"
+                    )
+                    session["step"] = "payment_failed"
+
+                return
+            else:
+                yield StreamEvent(
+                    type="agent_text",
+                    content="デバイス認証を完了してから「認証完了」と入力してください。"
+                )
+                return
+
+        # ステップ11: 完了後
         elif current_step == "completed":
             yield StreamEvent(
                 type="agent_text",
@@ -706,9 +1072,23 @@ class ShoppingAgent(BaseAgent):
         return cart_mandate
 
     def _create_payment_mandate(self, session: Dict[str, Any]) -> Dict[str, Any]:
-        """PaymentMandateを作成"""
+        """
+        PaymentMandateを作成
+
+        AP2仕様準拠（Step 19）：
+        - トークン化された支払い方法を使用
+        - セキュアトークンをPaymentMandateに含める
+        """
         now = datetime.now(timezone.utc)
         product = session.get("selected_product", {})
+
+        # セッションからトークン化された支払い方法を取得（AP2 Step 17-18）
+        tokenized_payment_method = session.get("tokenized_payment_method", {})
+
+        # トークン化された支払い方法が存在しない場合はエラー
+        if not tokenized_payment_method or not tokenized_payment_method.get("token"):
+            logger.error("[ShoppingAgent] No tokenized payment method available")
+            raise ValueError("No tokenized payment method available")
 
         payment_mandate = {
             "id": f"payment_{uuid.uuid4().hex[:8]}",
@@ -723,14 +1103,15 @@ class ShoppingAgent(BaseAgent):
                 "currency": "JPY"
             },
             "payment_method": {
-                "type": "card",
-                "token": "pm_001",
-                "last4": "4242"
+                "type": tokenized_payment_method.get("type", "card"),
+                "token": tokenized_payment_method["token"],  # セキュアトークン（AP2 Step 17-18でトークン化済み）
+                "last4": tokenized_payment_method.get("last4", "0000"),
+                "brand": tokenized_payment_method.get("brand", "unknown")
             },
             "created_at": now.isoformat().replace('+00:00', 'Z')
         }
 
-        logger.info(f"[ShoppingAgent] PaymentMandate created: amount={product['price']}")
+        logger.info(f"[ShoppingAgent] PaymentMandate created: amount={product['price']}, payment_method={tokenized_payment_method.get('brand')} ****{tokenized_payment_method.get('last4')}, token={tokenized_payment_method['token'][:20]}...")
 
         return payment_mandate
 
@@ -1011,4 +1392,124 @@ class ShoppingAgent(BaseAgent):
             raise ValueError(f"Failed to request Merchant signature: {e}")
         except Exception as e:
             logger.error(f"[_request_merchant_signature] Error: {e}", exc_info=True)
+            raise
+
+    async def _get_payment_methods_from_cp(self, user_id: str, credential_provider_url: str) -> list[Dict[str, Any]]:
+        """
+        Credential Providerから支払い方法を取得
+
+        AP2仕様準拠（Step 6-7）：
+        1. Shopping AgentがCredential Providerに支払い方法リストを要求
+        2. Credential Providerが利用可能な支払い方法を返却
+        """
+        logger.info(f"[ShoppingAgent] Requesting payment methods from Credential Provider ({credential_provider_url}) for user: {user_id}")
+
+        try:
+            # Credential ProviderにGET /payment-methodsで支払い方法取得
+            response = await self.http_client.get(
+                f"{credential_provider_url}/payment-methods",
+                params={"user_id": user_id},
+                timeout=10.0
+            )
+            response.raise_for_status()
+            result = response.json()
+
+            # 支払い方法リストを取得
+            payment_methods = result.get("payment_methods", [])
+            if not payment_methods:
+                logger.warning(f"[ShoppingAgent] No payment methods found for user: {user_id}")
+                return []
+
+            logger.info(f"[ShoppingAgent] Retrieved {len(payment_methods)} payment methods from Credential Provider")
+            return payment_methods
+
+        except httpx.HTTPError as e:
+            logger.error(f"[_get_payment_methods_from_cp] HTTP error: {e}")
+            raise ValueError(f"Failed to get payment methods from Credential Provider: {e}")
+        except Exception as e:
+            logger.error(f"[_get_payment_methods_from_cp] Error: {e}", exc_info=True)
+            raise
+
+    async def _tokenize_payment_method(self, user_id: str, payment_method_id: str, credential_provider_url: str) -> Dict[str, Any]:
+        """
+        Credential Providerで支払い方法をトークン化
+
+        AP2仕様準拠（Step 17-18）：
+        1. Shopping AgentがCredential Providerに支払い方法のトークン化を要求
+        2. Credential Providerが一時的なセキュアトークンを生成して返却
+        """
+        logger.info(f"[ShoppingAgent] Requesting payment method tokenization for: {payment_method_id}")
+
+        try:
+            # Credential ProviderにPOST /payment-methods/tokenizeでトークン化依頼
+            response = await self.http_client.post(
+                f"{credential_provider_url}/payment-methods/tokenize",
+                json={
+                    "user_id": user_id,
+                    "payment_method_id": payment_method_id
+                },
+                timeout=10.0
+            )
+            response.raise_for_status()
+            result = response.json()
+
+            # トークン化結果を取得
+            token = result.get("token")
+            if not token:
+                raise ValueError("Credential Provider did not return token")
+
+            logger.info(f"[ShoppingAgent] Payment method tokenized: {payment_method_id} → {token[:20]}...")
+            return result
+
+        except httpx.HTTPError as e:
+            logger.error(f"[_tokenize_payment_method] HTTP error: {e}")
+            raise ValueError(f"Failed to tokenize payment method: {e}")
+        except Exception as e:
+            logger.error(f"[_tokenize_payment_method] Error: {e}", exc_info=True)
+            raise
+
+    async def _verify_attestation_with_cp(
+        self,
+        payment_mandate: Dict[str, Any],
+        attestation: Dict[str, Any],
+        credential_provider_url: str
+    ) -> Dict[str, Any]:
+        """
+        Credential ProviderにWebAuthn attestationを検証依頼
+
+        AP2仕様準拠（Step 20-22, 23）：
+        1. Shopping AgentがPaymentMandate + AttestationをCredential Providerに送信
+        2. Credential ProviderがWebAuthn attestationを検証
+        3. 検証成功時、Credential Providerが認証トークンを発行
+        """
+        logger.info(f"[ShoppingAgent] Verifying WebAuthn attestation with Credential Provider ({credential_provider_url}) for PaymentMandate: {payment_mandate.get('id')}")
+
+        try:
+            # Credential ProviderにPOST /verify/attestationで検証依頼
+            response = await self.http_client.post(
+                f"{credential_provider_url}/verify/attestation",
+                json={
+                    "payment_mandate": payment_mandate,
+                    "attestation": attestation
+                },
+                timeout=10.0
+            )
+            response.raise_for_status()
+            result = response.json()
+
+            # 検証結果を取得
+            verified = result.get("verified", False)
+            if verified:
+                token = result.get("token")
+                logger.info(f"[ShoppingAgent] WebAuthn attestation verified successfully: token={token[:20] if token else 'N/A'}...")
+            else:
+                logger.warning(f"[ShoppingAgent] WebAuthn attestation verification failed: {result.get('details')}")
+
+            return result
+
+        except httpx.HTTPError as e:
+            logger.error(f"[_verify_attestation_with_cp] HTTP error: {e}")
+            raise ValueError(f"Failed to verify attestation with Credential Provider: {e}")
+        except Exception as e:
+            logger.error(f"[_verify_attestation_with_cp] Error: {e}", exc_info=True)
             raise
