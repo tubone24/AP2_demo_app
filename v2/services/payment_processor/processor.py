@@ -63,7 +63,7 @@ class PaymentProcessorService(BaseAgent):
         Payment Processorが受信するA2Aメッセージ：
         - ap2/PaymentMandate: Shopping Agentからの支払い処理依頼
         """
-        self.a2a_handler.register_handler("ap2/PaymentMandate", self.handle_payment_mandate)
+        self.a2a_handler.register_handler("ap2.mandates.PaymentMandate", self.handle_payment_mandate)
 
     def register_endpoints(self):
         """
@@ -247,7 +247,7 @@ class PaymentProcessorService(BaseAgent):
             receipt_url = await self._generate_receipt(transaction_id, payment_mandate)
 
             return {
-                "type": "ap2/PaymentResult",
+                "type": "ap2.responses.PaymentResult",
                 "id": str(uuid.uuid4()),
                 "payload": {
                     "transaction_id": transaction_id,
@@ -257,7 +257,7 @@ class PaymentProcessorService(BaseAgent):
             }
         else:
             return {
-                "type": "ap2/Error",
+                "type": "ap2.errors.Error",
                 "id": str(uuid.uuid4()),
                 "payload": {
                     "error_code": "payment_failed",
@@ -327,7 +327,29 @@ class PaymentProcessorService(BaseAgent):
                 "error": f"Credential verification failed: {str(e)}"
             }
 
-        # モック処理：デモ用に常に成功させる
+        # AP2仕様準拠：リスクベース承認/拒否判定
+        # PaymentMandateからリスク評価結果を取得
+        risk_score = payment_mandate.get("risk_score", 0)
+        fraud_indicators = payment_mandate.get("fraud_indicators", [])
+
+        logger.info(f"[PaymentProcessor] Risk assessment: score={risk_score}, indicators={fraud_indicators}")
+
+        # リスクスコアに基づく判定
+        if risk_score > 80:
+            # 高リスク：拒否
+            logger.warning(f"[PaymentProcessor] Payment declined due to high risk score: {risk_score}")
+            return {
+                "status": "failed",
+                "transaction_id": transaction_id,
+                "error": f"Payment declined: High risk score ({risk_score})",
+                "risk_score": risk_score,
+                "fraud_indicators": fraud_indicators
+            }
+        elif risk_score > 50:
+            # 中リスク：通常は要確認だが、デモ環境では承認
+            logger.info(f"[PaymentProcessor] Medium risk detected ({risk_score}), proceeding with authorization (demo mode)")
+
+        # 承認・キャプチャ処理
         # 本番環境では実際の決済ゲートウェイ（Stripe, Square等）と統合
         result = {
             "status": "captured",
@@ -340,9 +362,11 @@ class PaymentProcessorService(BaseAgent):
             "intent_mandate_id": payment_mandate.get("intent_mandate_id"),
             "authorized_at": datetime.now(timezone.utc).isoformat(),
             "captured_at": datetime.now(timezone.utc).isoformat(),
-            "credential_verified": True  # AP2 Step 26-27で検証済み
+            "credential_verified": True,  # AP2 Step 26-27で検証済み
+            "risk_score": risk_score,
+            "fraud_indicators": fraud_indicators
         }
-        logger.info(f"[PaymentProcessor] Payment succeeded: {transaction_id}, amount={amount}")
+        logger.info(f"[PaymentProcessor] Payment succeeded: {transaction_id}, amount={amount}, risk_score={risk_score}")
 
         return result
 
@@ -503,10 +527,21 @@ class PaymentProcessorService(BaseAgent):
                 "captured_at": payment_result.get("captured_at", "N/A")
             }
 
-            # ユーザー名を取得（payer_idから簡易的に取得、または固定値）
+            # ユーザー名を取得（AP2仕様準拠：payer_idからDBで取得）
             payer_id = payment_mandate.get("payer_id", "user_demo_001")
-            user_name = "デモユーザー"  # 簡易版：固定値
-            # TODO: user_idからユーザー名を取得する仕組みを実装
+            user_name = "デモユーザー"  # フォールバック用デフォルト値
+
+            try:
+                from v2.common.database import UserCRUD
+                async with self.db_manager.get_session() as session:
+                    user = await UserCRUD.get_by_id(session, payer_id)
+                    if user:
+                        user_name = user.display_name
+                        logger.info(f"[PaymentProcessor] Retrieved user name: {user_name} for payer_id: {payer_id}")
+                    else:
+                        logger.warning(f"[PaymentProcessor] User not found for payer_id: {payer_id}, using default name")
+            except Exception as e:
+                logger.warning(f"[PaymentProcessor] Failed to retrieve user name: {e}, using default name")
 
             # PDFを生成
             pdf_buffer = generate_receipt_pdf(

@@ -92,8 +92,8 @@ class CredentialProviderService(BaseAgent):
         - ap2/PaymentMandate: Shopping Agentからの認証依頼
         - ap2/AttestationRequest: デバイス証明リクエスト
         """
-        self.a2a_handler.register_handler("ap2/PaymentMandate", self.handle_payment_mandate)
-        self.a2a_handler.register_handler("ap2/AttestationRequest", self.handle_attestation_request)
+        self.a2a_handler.register_handler("ap2.mandates.PaymentMandate", self.handle_payment_mandate)
+        self.a2a_handler.register_handler("ap2.requests.AttestationRequest", self.handle_attestation_request)
 
     def register_endpoints(self):
         """
@@ -535,7 +535,7 @@ class CredentialProviderService(BaseAgent):
 
         # 簡易応答（実際はデバイス証明を待つ）
         return {
-            "type": "ap2/Acknowledgement",
+            "type": "ap2.responses.Acknowledgement",
             "id": str(uuid.uuid4()),
             "payload": {
                 "status": "received",
@@ -553,7 +553,7 @@ class CredentialProviderService(BaseAgent):
         challenge = self.attestation_manager.generate_challenge()
 
         return {
-            "type": "ap2/AttestationChallenge",
+            "type": "ap2.responses.AttestationChallenge",
             "id": str(uuid.uuid4()),
             "payload": {
                 "challenge": challenge,

@@ -526,3 +526,40 @@ class PasskeyCredentialCRUD:
             await session.commit()
             await session.refresh(credential)
         return credential
+
+
+class UserCRUD:
+    """User CRUD操作"""
+
+    @staticmethod
+    async def create(session: AsyncSession, user_data: Dict[str, Any]) -> User:
+        """ユーザー作成"""
+        user = User(
+            id=user_data.get("id", str(uuid.uuid4())),
+            display_name=user_data["display_name"],
+            email=user_data["email"]
+        )
+        session.add(user)
+        await session.commit()
+        await session.refresh(user)
+        return user
+
+    @staticmethod
+    async def get_by_id(session: AsyncSession, user_id: str) -> Optional[User]:
+        """IDでユーザー取得"""
+        result = await session.execute(select(User).where(User.id == user_id))
+        return result.scalar_one_or_none()
+
+    @staticmethod
+    async def get_by_email(session: AsyncSession, email: str) -> Optional[User]:
+        """メールアドレスでユーザー取得"""
+        result = await session.execute(select(User).where(User.email == email))
+        return result.scalar_one_or_none()
+
+    @staticmethod
+    async def list_all(session: AsyncSession, limit: int = 100) -> List[User]:
+        """全ユーザー取得"""
+        result = await session.execute(
+            select(User).order_by(User.created_at.desc()).limit(limit)
+        )
+        return list(result.scalars().all())

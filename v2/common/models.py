@@ -130,18 +130,18 @@ class A2ADataPart(BaseModel):
     }
     """
     type: Literal[
-        "ap2/IntentMandate",
-        "ap2/CartMandate",
-        "ap2/CartRequest",
-        "ap2/CartMandatePending",
-        "ap2/PaymentMandate",
-        "ap2/PaymentResult",
-        "ap2/ProductSearch",
-        "ap2/ProductList",
-        "ap2/SignatureRequest",
-        "ap2/SignatureResponse",
-        "ap2/Error"
-    ] = Field(..., alias="@type", description="データタイプ")
+        "ap2.mandates.IntentMandate",
+        "ap2.mandates.CartMandate",
+        "ap2.requests.CartRequest",
+        "ap2.responses.CartMandatePending",
+        "ap2.mandates.PaymentMandate",
+        "ap2.responses.PaymentResult",
+        "ap2.requests.ProductSearch",
+        "ap2.responses.ProductList",
+        "ap2.requests.SignatureRequest",
+        "ap2.responses.SignatureResponse",
+        "ap2.errors.Error"
+    ] = Field(..., alias="@type", description="データタイプ（AP2仕様準拠）")
     id: str = Field(..., description="データID")
     payload: Dict[str, Any] = Field(..., description="各タイプ固有のペイロード")
 

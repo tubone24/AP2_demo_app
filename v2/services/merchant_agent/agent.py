@@ -89,9 +89,9 @@ class MerchantAgent(BaseAgent):
         - ap2/ProductSearchRequest: 商品検索依頼
         - ap2/CartRequest: Shopping Agentからのカート作成・署名依頼
         """
-        self.a2a_handler.register_handler("ap2/IntentMandate", self.handle_intent_mandate)
-        self.a2a_handler.register_handler("ap2/ProductSearchRequest", self.handle_product_search_request)
-        self.a2a_handler.register_handler("ap2/CartRequest", self.handle_cart_request)
+        self.a2a_handler.register_handler("ap2.mandates.IntentMandate", self.handle_intent_mandate)
+        self.a2a_handler.register_handler("ap2.requests.ProductSearch", self.handle_product_search_request)
+        self.a2a_handler.register_handler("ap2.requests.CartRequest", self.handle_cart_request)
 
     def register_endpoints(self):
         """
@@ -245,7 +245,7 @@ class MerchantAgent(BaseAgent):
 
         # 商品リストをレスポンス
         return {
-            "type": "ap2/ProductList",
+            "type": "ap2.responses.ProductList",
             "id": str(uuid.uuid4()),
             "payload": {
                 "intent_mandate_id": intent_mandate["id"],
@@ -267,7 +267,7 @@ class MerchantAgent(BaseAgent):
             products = await ProductCRUD.search(session, query, limit)
 
         return {
-            "type": "ap2/ProductList",
+            "type": "ap2.responses.ProductList",
             "id": str(uuid.uuid4()),
             "payload": {
                 "products": [p.to_dict() for p in products],
@@ -311,7 +311,7 @@ class MerchantAgent(BaseAgent):
 
                     # 署名済みCartMandateを返却
                     return {
-                        "type": "ap2/CartMandate",
+                        "type": "ap2.mandates.CartMandate",
                         "id": cart_mandate["id"],
                         "payload": signed_cart_mandate
                     }
@@ -320,7 +320,7 @@ class MerchantAgent(BaseAgent):
                 if result.get("status") == "pending_merchant_signature":
                     logger.info(f"[MerchantAgent] CartMandate pending manual approval: {cart_mandate['id']}")
                     return {
-                        "type": "ap2/CartMandatePending",
+                        "type": "ap2.responses.CartMandatePending",
                         "id": cart_mandate["id"],
                         "payload": {
                             "cart_mandate_id": result.get("cart_mandate_id"),
@@ -336,7 +336,7 @@ class MerchantAgent(BaseAgent):
             except httpx.HTTPError as e:
                 logger.error(f"[handle_cart_request] Failed to get Merchant signature: {e}")
                 return {
-                    "type": "ap2/Error",
+                    "type": "ap2.errors.Error",
                     "id": str(uuid.uuid4()),
                     "payload": {
                         "error_code": "merchant_signature_failed",
@@ -347,7 +347,7 @@ class MerchantAgent(BaseAgent):
         except Exception as e:
             logger.error(f"[handle_cart_request] Error: {e}", exc_info=True)
             return {
-                "type": "ap2/Error",
+                "type": "ap2.errors.Error",
                 "id": str(uuid.uuid4()),
                 "payload": {
                     "error_code": "cart_creation_failed",

@@ -105,9 +105,9 @@ class ShoppingAgent(BaseAgent):
         - ap2/ProductList: Merchant Agentからの商品リスト
         - ap2/SignatureResponse: Credential Providerからの署名結果
         """
-        self.a2a_handler.register_handler("ap2/CartMandate", self.handle_cart_mandate)
-        self.a2a_handler.register_handler("ap2/ProductList", self.handle_product_list)
-        self.a2a_handler.register_handler("ap2/SignatureResponse", self.handle_signature_response)
+        self.a2a_handler.register_handler("ap2.mandates.CartMandate", self.handle_cart_mandate)
+        self.a2a_handler.register_handler("ap2.responses.ProductList", self.handle_product_list)
+        self.a2a_handler.register_handler("ap2.responses.SignatureResponse", self.handle_signature_response)
 
     def register_endpoints(self):
         """
@@ -212,7 +212,7 @@ class ShoppingAgent(BaseAgent):
             })
 
         return {
-            "type": "ap2/Acknowledgement",
+            "type": "ap2.responses.Acknowledgement",
             "id": str(uuid.uuid4()),
             "payload": {
                 "status": "received",
@@ -226,7 +226,7 @@ class ShoppingAgent(BaseAgent):
         products = message.dataPart.payload.get("products", [])
 
         return {
-            "type": "ap2/Acknowledgement",
+            "type": "ap2.responses.Acknowledgement",
             "id": str(uuid.uuid4()),
             "payload": {
                 "status": "received",
@@ -240,7 +240,7 @@ class ShoppingAgent(BaseAgent):
         signature_data = message.dataPart.payload
 
         return {
-            "type": "ap2/Acknowledgement",
+            "type": "ap2.responses.Acknowledgement",
             "id": str(uuid.uuid4()),
             "payload": {
                 "status": "received",
@@ -862,6 +862,10 @@ class ShoppingAgent(BaseAgent):
             if "署名完了" in user_input or "signed" in user_input_lower or user_input_lower == "ok":
                 session["step"] = "webauthn_attestation_requested"
 
+                # Passkey/WebAuthnを使用することを記録（AP2仕様準拠）
+                # transaction_type決定時に使用
+                session["will_use_passkey"] = True
+
                 yield StreamEvent(
                     type="agent_text",
                     content="決済の署名ありがとうございます！セキュリティのため、デバイス認証（WebAuthn/Passkey）を実施します。"
@@ -1004,7 +1008,13 @@ class ShoppingAgent(BaseAgent):
         )
 
     def _create_intent_mandate(self, intent: str, session: Dict[str, Any]) -> Dict[str, Any]:
-        """IntentMandateを作成（セッション情報を使用）"""
+        """
+        IntentMandateを作成（セッション情報を使用）
+
+        AP2仕様準拠（Step 3-4）：
+        - Userの公開鍵を取得
+        - IntentMandateに署名を追加
+        """
         now = datetime.now(timezone.utc)
         expires_at = now + timedelta(hours=1)
 
@@ -1013,12 +1023,15 @@ class ShoppingAgent(BaseAgent):
         categories = session.get("categories", [])
         brands = session.get("brands", [])
 
-        intent_mandate = {
+        # User IDを取得（デモ用固定値）
+        user_id = "user_demo_001"
+
+        # IntentMandate基本情報（署名前）
+        intent_mandate_base = {
             "id": f"intent_{uuid.uuid4().hex[:8]}",
             "type": "IntentMandate",
             "version": "0.2",
-            "user_id": "user_demo_001",  # 固定（後でセッション管理と統合）
-            "user_public_key": "user_public_key_placeholder",
+            "user_id": user_id,
             "intent": intent,
             "constraints": {
                 "valid_until": expires_at.isoformat().replace('+00:00', 'Z'),
@@ -1034,7 +1047,30 @@ class ShoppingAgent(BaseAgent):
             "expires_at": expires_at.isoformat().replace('+00:00', 'Z')
         }
 
-        logger.info(f"[ShoppingAgent] IntentMandate created: max_amount={max_amount}, categories={categories}, brands={brands}")
+        # User公開鍵を取得
+        try:
+            user_public_key_pem = self.key_manager.get_public_key_pem(user_id)
+            intent_mandate_base["user_public_key"] = user_public_key_pem
+        except Exception as e:
+            logger.warning(f"[ShoppingAgent] Failed to get user public key: {e}. Using placeholder.")
+            intent_mandate_base["user_public_key"] = "user_public_key_placeholder"
+
+        # User署名を生成
+        try:
+            user_signature = self.signature_manager.sign_mandate(intent_mandate_base, user_id)
+            intent_mandate = intent_mandate_base.copy()
+            intent_mandate["user_signature"] = user_signature.model_dump()
+
+            logger.info(
+                f"[ShoppingAgent] IntentMandate created with user signature: "
+                f"id={intent_mandate['id']}, max_amount={max_amount}, "
+                f"categories={categories}, brands={brands}"
+            )
+        except Exception as e:
+            logger.error(f"[ShoppingAgent] Failed to sign IntentMandate: {e}. Returning unsigned mandate.")
+            # 署名失敗時は署名なしで返す（デモ環境での互換性）
+            intent_mandate = intent_mandate_base
+            logger.warning("[ShoppingAgent] IntentMandate created without user signature (fallback)")
 
         return intent_mandate
 
@@ -1116,7 +1152,8 @@ class ShoppingAgent(BaseAgent):
                 "expiry_month": tokenized_payment_method.get("expiry_month"),
                 "expiry_year": tokenized_payment_method.get("expiry_year")
             },
-            "transaction_type": "human_not_present",  # CNP取引
+            # Passkey/WebAuthnを使用している場合はhuman_present（AP2仕様準拠）
+            "transaction_type": "human_present" if session.get("will_use_passkey", False) else "human_not_present",
             "agent_involved": True,  # Shopping Agent経由
             "created_at": now.isoformat().replace('+00:00', 'Z')
         }
@@ -1180,7 +1217,7 @@ class ShoppingAgent(BaseAgent):
             # A2Aメッセージを作成（署名付き）
             message = self.a2a_handler.create_response_message(
                 recipient="did:ap2:agent:payment_processor",
-                data_type="ap2/PaymentMandate",
+                data_type="ap2.mandates.PaymentMandate",
                 data_id=payment_mandate["id"],
                 payload=payment_mandate,
                 sign=True
@@ -1201,11 +1238,11 @@ class ShoppingAgent(BaseAgent):
                 # @typeエイリアスを使用
                 response_type = data_part.get("@type") or data_part.get("type")
 
-                if response_type == "ap2/PaymentResult":
+                if response_type == "ap2.responses.PaymentResult":
                     payload = data_part["payload"]
                     logger.info(f"[ShoppingAgent] Payment processing completed: status={payload.get('status')}")
                     return payload
-                elif response_type == "ap2/Error":
+                elif response_type == "ap2.errors.Error":
                     error_payload = data_part["payload"]
                     raise ValueError(f"Payment Processor error: {error_payload.get('error_message')}")
                 else:
@@ -1235,7 +1272,7 @@ class ShoppingAgent(BaseAgent):
             # A2Aメッセージを作成（署名付き）
             message = self.a2a_handler.create_response_message(
                 recipient="did:ap2:agent:merchant_agent",
-                data_type="ap2/IntentMandate",
+                data_type="ap2.mandates.IntentMandate",
                 data_id=intent_mandate["id"],
                 payload=intent_mandate,
                 sign=True
@@ -1255,7 +1292,7 @@ class ShoppingAgent(BaseAgent):
                 data_part = result["dataPart"]
                 # @typeエイリアスを使用
                 response_type = data_part.get("@type") or data_part.get("type")
-                if response_type == "ap2/ProductList":
+                if response_type == "ap2.responses.ProductList":
                     products = data_part["payload"].get("products", [])
                     logger.info(f"[ShoppingAgent] Received {len(products)} products from Merchant Agent")
                     return products
@@ -1309,7 +1346,7 @@ class ShoppingAgent(BaseAgent):
             # A2Aメッセージを作成（署名付き）
             message = self.a2a_handler.create_response_message(
                 recipient="did:ap2:agent:merchant_agent",
-                data_type="ap2/CartRequest",
+                data_type="ap2.requests.CartRequest",
                 data_id=str(uuid.uuid4()),
                 payload=cart_request,
                 sign=True
@@ -1330,7 +1367,7 @@ class ShoppingAgent(BaseAgent):
                 # @typeエイリアスを使用
                 response_type = data_part.get("@type") or data_part.get("type")
 
-                if response_type == "ap2/CartMandate":
+                if response_type == "ap2.mandates.CartMandate":
                     signed_cart_mandate = data_part["payload"]
                     logger.info(f"[ShoppingAgent] Received signed CartMandate from Merchant Agent: {signed_cart_mandate.get('id')}")
 
@@ -1365,7 +1402,7 @@ class ShoppingAgent(BaseAgent):
                     logger.info(f"[ShoppingAgent] Merchant signature verified for CartMandate")
                     return signed_cart_mandate
 
-                elif response_type == "ap2/CartMandatePending":
+                elif response_type == "ap2.responses.CartMandatePending":
                     # 手動署名モード：Merchantの承認待ち
                     pending_info = data_part["payload"]
                     cart_mandate_id = pending_info.get("cart_mandate_id")
@@ -1376,7 +1413,7 @@ class ShoppingAgent(BaseAgent):
                     signed_cart_mandate = await self._wait_for_merchant_approval(cart_mandate_id)
                     return signed_cart_mandate
 
-                elif response_type == "ap2/Error":
+                elif response_type == "ap2.errors.Error":
                     error_payload = data_part["payload"]
                     raise ValueError(f"Merchant Agent error: {error_payload.get('error_message')}")
                 else:

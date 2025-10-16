@@ -108,7 +108,7 @@ SAMPLE_PRODUCTS = [
             "color": "White",
             "sizes": ["S", "M", "L", "XL"],
             "material": "コットン100%",
-            "image_url": "https://placehold.co/400x400/FFF/FFD700?text=むぎぼーTシャツ"
+            "image_url": "/assets/むぎぼーTシャツ.png"
         }
     },
     {
@@ -123,7 +123,7 @@ SAMPLE_PRODUCTS = [
             "color": "Natural",
             "size": "縦40cm×横35cm",
             "material": "キャンバス",
-            "image_url": "https://placehold.co/400x400/F5F5DC/FFD700?text=むぎぼートート"
+            "image_url": "/assets/むぎぼートート.png"
         }
     },
     {
@@ -138,7 +138,7 @@ SAMPLE_PRODUCTS = [
             "color": "Yellow/White",
             "size": "幅20cm×高さ12cm",
             "material": "ポリエステル",
-            "image_url": "https://placehold.co/400x400/FFD700/FFF?text=むぎぼーポーチ"
+            "image_url": "/assets/むぎぼーポーチ.png"
         }
     },
 ]

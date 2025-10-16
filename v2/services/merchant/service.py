@@ -65,7 +65,7 @@ class MerchantService(BaseAgent):
         Merchantが受信するA2Aメッセージ：
         - ap2/CartMandate: Merchant Agentからの署名依頼
         """
-        self.a2a_handler.register_handler("ap2/CartMandate", self.handle_cart_mandate_sign_request)
+        self.a2a_handler.register_handler("ap2.mandates.CartMandate", self.handle_cart_mandate_sign_request)
 
     def register_endpoints(self):
         """
@@ -200,9 +200,32 @@ class MerchantService(BaseAgent):
         async def get_pending_orders():
             """
             GET /orders/pending - 未処理注文一覧
+
+            AP2仕様準拠：
+            pending_merchant_signatureステータスのCartMandateを取得
             """
-            # TODO: 実装（Mandateテーブルからstatus=pending_signatureを取得）
-            return {"orders": []}
+            try:
+                async with self.db_manager.get_session() as session:
+                    # 署名待ちのCartMandateを取得
+                    mandates = await MandateCRUD.get_by_status(session, "pending_merchant_signature")
+
+                    return {
+                        "orders": [
+                            {
+                                "id": m.id,
+                                "type": "CartMandate",
+                                "status": m.status,
+                                "payload": json.loads(m.payload) if isinstance(m.payload, str) else m.payload,
+                                "created_at": m.issued_at.isoformat() if m.issued_at else None
+                            }
+                            for m in mandates
+                        ],
+                        "total": len(mandates)
+                    }
+
+            except Exception as e:
+                logger.error(f"[get_pending_orders] Error: {e}", exc_info=True)
+                raise HTTPException(status_code=500, detail=str(e))
 
         @self.app.get("/settings/signature-mode")
         async def get_signature_mode():
@@ -491,7 +514,7 @@ class MerchantService(BaseAgent):
             signed_cart_mandate["merchant_signature"] = signature.model_dump()
 
             return {
-                "type": "ap2/CartMandate",
+                "type": "ap2.mandates.CartMandate",
                 "id": cart_mandate["id"],
                 "payload": signed_cart_mandate
             }
@@ -499,7 +522,7 @@ class MerchantService(BaseAgent):
         except Exception as e:
             logger.error(f"[handle_cart_mandate_sign_request] Error: {e}", exc_info=True)
             return {
-                "type": "ap2/Error",
+                "type": "ap2.errors.Error",
                 "id": str(uuid.uuid4()),
                 "payload": {
                     "error_code": "signature_failed",

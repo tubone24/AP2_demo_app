@@ -334,7 +334,7 @@ curl -N -H "Content-Type: application/json" \
 ```
 data: {"type":"agent_text","content":"こんにちは！AP2 Shopping Agentです。"}
 
-data: {"type":"agent_text","content":"何をお探しですか？例えば「むぎぼーグッズが欲しい」のように教えてください。"}
+data: {"type":"agent_text","content":"何をお探しですか？例えば「むぎぼーのグッズが欲しい」のように教えてください。"}
 
 data: {"type":"done"}
 ```
