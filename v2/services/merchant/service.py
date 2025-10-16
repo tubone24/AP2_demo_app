@@ -250,7 +250,7 @@ class MerchantService(BaseAgent):
                         "pending_cart_mandates": [
                             {
                                 "id": m.id,
-                                "payload": m.payload,
+                                "payload": json.loads(m.payload) if isinstance(m.payload, str) else m.payload,
                                 "created_at": m.issued_at.isoformat() if m.issued_at else None
                             }
                             for m in mandates

@@ -457,22 +457,43 @@ export default function MerchantPage() {
               {pendingCartMandates.map((mandate) => (
                 <Card key={mandate.id} className="border-orange-500">
                   <CardContent className="p-4">
-                    <div className="flex items-center justify-between">
+                    <div className="flex items-start justify-between gap-4">
                       <div className="flex-1">
                         <h3 className="font-semibold">CartMandate {mandate.id}</h3>
                         <p className="text-sm text-muted-foreground">
                           作成日時: {new Date(mandate.created_at).toLocaleString("ja-JP")}
                         </p>
-                        <p className="text-sm mt-2">
-                          合計: {mandate.payload?.total?.currency} ¥
-                          {parseFloat(mandate.payload?.total?.value || "0").toLocaleString()}
-                        </p>
-                        <p className="text-sm text-muted-foreground">
-                          商品数: {mandate.payload?.items?.length || 0}件
-                        </p>
+
+                        <div className="mt-3 space-y-1">
+                          {mandate.payload?.items?.map((item: any, idx: number) => (
+                            <p key={idx} className="text-sm">
+                              • {item.name} × {item.quantity}個
+                            </p>
+                          ))}
+                        </div>
+
+                        <div className="mt-3 p-2 bg-muted rounded">
+                          <div className="flex justify-between text-sm">
+                            <span className="text-muted-foreground">小計</span>
+                            <span>¥{parseFloat(mandate.payload?.subtotal?.value || "0").toLocaleString()}</span>
+                          </div>
+                          <div className="flex justify-between text-sm">
+                            <span className="text-muted-foreground">税+送料</span>
+                            <span>¥{(
+                              parseFloat(mandate.payload?.tax?.value || "0") +
+                              parseFloat(mandate.payload?.shipping?.cost?.value || "0")
+                            ).toLocaleString()}</span>
+                          </div>
+                          <div className="flex justify-between text-sm font-semibold mt-1 pt-1 border-t">
+                            <span>合計</span>
+                            <span className="text-primary">
+                              ¥{parseFloat(mandate.payload?.total?.value || "0").toLocaleString()}
+                            </span>
+                          </div>
+                        </div>
                       </div>
 
-                      <div className="flex gap-2">
+                      <div className="flex flex-col gap-2">
                         <Button
                           variant="outline"
                           size="sm"
@@ -739,10 +760,18 @@ export default function MerchantPage() {
                 <h4 className="font-semibold mb-2">注文商品</h4>
                 <div className="space-y-2">
                   {showCartMandateDetail.payload?.items?.map((item: any, index: number) => (
-                    <div key={index} className="flex justify-between text-sm p-2 bg-muted rounded">
-                      <span>{item.name} x {item.quantity}</span>
+                    <div key={index} className="flex justify-between text-sm p-3 bg-muted rounded">
+                      <div className="flex-1">
+                        <p className="font-medium">{item.name}</p>
+                        <p className="text-muted-foreground text-xs">
+                          {item.description || item.sku}
+                        </p>
+                        <p className="text-muted-foreground text-xs mt-1">
+                          単価: ¥{parseFloat(item.unit_price?.value || "0").toLocaleString()} × {item.quantity}個
+                        </p>
+                      </div>
                       <span className="font-medium">
-                        {item.total_price?.currency} ¥{parseFloat(item.total_price?.value || "0").toLocaleString()}
+                        ¥{parseFloat(item.total_price?.value || "0").toLocaleString()}
                       </span>
                     </div>
                   ))}
@@ -751,13 +780,60 @@ export default function MerchantPage() {
 
               <Separator />
 
+              <div className="space-y-2 text-sm">
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">小計</span>
+                  <span>
+                    ¥{parseFloat(showCartMandateDetail.payload?.subtotal?.value || "0").toLocaleString()}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">税金</span>
+                  <span>
+                    ¥{parseFloat(showCartMandateDetail.payload?.tax?.value || "0").toLocaleString()}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">送料</span>
+                  <span>
+                    ¥{parseFloat(showCartMandateDetail.payload?.shipping?.cost?.value || "0").toLocaleString()}
+                  </span>
+                </div>
+              </div>
+
+              <Separator />
+
               <div className="flex justify-between font-semibold text-lg">
-                <span>合計</span>
-                <span>
-                  {showCartMandateDetail.payload?.total?.currency} ¥
-                  {parseFloat(showCartMandateDetail.payload?.total?.value || "0").toLocaleString()}
+                <span>合計金額</span>
+                <span className="text-primary">
+                  ¥{parseFloat(showCartMandateDetail.payload?.total?.value || "0").toLocaleString()}
                 </span>
               </div>
+
+              {showCartMandateDetail.payload?.shipping?.address && (
+                <>
+                  <Separator />
+                  <div>
+                    <h4 className="font-semibold mb-2">配送先</h4>
+                    <div className="text-sm space-y-1 p-3 bg-muted rounded">
+                      <p className="font-medium">
+                        {showCartMandateDetail.payload.shipping.address.recipient}
+                      </p>
+                      <p className="text-muted-foreground">
+                        〒{showCartMandateDetail.payload.shipping.address.postal_code}
+                      </p>
+                      <p className="text-muted-foreground">
+                        {showCartMandateDetail.payload.shipping.address.address_line1}
+                      </p>
+                      {showCartMandateDetail.payload.shipping.address.address_line2 && (
+                        <p className="text-muted-foreground">
+                          {showCartMandateDetail.payload.shipping.address.address_line2}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </>
+              )}
             </div>
           )}
           <DialogFooter>
