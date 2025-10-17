@@ -9,6 +9,7 @@ export function useSSEChat() {
   const [currentAgentMessage, setCurrentAgentMessage] = useState("");
   const [signatureRequest, setSignatureRequest] = useState<SignatureRequestEvent | null>(null);
   const [currentProducts, setCurrentProducts] = useState<Product[]>([]);
+  const [currentCartCandidates, setCurrentCartCandidates] = useState<any[]>([]);
 
   // 新しいリッチコンテンツ用のstate
   const [credentialProviders, setCredentialProviders] = useState<any[]>([]);
@@ -22,14 +23,6 @@ export function useSSEChat() {
   const sessionIdRef = useRef<string>(`session_${Date.now()}_${Math.random().toString(36).substring(7)}`);
 
   const sendMessage = useCallback(async (userInput: string) => {
-    // 前回のストリーミング結果をクリア
-    setCurrentProducts([]);
-    setCurrentAgentMessage("");
-    setCredentialProviders([]);
-    setShippingFormRequest(null);
-    setPaymentMethods([]);
-    setWebauthnRequest(null);
-
     // ユーザーメッセージを追加
     const userMessage: ChatMessage = {
       id: `user-${Date.now()}`,
@@ -41,6 +34,12 @@ export function useSSEChat() {
 
     // ストリーミング開始
     setIsStreaming(true);
+
+    // リッチコンテンツは即座にクリア（次の応答で上書きされる想定）
+    setCredentialProviders([]);
+    setShippingFormRequest(null);
+    setPaymentMethods([]);
+    setWebauthnRequest(null);
 
     // AbortController作成
     const abortController = new AbortController();
@@ -75,6 +74,8 @@ export function useSSEChat() {
       let buffer = "";
       let agentMessageContent = "";
       let streamProducts: Product[] = []; // ローカル変数で商品データを管理
+      let streamCartCandidates: any[] = []; // ローカル変数でカート候補を管理
+      let hasReceivedContentEvent = false; // リッチコンテンツイベント受信フラグ
 
       while (true) {
         const { done, value } = await reader.read();
@@ -99,8 +100,21 @@ export function useSSEChat() {
             try {
               const event: ChatSSEEvent = JSON.parse(data);
 
+              // デバッグ：イベントをコンソールに出力
+              console.log("[SSE Event]", event.type, {
+                hasReceivedContentEvent,
+                currentCartCandidatesCount: streamCartCandidates.length,
+                event
+              });
+
               switch (event.type) {
                 case "agent_text":
+                  // リッチコンテンツイベントを受信していない場合のみクリア
+                  if (!hasReceivedContentEvent) {
+                    setCurrentProducts([]);
+                    setCurrentCartCandidates([]);
+                    setCurrentAgentMessage("");
+                  }
                   agentMessageContent += event.content;
                   setCurrentAgentMessage(agentMessageContent);
                   break;
@@ -125,17 +139,24 @@ export function useSSEChat() {
                 case "product_list":
                   // 商品リストを保存（ローカル変数 + state）
                   streamProducts = event.products;
+                  // 新しい商品リストで直接置き換え（空配列を経由しない）
                   setCurrentProducts(streamProducts);
-                  agentMessageContent += `\n\n${event.products.length}件の商品が見つかりました：`;
+                  setCurrentCartCandidates([]);
+                  agentMessageContent = `\n\n${event.products.length}件の商品が見つかりました：`;
                   setCurrentAgentMessage(agentMessageContent);
+                  hasReceivedContentEvent = true; // リッチコンテンツイベントを受信
                   break;
 
                 case "cart_options":
-                  // カルーセル用（商品リストと同じ扱い）
-                  streamProducts = event.items;
-                  setCurrentProducts(streamProducts);
-                  agentMessageContent += `\n\n${event.items.length}件の商品をご覧ください：`;
+                  // AP2/A2A仕様準拠：カート候補を表示
+                  const cartEvent = event as any;
+                  streamCartCandidates = cartEvent.items || [];
+                  // 新しいカート候補で直接置き換え（空配列を経由しない）
+                  setCurrentProducts([]);
+                  setCurrentCartCandidates(streamCartCandidates);
+                  agentMessageContent = "";
                   setCurrentAgentMessage(agentMessageContent);
+                  hasReceivedContentEvent = true; // リッチコンテンツイベントを受信
                   break;
 
                 case "credential_provider_selection":
@@ -248,6 +269,7 @@ export function useSSEChat() {
     isStreaming,
     currentAgentMessage,
     currentProducts,
+    currentCartCandidates,
     signatureRequest,
     credentialProviders,
     shippingFormRequest,

@@ -418,6 +418,7 @@ class A2ADataPart(BaseModel):
         "ap2.mandates.CartMandate",
         "ap2.requests.CartRequest",
         "ap2.responses.CartMandatePending",
+        "ap2.responses.CartCandidates",
         "ap2.mandates.PaymentMandate",
         "ap2.responses.PaymentResult",
         "ap2.requests.ProductSearch",

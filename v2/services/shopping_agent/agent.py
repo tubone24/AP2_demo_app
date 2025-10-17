@@ -594,12 +594,46 @@ class ShoppingAgent(BaseAgent):
 
                     logger.info(f"[submit_payment_attestation] Payment successful: {transaction_id}")
 
+                    # AP2仕様準拠：CartMandateから商品情報と金額を取得
+                    cart_mandate = session.get("cart_mandate", {})
+                    items = cart_mandate.get("items", [])
+                    total = cart_mandate.get("total", {})
+
+                    logger.info(
+                        f"[submit_payment_attestation] CartMandate info: "
+                        f"items_count={len(items)}, "
+                        f"total={total}"
+                    )
+
+                    # 商品名を生成（複数商品の場合は商品数を表示）
+                    if len(items) == 1:
+                        product_name = items[0].get("name", "商品")
+                    elif len(items) > 1:
+                        product_name = f"{items[0].get('name', '商品')} 他{len(items) - 1}点"
+                    else:
+                        product_name = "購入商品"
+
+                    # 金額を取得（文字列から数値に変換）
+                    try:
+                        amount = float(total.get("value", "0"))
+                    except (ValueError, TypeError):
+                        amount = 0
+
+                    logger.info(
+                        f"[submit_payment_attestation] Payment success response: "
+                        f"product_name={product_name}, "
+                        f"amount={amount}, "
+                        f"currency={total.get('currency', 'JPY')}"
+                    )
+
                     return {
                         "status": "success",
                         "transaction_id": transaction_id,
                         "receipt_url": receipt_url,
-                        "product_name": session.get("selected_product", {}).get("name"),
-                        "amount": session.get("selected_product", {}).get("price")
+                        "product_name": product_name,
+                        "amount": amount,
+                        "items_count": len(items),
+                        "currency": total.get("currency", "JPY")
                     }
                 else:
                     # 決済失敗
@@ -844,47 +878,48 @@ class ShoppingAgent(BaseAgent):
 
                 yield StreamEvent(
                     type="agent_text",
-                    content="署名ありがとうございます！Merchant Agentに商品を検索依頼中..."
+                    content="署名ありがとうございます！Merchant Agentにカート候補を依頼中..."
                 )
                 await asyncio.sleep(0.5)
 
-                # Merchant AgentにIntentMandateを送信して商品検索依頼（A2A通信）
+                # Merchant AgentにIntentMandateを送信してカート候補を取得（A2A通信）
                 try:
-                    products = await self._search_products_via_merchant_agent(
+                    cart_candidates = await self._search_products_via_merchant_agent(
                         session["intent_mandate"],
                         session  # intent_message_idを保存するためにsessionを渡す
                     )
 
-                    if not products:
+                    if not cart_candidates:
                         yield StreamEvent(
                             type="agent_text",
-                            content="申し訳ありません。条件に合う商品が見つかりませんでした。"
+                            content="申し訳ありません。条件に合うカート候補が見つかりませんでした。"
                         )
                         session["step"] = "error"
                         return
 
-                    # 商品リストをセッションに保存
-                    session["available_products"] = products
+                    # カート候補をセッションに保存
+                    session["cart_candidates"] = cart_candidates
 
+                    # AP2/A2A仕様準拠：複数のカート候補をカルーセル表示
                     yield StreamEvent(
                         type="cart_options",
-                        items=products
+                        items=cart_candidates
                     )
 
                     yield StreamEvent(
                         type="agent_text",
-                        content="上記の商品が見つかりました。どちらか選択してください。"
+                        content=f"{len(cart_candidates)}つのカート候補が見つかりました。お好みのカートを選択してください。"
                     )
                 except Exception as e:
-                    logger.error(f"[_generate_fixed_response] Product search via Merchant Agent failed: {e}")
+                    logger.error(f"[_generate_fixed_response] Cart candidates request via Merchant Agent failed: {e}")
                     yield StreamEvent(
                         type="agent_text",
-                        content=f"申し訳ありません。商品検索に失敗しました: {str(e)}"
+                        content=f"申し訳ありません。カート候補の取得に失敗しました: {str(e)}"
                     )
                     session["step"] = "error"
                     return
 
-                session["step"] = "product_selection"
+                session["step"] = "cart_selection"
                 return
             else:
                 yield StreamEvent(
@@ -893,7 +928,103 @@ class ShoppingAgent(BaseAgent):
                 )
                 return
 
+        # ステップ6.5: カート選択（AP2/A2A仕様準拠）
+        elif current_step == "cart_selection":
+            cart_candidates = session.get("cart_candidates", [])
+            if not cart_candidates:
+                yield StreamEvent(
+                    type="agent_text",
+                    content="申し訳ありません。カート候補が見つかりません。最初からやり直してください。"
+                )
+                session["step"] = "error"
+                return
+
+            # カート選択（カートIDまたは番号）
+            selected_cart = None
+            user_input_clean = user_input.strip()
+
+            # 番号で選択（1, 2, 3...）
+            if user_input_clean.isdigit():
+                index = int(user_input_clean) - 1
+                if 0 <= index < len(cart_candidates):
+                    selected_cart = cart_candidates[index]
+
+            # カートIDで選択（"cart_abc123"など）
+            if not selected_cart:
+                for cart in cart_candidates:
+                    cart_mandate = cart.get("cart_mandate", {})
+                    if cart_mandate.get("id") in user_input:
+                        selected_cart = cart
+                        break
+
+            # Artifact IDで選択
+            if not selected_cart:
+                for cart in cart_candidates:
+                    if cart.get("artifact_id") in user_input:
+                        selected_cart = cart
+                        break
+
+            if not selected_cart:
+                yield StreamEvent(
+                    type="agent_text",
+                    content=f"カートが認識できませんでした。番号（1〜{len(cart_candidates)}）またはカートIDを入力してください。"
+                )
+                return
+
+            # 選択されたカートを保存
+            cart_mandate = selected_cart.get("cart_mandate", {})
+            session["selected_cart_mandate"] = cart_mandate
+            session["selected_cart_artifact"] = selected_cart
+
+            cart_name = cart_mandate.get("cart_metadata", {}).get("name", "カート")
+            total_amount = float(cart_mandate.get("total", {}).get("value", 0))
+
+            yield StreamEvent(
+                type="agent_text",
+                content=f"「{cart_name}」を選択しました。\n合計金額: ¥{int(total_amount):,}"
+            )
+            await asyncio.sleep(0.3)
+
+            # AP2仕様確認: user_signature_requiredフィールドをチェック
+            # CartMandateにuser_signature_requiredがtrueの場合のみユーザー署名が必要
+            user_signature_required = cart_mandate.get("user_signature_required", False)
+
+            if user_signature_required:
+                # ユーザー署名が必要な場合（Consent署名）
+                yield StreamEvent(
+                    type="agent_text",
+                    content="このカートにはユーザー署名が必要です。Consent署名をお願いします。"
+                )
+                await asyncio.sleep(0.2)
+
+                # Consent署名リクエスト
+                # TODO: Consent署名の実装（必要に応じて）
+                session["step"] = "consent_signature_requested"
+                return
+            else:
+                # ユーザー署名不要の場合は直接Credential Provider選択へ
+                logger.info(
+                    f"[ShoppingAgent] CartMandate does not require user signature. "
+                    f"Proceeding to Credential Provider selection."
+                )
+
+                yield StreamEvent(
+                    type="agent_text",
+                    content="決済に使用するCredential Providerを選択してください。"
+                )
+                await asyncio.sleep(0.2)
+
+                # Credential Providerリストをリッチコンテンツで送信
+                yield StreamEvent(
+                    type="credential_provider_selection",
+                    providers=self.credential_providers
+                )
+
+                session["step"] = "select_credential_provider"
+                return
+
         # ステップ7: 商品選択後 → CartMandate作成（Merchant Agentを経由）
+        # 注: この処理は旧フロー（商品個別選択）用。新フロー（カート選択）では使用しない
         elif current_step == "product_selection":
             # 利用可能な商品リストから選択
             available_products = session.get("available_products", [])
@@ -993,66 +1124,199 @@ class ShoppingAgent(BaseAgent):
             )
             await asyncio.sleep(0.3)
 
-            # AP2 Step 4: 配送先入力（CartMandate作成前に必須）
-            yield StreamEvent(
-                type="agent_text",
-                content="配送先を入力してください。最終的な価格（送料込み）を確定するために必要です。"
-            )
-            await asyncio.sleep(0.2)
+            # カート選択フローかどうかを確認
+            selected_cart_mandate = session.get("selected_cart_mandate")
 
-            # 配送先フォームをリッチコンテンツで送信
-            yield StreamEvent(
-                type="shipping_form_request",
-                form_schema={
-                    "type": "shipping_address",
-                    "fields": [
-                        {
-                            "name": "recipient",
-                            "label": "受取人名",
-                            "type": "text",
-                            "required": True,
-                            "placeholder": "山田太郎"
-                        },
-                        {
-                            "name": "postal_code",
-                            "label": "郵便番号",
-                            "type": "text",
-                            "required": True,
-                            "placeholder": "150-0001",
-                            "pattern": "\\d{3}-?\\d{4}"
-                        },
-                        {
-                            "name": "address_line1",
-                            "label": "住所1（都道府県・市区町村・番地）",
-                            "type": "text",
-                            "required": True,
-                            "placeholder": "東京都渋谷区神宮前1-1-1"
-                        },
-                        {
-                            "name": "address_line2",
-                            "label": "住所2（建物名・部屋番号）",
-                            "type": "text",
-                            "required": False,
-                            "placeholder": "サンプルマンション101"
-                        },
-                        {
-                            "name": "country",
-                            "label": "国",
-                            "type": "select",
-                            "required": True,
-                            "options": [
-                                {"value": "JP", "label": "日本"},
-                                {"value": "US", "label": "アメリカ"},
-                                {"value": "GB", "label": "イギリス"}
-                            ],
-                            "default": "JP"
+            if selected_cart_mandate:
+                # カート選択フロー：配送先は既にCartMandateに含まれている
+                shipping_info = selected_cart_mandate.get("shipping", {})
+                shipping_address = shipping_info.get("address")
+
+                if shipping_address:
+                    # 配送先が既に設定されている場合はそれを使用
+                    session["shipping_address"] = shipping_address
+                    logger.info(
+                        f"[ShoppingAgent] Using shipping address from CartMandate: "
+                        f"{shipping_address.get('recipient', 'N/A')}"
+                    )
+
+                    yield StreamEvent(
+                        type="agent_text",
+                        content=f"配送先を確認しました：{shipping_address.get('recipient', 'お客様')} 様"
+                    )
+                    await asyncio.sleep(0.3)
+
+                    # 配送先が既に設定されているため、直接支払い方法取得へ進む
+                    # AP2 Step 6-7: Credential Providerから支払い方法を取得
+                    yield StreamEvent(
+                        type="agent_text",
+                        content="Credential Providerから利用可能な支払い方法を取得中..."
+                    )
+                    await asyncio.sleep(0.3)
+
+                    try:
+                        # 選択されたCredential Providerから支払い方法を取得
+                        payment_methods = await self._get_payment_methods_from_cp("user_demo_001", selected_provider["url"])
+
+                        if not payment_methods:
+                            yield StreamEvent(
+                                type="agent_text",
+                                content="申し訳ありません。利用可能な支払い方法が見つかりませんでした。"
+                            )
+                            session["step"] = "error"
+                            return
+
+                        session["available_payment_methods"] = payment_methods
+                        session["step"] = "select_payment_method"
+
+                        # 支払い方法をリッチコンテンツで表示
+                        yield StreamEvent(
+                            type="agent_text",
+                            content="以下の支払い方法から選択してください。"
+                        )
+                        await asyncio.sleep(0.2)
+
+                        yield StreamEvent(
+                            type="payment_method_selection",
+                            payment_methods=payment_methods
+                        )
+                        return
+
+                    except Exception as e:
+                        logger.error(f"[_generate_fixed_response] Payment methods retrieval failed: {e}")
+                        yield StreamEvent(
+                            type="agent_text",
+                            content=f"申し訳ありません。支払い方法の取得に失敗しました: {str(e)}"
+                        )
+                        session["step"] = "error"
+                        return
+
+                else:
+                    # 配送先がない場合は入力を求める（通常はありえない）
+                    logger.warning("[ShoppingAgent] CartMandate does not contain shipping address")
+                    yield StreamEvent(
+                        type="agent_text",
+                        content="配送先情報が見つかりません。配送先を入力してください。"
+                    )
+                    await asyncio.sleep(0.2)
+
+                    # 配送先フォームをリッチコンテンツで送信
+                    yield StreamEvent(
+                        type="shipping_form_request",
+                        form_schema={
+                            "type": "shipping_address",
+                            "fields": [
+                                {
+                                    "name": "recipient",
+                                    "label": "受取人名",
+                                    "type": "text",
+                                    "required": True,
+                                    "placeholder": "山田太郎"
+                                },
+                                {
+                                    "name": "postal_code",
+                                    "label": "郵便番号",
+                                    "type": "text",
+                                    "required": True,
+                                    "placeholder": "150-0001",
+                                    "pattern": "\\d{3}-?\\d{4}"
+                                },
+                                {
+                                    "name": "address_line1",
+                                    "label": "住所1（都道府県・市区町村・番地）",
+                                    "type": "text",
+                                    "required": True,
+                                    "placeholder": "東京都渋谷区神宮前1-1-1"
+                                },
+                                {
+                                    "name": "address_line2",
+                                    "label": "住所2（建物名・部屋番号）",
+                                    "type": "text",
+                                    "required": False,
+                                    "placeholder": "サンプルマンション101"
+                                },
+                                {
+                                    "name": "country",
+                                    "label": "国",
+                                    "type": "select",
+                                    "required": True,
+                                    "options": [
+                                        {"value": "JP", "label": "日本"},
+                                        {"value": "US", "label": "アメリカ"},
+                                        {"value": "GB", "label": "イギリス"}
+                                    ],
+                                    "default": "JP"
+                                }
+                            ]
                         }
-                    ]
-                }
-            )
+                    )
 
-            session["step"] = "input_shipping_address"
-            return
+                    session["step"] = "input_shipping_address"
+                    return
+
+            else:
+                # 旧フロー（商品個別選択）：配送先入力が必要
+                yield StreamEvent(
+                    type="agent_text",
+                    content="配送先を入力してください。最終的な価格（送料込み）を確定するために必要です。"
+                )
+                await asyncio.sleep(0.2)
+
+                # 配送先フォームをリッチコンテンツで送信
+                yield StreamEvent(
+                    type="shipping_form_request",
+                    form_schema={
+                        "type": "shipping_address",
+                        "fields": [
+                            {
+                                "name": "recipient",
+                                "label": "受取人名",
+                                "type": "text",
+                                "required": True,
+                                "placeholder": "山田太郎"
+                            },
+                            {
+                                "name": "postal_code",
+                                "label": "郵便番号",
+                                "type": "text",
+                                "required": True,
+                                "placeholder": "150-0001",
+                                "pattern": "\\d{3}-?\\d{4}"
+                            },
+                            {
+                                "name": "address_line1",
+                                "label": "住所1（都道府県・市区町村・番地）",
+                                "type": "text",
+                                "required": True,
+                                "placeholder": "東京都渋谷区神宮前1-1-1"
+                            },
+                            {
+                                "name": "address_line2",
+                                "label": "住所2（建物名・部屋番号）",
+                                "type": "text",
+                                "required": False,
+                                "placeholder": "サンプルマンション101"
+                            },
+                            {
+                                "name": "country",
+                                "label": "国",
+                                "type": "select",
+                                "required": True,
+                                "options": [
+                                    {"value": "JP", "label": "日本"},
+                                    {"value": "US", "label": "アメリカ"},
+                                    {"value": "GB", "label": "イギリス"}
+                                ],
+                                "default": "JP"
+                            }
+                        ]
+                    }
+                )
+
+                session["step"] = "input_shipping_address"
+                return
+
+            # カート選択フローで配送先が既に設定されている場合、支払い方法取得へ進む
 
         # ステップ7.2: 配送先入力完了 → 支払い方法取得
         elif current_step == "input_shipping_address":
@@ -1214,74 +1478,93 @@ class ShoppingAgent(BaseAgent):
                 session["step"] = "error"
                 return
 
+            # カート選択フローかどうかを確認
+            selected_cart_mandate = session.get("selected_cart_mandate")
+
+            if selected_cart_mandate:
+                # カート選択フロー：既にCartMandateが存在するため、それを使用
+                session["cart_mandate"] = selected_cart_mandate
+                logger.info(
+                    f"[ShoppingAgent] Using selected CartMandate: {selected_cart_mandate.get('id')}"
+                )
+
+                yield StreamEvent(
+                    type="agent_text",
+                    content="選択されたカートの内容を確認しました。決済情報を準備中..."
+                )
+                await asyncio.sleep(0.5)
+
+            else:
+                # 旧フロー（商品個別選択）：Merchant Agentにカート作成を依頼
+                yield StreamEvent(
+                    type="agent_text",
+                    content="Merchant Agentにカート作成・署名を依頼中..."
+                )
+                await asyncio.sleep(0.3)
+
+                # Merchant AgentにCartRequestを送信（A2A通信）
+                # Merchant AgentがCartMandateを作成し、Merchantに署名依頼して、署名済みCartMandateを返却
+                try:
+                    signed_cart_mandate = await self._request_cart_from_merchant_agent(
+                        session["selected_product"],
+                        session
+                    )
+                    session["cart_mandate"] = signed_cart_mandate
+
+                    # 専門家の指摘対応：CartMandateにユーザー署名は不要
+                    # MerchantがCartMandateに署名することで、カート内容の正当性が保証される
+                    # ユーザー署名はIntentMandateでのみ必要
+
+                    yield StreamEvent(
+                        type="agent_text",
+                        content="Merchant Agentを経由してMerchantの署名を確認しました。決済情報を準備中..."
+                    )
+                    await asyncio.sleep(0.5)
+
+                except Exception as e:
+                    logger.error(f"[_generate_fixed_response] Cart creation failed: {e}")
+                    yield StreamEvent(
+                        type="agent_text",
+                        content=f"申し訳ありません。カートの作成に失敗しました: {str(e)}"
+                    )
+                    session["step"] = "error"
+                    return
+
+            # PaymentMandateを作成（CartMandate取得後、直ちに作成）
+            # カート選択フロー・旧フロー共通の処理
+            payment_mandate = self._create_payment_mandate(session)
+            session["payment_mandate"] = payment_mandate
+            session["step"] = "webauthn_attestation_requested"
+
+            # Passkey/WebAuthnを使用することを記録（AP2仕様準拠）
+            # transaction_type決定時に使用
+            session["will_use_passkey"] = True
+
             yield StreamEvent(
                 type="agent_text",
-                content="Merchant Agentにカート作成・署名を依頼中..."
+                content="決済準備が完了しました。セキュリティのため、デバイス認証（WebAuthn/Passkey）を実施します。"
             )
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(0.5)
 
-            # Merchant AgentにCartRequestを送信（A2A通信）
-            # Merchant AgentがCartMandateを作成し、Merchantに署名依頼して、署名済みCartMandateを返却
-            try:
-                signed_cart_mandate = await self._request_cart_from_merchant_agent(
-                    session["selected_product"],
-                    session
-                )
-                session["cart_mandate"] = signed_cart_mandate
+            # WebAuthn challengeを生成（暗号学的に安全）
+            import secrets
+            challenge = secrets.token_urlsafe(32)  # 32バイト = 256ビット
+            session["webauthn_challenge"] = challenge
 
-                # 専門家の指摘対応：CartMandateにユーザー署名は不要
-                # MerchantがCartMandateに署名することで、カート内容の正当性が保証される
-                # ユーザー署名はIntentMandateでのみ必要
+            yield StreamEvent(
+                type="webauthn_request",
+                challenge=challenge,
+                rp_id="localhost",
+                timeout=60000
+            )
 
-                yield StreamEvent(
-                    type="agent_text",
-                    content="Merchant Agentを経由してMerchantの署名を確認しました。決済情報を準備中..."
-                )
-                await asyncio.sleep(0.5)
+            yield StreamEvent(
+                type="agent_text",
+                content="デバイス認証を完了してください。\n\n認証後、自動的に決済処理が開始されます。"
+            )
 
-                # PaymentMandateを作成（CartMandate署名完了後、直ちに作成）
-                payment_mandate = self._create_payment_mandate(session)
-                session["payment_mandate"] = payment_mandate
-                session["step"] = "webauthn_attestation_requested"
-
-                # Passkey/WebAuthnを使用することを記録（AP2仕様準拠）
-                # transaction_type決定時に使用
-                session["will_use_passkey"] = True
-
-                yield StreamEvent(
-                    type="agent_text",
-                    content="決済準備が完了しました。セキュリティのため、デバイス認証（WebAuthn/Passkey）を実施します。"
-                )
-                await asyncio.sleep(0.5)
-
-                # WebAuthn challengeを生成（暗号学的に安全）
-                import secrets
-                challenge = secrets.token_urlsafe(32)  # 32バイト = 256ビット
-                session["webauthn_challenge"] = challenge
-
-                yield StreamEvent(
-                    type="webauthn_request",
-                    challenge=challenge,
-                    rp_id="localhost",
-                    timeout=60000
-                )
-
-                yield StreamEvent(
-                    type="agent_text",
-                    content="デバイス認証を完了してください。\n\n認証後、自動的に決済処理が開始されます。"
-                )
-
-                # フロントエンドからのattestation送信を待機
-                # フロントエンドはPOST /payment/submit-attestationを呼び出す
-                return
-
-            except Exception as e:
-                logger.error(f"[_generate_fixed_response] CartMandate request via Merchant Agent failed: {e}")
-                yield StreamEvent(
-                    type="agent_text",
-                    content=f"申し訳ありません。Merchant Agentを経由したCartMandateの取得に失敗しました: {str(e)}"
-                )
-                session["step"] = "error"
+            # フロントエンドからのattestation送信を待機
+            # フロントエンドはPOST /payment/submit-attestationを呼び出す
             return
 
         # ステップ7.6: WebAuthn認証待機中
@@ -1461,9 +1744,15 @@ class ShoppingAgent(BaseAgent):
         - トークン化された支払い方法を使用
         - セキュアトークンをPaymentMandateに含める
         - リスク評価を実施してリスクスコアと不正指標を追加
+        - CartMandateの金額情報を使用
         """
         now = datetime.now(timezone.utc)
-        product = session.get("selected_product", {})
+
+        # カート情報を取得（AP2仕様準拠：PaymentMandateはCartMandateを参照）
+        cart_mandate = session.get("cart_mandate", {})
+        if not cart_mandate:
+            logger.error("[ShoppingAgent] No cart mandate available")
+            raise ValueError("No cart mandate available")
 
         # セッションからトークン化された支払い方法を取得（AP2 Step 17-18）
         tokenized_payment_method = session.get("tokenized_payment_method", {})
@@ -1473,18 +1762,21 @@ class ShoppingAgent(BaseAgent):
             logger.error("[ShoppingAgent] No tokenized payment method available")
             raise ValueError("No tokenized payment method available")
 
+        # AP2仕様準拠：金額はCartMandateのtotalから取得
+        total_amount = cart_mandate.get("total", {})
+
         # PaymentMandateを作成（リスク評価前の基本情報）
         payment_mandate = {
             "id": f"payment_{uuid.uuid4().hex[:8]}",
             "type": "PaymentMandate",
             "version": "0.2",
-            "cart_mandate_id": session.get("cart_mandate", {}).get("id"),
+            "cart_mandate_id": cart_mandate.get("id"),
             "intent_mandate_id": session.get("intent_mandate", {}).get("id"),
             "payer_id": "user_demo_001",
-            "payee_id": "did:ap2:merchant:demo_merchant",
+            "payee_id": cart_mandate.get("merchant_id", "did:ap2:merchant:demo_merchant"),
             "amount": {
-                "value": f"{product['price']}.00",
-                "currency": "JPY"
+                "value": total_amount.get("value", "0.00"),
+                "currency": total_amount.get("currency", "JPY")
             },
             "payment_method": {
                 "type": tokenized_payment_method.get("type", "card"),
@@ -1561,7 +1853,7 @@ class ShoppingAgent(BaseAgent):
 
         logger.info(
             f"[ShoppingAgent] PaymentMandate created: "
-            f"amount={product['price']}, "
+            f"amount={total_amount.get('value')} {total_amount.get('currency')}, "
             f"payment_method={tokenized_payment_method.get('brand')} ****{tokenized_payment_method.get('last4')}, "
             f"token={tokenized_payment_method['token'][:20]}..., "
             f"risk_score={payment_mandate.get('risk_score')}"
@@ -1649,17 +1941,17 @@ class ShoppingAgent(BaseAgent):
         session: Dict[str, Any]
     ) -> list[Dict[str, Any]]:
         """
-        Merchant AgentにIntentMandateを送信して商品検索を依頼
+        Merchant AgentにIntentMandateを送信してカート候補を取得
 
         専門家の指摘対応：IntentのA2AメッセージIDを保存してトレーサビリティを確保
 
-        AP2仕様準拠（Step 8-9）：
+        AP2/A2A仕様準拠（Step 8-9、a2a-extension.md:144-229）：
         1. Shopping AgentがIntentMandateをMerchant Agentに送信（A2A通信）
         2. A2AメッセージのmessageIdをセッションに保存（intent_message_id）
-        3. Merchant AgentがIntentMandateに基づいて商品検索
-        4. Merchant Agentが商品リストを返却（ap2/ProductList）
+        3. Merchant AgentがIntentMandateに基づいて複数のカート候補を生成
+        4. Merchant Agentが署名済みCartMandateをArtifact形式で返却（ap2.responses.CartCandidates）
         """
-        logger.info(f"[ShoppingAgent] Searching products via Merchant Agent for IntentMandate: {intent_mandate['id']}")
+        logger.info(f"[ShoppingAgent] Requesting cart candidates from Merchant Agent for IntentMandate: {intent_mandate['id']}")
 
         try:
             # A2Aメッセージを作成（署名付き）
@@ -1704,19 +1996,57 @@ class ShoppingAgent(BaseAgent):
                 f"\n{'='*80}\n"
                 f"[ShoppingAgent ← MerchantAgent] A2Aレスポンス受信\n"
                 f"  Status: {response.status_code}\n"
-                f"  Response Body: {json_lib.dumps(result, ensure_ascii=False, indent=2)}\n"
+                f"  Response Body: {json_lib.dumps(result, ensure_ascii=False, indent=2)[:1000]}...\n"
                 f"{'='*80}"
             )
 
-            # A2Aレスポンスからproductsを抽出
+            # A2AレスポンスからCart Candidatesを抽出
             if isinstance(result, dict) and "dataPart" in result:
                 data_part = result["dataPart"]
                 # @typeエイリアスを使用
                 response_type = data_part.get("@type") or data_part.get("type")
-                if response_type == "ap2.responses.ProductList":
+
+                # AP2/A2A仕様準拠：CartCandidatesレスポンス
+                if response_type == "ap2.responses.CartCandidates":
+                    cart_candidates = data_part["payload"].get("cart_candidates", [])
+                    logger.info(f"[ShoppingAgent] Received {len(cart_candidates)} cart candidates from Merchant Agent")
+
+                    # Cart CandidatesをArtifact形式から展開
+                    expanded_carts = []
+                    for artifact in cart_candidates:
+                        # Artifactの構造を確認
+                        if "parts" in artifact:
+                            for part in artifact["parts"]:
+                                if part.get("kind") == "data":
+                                    cart_data = part["data"].get("ap2.mandates.CartMandate")
+                                    if cart_data:
+                                        # Artifactメタデータも含める
+                                        expanded_cart = {
+                                            "artifact_id": artifact.get("artifactId"),
+                                            "artifact_name": artifact.get("name"),
+                                            "cart_mandate": cart_data
+                                        }
+                                        expanded_carts.append(expanded_cart)
+                                        logger.debug(f"[ShoppingAgent] Extracted CartMandate from Artifact: {cart_data.get('id')}")
+
+                    logger.info(f"[ShoppingAgent] Expanded {len(expanded_carts)} cart mandates from artifacts")
+                    return expanded_carts
+
+                # 後方互換性：ProductListレスポンス（旧形式）
+                elif response_type == "ap2.responses.ProductList":
+                    logger.warning("[ShoppingAgent] Received ProductList (old format). Converting to cart candidates.")
                     products = data_part["payload"].get("products", [])
-                    logger.info(f"[ShoppingAgent] Received {len(products)} products from Merchant Agent")
+                    # 旧形式をカート候補形式に変換（後方互換性のため）
+                    logger.info(f"[ShoppingAgent] Received {len(products)} products (old format)")
                     return products
+
+                # エラーレスポンス
+                elif response_type == "ap2.errors.Error":
+                    error_payload = data_part.get("payload", {})
+                    error_msg = error_payload.get("error_message", "Unknown error")
+                    logger.error(f"[ShoppingAgent] Merchant Agent returned error: {error_msg}")
+                    raise ValueError(f"Merchant Agent error: {error_msg}")
+
                 else:
                     raise ValueError(f"Unexpected response type: {response_type}")
             else:
