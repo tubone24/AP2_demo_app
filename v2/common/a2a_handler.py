@@ -14,7 +14,10 @@ import logging
 
 # v2の暗号化モジュールとモデルをインポート
 from v2.common.crypto import SignatureManager, KeyManager
-from v2.common.models import A2AMessage, A2AMessageHeader, A2ADataPart, A2ASignature, A2AProof, Signature
+from v2.common.models import (
+    A2AMessage, A2AMessageHeader, A2ADataPart, A2ASignature, A2AProof, Signature,
+    A2AArtifact, A2AArtifactPart
+)
 from v2.common.did_resolver import DIDResolver
 from v2.common.nonce_manager import NonceManager
 
@@ -415,6 +418,107 @@ class A2AMessageHandler:
             f"  署名: {'あり' if sign else 'なし'}\n"
             f"  タイムスタンプ: {timestamp}\n"
             f"  ペイロード: {json_lib.dumps(payload, ensure_ascii=False, indent=2)}\n"
+            f"{'='*80}"
+        )
+
+        return message
+
+    def create_artifact_response(
+        self,
+        recipient: str,
+        artifact_name: str,
+        artifact_data: Dict[str, Any],
+        data_type_key: str,
+        sign: bool = True
+    ) -> A2AMessage:
+        """
+        A2A Artifactレスポンスメッセージを作成
+
+        AP2/A2A仕様準拠：CartMandateなどをArtifactとして送信
+        a2a-extension.md:144-229の仕様に準拠
+
+        Args:
+            recipient: 送信先エージェントDID
+            artifact_name: Artifact名 (e.g., "CartMandate")
+            artifact_data: Artifactのデータ (e.g., signed CartMandate)
+            data_type_key: データタイプキー (e.g., "CartMandate")
+            sign: 署名するか（デフォルトTrue）
+
+        Returns:
+            A2AMessage: Artifactを含む署名済みレスポンスメッセージ
+        """
+        import secrets
+
+        # ヘッダー作成
+        timestamp = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
+        nonce = secrets.token_hex(32)
+
+        header = A2AMessageHeader(
+            message_id=str(uuid.uuid4()),
+            sender=self.agent_id,
+            recipient=recipient,
+            timestamp=timestamp,
+            nonce=nonce,
+            schema_version="0.2"
+        )
+
+        # ArtifactPart作成（dataタイプで実データを格納）
+        artifact_part = A2AArtifactPart(
+            kind="data",
+            data={data_type_key: artifact_data}
+        )
+
+        # Artifact作成
+        artifact_id = f"artifact:{str(uuid.uuid4())}"
+        artifact = A2AArtifact(
+            name=artifact_name,
+            artifactId=artifact_id,
+            parts=[artifact_part]
+        )
+
+        # DataPart作成（kind="artifact"でArtifactを参照）
+        data_part = A2ADataPart(
+            kind="artifact",
+            artifact=artifact
+        )
+
+        # メッセージ作成
+        message = A2AMessage(header=header, dataPart=data_part)
+
+        # 署名（A2A仕様準拠：proof構造を使用）
+        if sign:
+            message_dict = message.model_dump(by_alias=True)
+
+            # agent_idから鍵IDを抽出
+            key_id = self.agent_id.split(":")[-1]
+
+            # 署名生成
+            signature_obj = self.signature_manager.sign_a2a_message(message_dict, key_id)
+
+            # A2AProof構造に変換
+            kid = f"{self.agent_id}#key-1"
+
+            message.header.proof = A2AProof(
+                algorithm=signature_obj.algorithm.lower(),
+                signatureValue=signature_obj.value,
+                publicKey=signature_obj.public_key,
+                kid=kid,
+                created=timestamp,
+                proofPurpose="authentication"
+            )
+
+        import json as json_lib
+
+        logger.info(
+            f"\n{'='*80}\n"
+            f"[A2A送信] Artifactレスポンス作成\n"
+            f"  送信元: {self.agent_id}\n"
+            f"  送信先: {recipient}\n"
+            f"  Artifact名: {artifact_name}\n"
+            f"  Artifact ID: {artifact_id}\n"
+            f"  署名: {'あり' if sign else 'なし'}\n"
+            f"  タイムスタンプ: {timestamp}\n"
+            f"  データ: {json_lib.dumps(artifact_data, ensure_ascii=False, indent=2)[:500]}...\n"
             f"{'='*80}"
         )
 

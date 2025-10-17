@@ -12,6 +12,7 @@ Shopping Agent実装
 import sys
 import uuid
 import json
+import hashlib
 import asyncio
 from pathlib import Path
 from typing import AsyncGenerator, Dict, Any, Optional
@@ -99,6 +100,14 @@ class ShoppingAgent(BaseAgent):
         self.webauthn_challenge_manager = WebAuthnChallengeManager(challenge_ttl_seconds=60)
 
         logger.info(f"[{self.agent_name}] Initialized with database-backed risk assessment")
+
+    def get_ap2_roles(self) -> list[str]:
+        """AP2でのロールを返す"""
+        return ["shopper"]
+
+    def get_agent_description(self) -> str:
+        """エージェントの説明を返す"""
+        return "Shopping Agent for AP2 Protocol - handles user purchase intents, product search, and payment processing"
 
     def register_a2a_handlers(self):
         """
@@ -1404,6 +1413,46 @@ class ShoppingAgent(BaseAgent):
 
         return cart_mandate
 
+    def _generate_cart_mandate_hash(self, cart_mandate: Dict[str, Any]) -> str:
+        """
+        CartMandateのハッシュを生成
+
+        AP2仕様準拠：user_authorizationフィールドの生成に使用
+        CartMandateの正規化されたJSONからSHA256ハッシュを計算
+
+        Args:
+            cart_mandate: CartMandate辞書
+
+        Returns:
+            str: SHA256ハッシュの16進数表現
+        """
+        # CartMandateを正規化（ソート済みJSON）
+        normalized_json = json.dumps(cart_mandate, sort_keys=True, separators=(',', ':'))
+        # SHA256ハッシュを計算
+        hash_bytes = hashlib.sha256(normalized_json.encode('utf-8')).digest()
+        return hash_bytes.hex()
+
+    def _generate_payment_mandate_hash(self, payment_mandate: Dict[str, Any]) -> str:
+        """
+        PaymentMandateのハッシュを生成
+
+        AP2仕様準拠：user_authorizationフィールドの生成に使用
+        PaymentMandateの正規化されたJSONからSHA256ハッシュを計算
+
+        Args:
+            payment_mandate: PaymentMandate辞書（user_authorizationフィールドを除く）
+
+        Returns:
+            str: SHA256ハッシュの16進数表現
+        """
+        # PaymentMandateからuser_authorizationフィールドを除外してコピー
+        payment_mandate_copy = {k: v for k, v in payment_mandate.items() if k != 'user_authorization'}
+        # 正規化されたJSONを生成
+        normalized_json = json.dumps(payment_mandate_copy, sort_keys=True, separators=(',', ':'))
+        # SHA256ハッシュを計算
+        hash_bytes = hashlib.sha256(normalized_json.encode('utf-8')).digest()
+        return hash_bytes.hex()
+
     def _create_payment_mandate(self, session: Dict[str, Any]) -> Dict[str, Any]:
         """
         PaymentMandateを作成（リスク評価統合版）
@@ -1484,6 +1533,31 @@ class ShoppingAgent(BaseAgent):
             # リスク評価失敗時はデフォルト値を設定
             payment_mandate["risk_score"] = 50  # 中リスク
             payment_mandate["fraud_indicators"] = ["risk_assessment_failed"]
+
+        # user_authorizationフィールドを生成（AP2仕様準拠）
+        # CartMandateとPaymentMandateのハッシュを結合したユーザー承認トークン
+        cart_mandate = session.get("cart_mandate")
+        if cart_mandate:
+            try:
+                cart_mandate_hash = self._generate_cart_mandate_hash(cart_mandate)
+                payment_mandate_hash = self._generate_payment_mandate_hash(payment_mandate)
+
+                # AP2サンプル実装に従い、両ハッシュを結合
+                # 本番環境では、これらのハッシュを含むJWT/VPを生成すべき
+                payment_mandate["user_authorization"] = f"{cart_mandate_hash}_{payment_mandate_hash}"
+
+                logger.info(
+                    f"[ShoppingAgent] Generated user_authorization: "
+                    f"cart_hash={cart_mandate_hash[:16]}..., "
+                    f"payment_hash={payment_mandate_hash[:16]}..."
+                )
+            except Exception as e:
+                logger.error(f"[ShoppingAgent] Failed to generate user_authorization: {e}", exc_info=True)
+                # user_authorizationの生成に失敗してもPaymentMandate自体は返す
+                payment_mandate["user_authorization"] = None
+        else:
+            logger.warning("[ShoppingAgent] No CartMandate found in session, user_authorization not generated")
+            payment_mandate["user_authorization"] = None
 
         logger.info(
             f"[ShoppingAgent] PaymentMandate created: "
@@ -1738,12 +1812,35 @@ class ShoppingAgent(BaseAgent):
             # A2AレスポンスからCartMandateを抽出
             if isinstance(result, dict) and "dataPart" in result:
                 data_part = result["dataPart"]
-                # @typeエイリアスを使用
-                response_type = data_part.get("@type") or data_part.get("type")
 
-                if response_type == "ap2.mandates.CartMandate":
-                    signed_cart_mandate = data_part["payload"]
-                    logger.info(f"[ShoppingAgent] Received signed CartMandate from Merchant Agent: {signed_cart_mandate.get('id')}")
+                # AP2/A2A仕様準拠：Artifact形式のCartMandateを処理
+                # a2a-extension.md:144-229の仕様に基づく
+                signed_cart_mandate = None
+
+                if data_part.get("kind") == "artifact" and data_part.get("artifact"):
+                    # Artifact形式（新仕様）
+                    artifact = data_part["artifact"]
+                    logger.info(f"[ShoppingAgent] Received A2A Artifact: {artifact.get('name')}, ID={artifact.get('artifactId')}")
+
+                    # Artifactから実データを抽出
+                    if artifact.get("parts") and len(artifact["parts"]) > 0:
+                        first_part = artifact["parts"][0]
+                        if first_part.get("kind") == "data" and first_part.get("data"):
+                            data_obj = first_part["data"]
+                            # "CartMandate"キーでデータが格納されている
+                            signed_cart_mandate = data_obj.get("CartMandate")
+                            if signed_cart_mandate:
+                                logger.info(f"[ShoppingAgent] Extracted CartMandate from Artifact: {signed_cart_mandate.get('id')}")
+
+                # 後方互換性：従来のメッセージ形式もサポート
+                if not signed_cart_mandate:
+                    response_type = data_part.get("@type") or data_part.get("type")
+                    if response_type == "ap2.mandates.CartMandate":
+                        signed_cart_mandate = data_part["payload"]
+                        logger.info(f"[ShoppingAgent] Received signed CartMandate (legacy format) from Merchant Agent: {signed_cart_mandate.get('id')}")
+
+                if signed_cart_mandate:
+                    logger.info(f"[ShoppingAgent] Processing CartMandate: {signed_cart_mandate.get('id')}")
 
                     # Merchant署名を検証
                     merchant_signature = signed_cart_mandate.get("merchant_signature")

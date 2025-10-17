@@ -331,18 +331,89 @@ class A2AMessageHeader(BaseModel):
     signature: Optional[A2ASignature] = Field(None, description="[非推奨] メッセージ全体の署名（後方互換性のため保持）")
 
 
+class A2AArtifactPart(BaseModel):
+    """
+    A2A Artifact Part
+
+    AP2/A2A仕様準拠（a2a-extension.md）:
+    Artifactの個別パート（data, text, image等）
+    """
+    kind: Literal["data", "text", "image", "file"] = Field(..., description="パートの種類")
+    data: Dict[str, Any] = Field(..., description="パートのデータ（kind=dataの場合）")
+    text: Optional[str] = Field(None, description="テキストコンテンツ（kind=textの場合）")
+    mimeType: Optional[str] = Field(None, description="MIMEタイプ")
+
+
+class A2AArtifact(BaseModel):
+    """
+    A2A Artifact
+
+    AP2/A2A仕様準拠（a2a-extension.md:144-229）:
+    CartMandateはArtifactとして扱われる
+
+    Example:
+    {
+      "name": "Cart Mandate for Order",
+      "artifactId": "artifact_cart_123",
+      "parts": [
+        {
+          "kind": "data",
+          "data": {
+            "ap2.mandates.CartMandate": { ... }
+          }
+        }
+      ]
+    }
+    """
+    name: str = Field(..., description="Artifactの名前")
+    artifactId: str = Field(..., description="Artifact ID")
+    parts: List[A2AArtifactPart] = Field(..., description="Artifactのパートリスト")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "name": "Cart Mandate for Order",
+                "artifactId": "artifact_cart_123",
+                "parts": [
+                    {
+                        "kind": "data",
+                        "data": {
+                            "ap2.mandates.CartMandate": {
+                                "id": "cart_abc123",
+                                "merchant_id": "did:ap2:merchant:demo_merchant",
+                                "items": [],
+                                "total": {"value": "10000.00", "currency": "JPY"}
+                            }
+                        }
+                    }
+                ]
+            }
+        }
+
+
 class A2ADataPart(BaseModel):
     """
     A2A DataPart
 
-    demo_app_v2.mdの仕様：
+    AP2/A2A仕様準拠:
+    - 通常のメッセージペイロード: type + id + payload
+    - Artifact参照: kind="artifact" + artifact
+
     {
-      "@type": "ap2/IntentMandate" | "ap2/CartMandate" | "ap2/PaymentMandate",
+      "@type": "ap2/IntentMandate",
       "id": "intent-123",
       "payload": { ... }
     }
+
+    または
+
+    {
+      "kind": "artifact",
+      "artifact": { ...A2AArtifact... }
+    }
     """
-    type: Literal[
+    # 通常のメッセージペイロード（kind指定なし）
+    type: Optional[Literal[
         "ap2.mandates.IntentMandate",
         "ap2.mandates.CartMandate",
         "ap2.requests.CartRequest",
@@ -354,10 +425,15 @@ class A2ADataPart(BaseModel):
         "ap2.requests.SignatureRequest",
         "ap2.responses.SignatureResponse",
         "ap2.consents.UserConsent",
-        "ap2.errors.Error"
-    ] = Field(..., alias="@type", description="データタイプ（AP2仕様準拠）")
-    id: str = Field(..., description="データID")
-    payload: Dict[str, Any] = Field(..., description="各タイプ固有のペイロード")
+        "ap2.errors.Error",
+        "ap2.responses.Acknowledgement"
+    ]] = Field(None, alias="@type", description="データタイプ（AP2仕様準拠）")
+    id: Optional[str] = Field(None, description="データID")
+    payload: Optional[Dict[str, Any]] = Field(None, description="各タイプ固有のペイロード")
+
+    # Artifact参照（kind="artifact"の場合）
+    kind: Optional[Literal["artifact"]] = Field(None, description="データの種類（artifact等）")
+    artifact: Optional[A2AArtifact] = Field(None, description="Artifactオブジェクト（kind=artifactの場合）")
 
     class Config:
         populate_by_name = True

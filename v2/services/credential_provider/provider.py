@@ -88,6 +88,14 @@ class CredentialProviderService(BaseAgent):
 
         logger.info(f"[{self.agent_name}] Initialized")
 
+    def get_ap2_roles(self) -> list[str]:
+        """AP2でのロールを返す"""
+        return ["credentials-provider"]
+
+    def get_agent_description(self) -> str:
+        """エージェントの説明を返す"""
+        return "Credential Provider for AP2 Protocol - handles WebAuthn attestation verification, payment method management, and secure tokenization"
+
     def register_a2a_handlers(self):
         """
         A2Aハンドラーの登録

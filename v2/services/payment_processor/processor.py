@@ -56,6 +56,14 @@ class PaymentProcessorService(BaseAgent):
 
         logger.info(f"[{self.agent_name}] Initialized")
 
+    def get_ap2_roles(self) -> list[str]:
+        """AP2でのロールを返す"""
+        return ["payment-processor"]
+
+    def get_agent_description(self) -> str:
+        """エージェントの説明を返す"""
+        return "Payment Processor for AP2 Protocol - handles payment processing, transaction management, and receipt generation"
+
     def register_a2a_handlers(self):
         """
         A2Aハンドラーの登録
@@ -270,13 +278,32 @@ class PaymentProcessorService(BaseAgent):
     # ========================================
 
     def _validate_payment_mandate(self, payment_mandate: Dict[str, Any]):
-        """PaymentMandateを検証"""
+        """
+        PaymentMandateを検証
+
+        AP2仕様準拠：
+        - 必須フィールドの存在チェック
+        - user_authorizationフィールドの検証（AP2仕様で必須）
+        """
         required_fields = ["id", "amount", "payment_method", "payer_id", "payee_id"]
         for field in required_fields:
             if field not in payment_mandate:
                 raise ValueError(f"Missing required field: {field}")
 
-        logger.info(f"[PaymentProcessor] PaymentMandate validation passed: {payment_mandate['id']}")
+        # AP2仕様準拠：user_authorizationフィールドの検証
+        # user_authorizationはCartMandateとPaymentMandateのハッシュに基づくユーザー承認トークン
+        # 取引の正当性を保証する重要なフィールド
+        user_authorization = payment_mandate.get("user_authorization")
+        if user_authorization is None:
+            raise ValueError(
+                "AP2 specification violation: user_authorization field is required in PaymentMandate. "
+                "This field contains the user's authorization token binding CartMandate and PaymentMandate."
+            )
+
+        logger.info(
+            f"[PaymentProcessor] PaymentMandate validation passed: {payment_mandate['id']}, "
+            f"user_authorization present: {user_authorization[:20] if user_authorization else 'None'}..."
+        )
 
     async def _process_payment_mock(
         self,

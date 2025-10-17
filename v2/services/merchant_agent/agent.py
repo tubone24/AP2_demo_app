@@ -80,6 +80,14 @@ class MerchantAgent(BaseAgent):
 
         logger.info(f"[{self.agent_name}] Initialized")
 
+    def get_ap2_roles(self) -> list[str]:
+        """AP2でのロールを返す"""
+        return ["merchant"]
+
+    def get_agent_description(self) -> str:
+        """エージェントの説明を返す"""
+        return "Merchant Agent for AP2 Protocol - handles product catalog, cart creation, and merchant signature requests"
+
     def register_a2a_handlers(self):
         """
         A2Aハンドラーの登録
@@ -309,11 +317,13 @@ class MerchantAgent(BaseAgent):
                 if signed_cart_mandate:
                     logger.info(f"[MerchantAgent] CartMandate signed by Merchant: {cart_mandate['id']}")
 
-                    # 署名済みCartMandateを返却
+                    # 署名済みCartMandateをArtifactとして返却
+                    # AP2/A2A仕様準拠：a2a-extension.md:144-229
                     return {
-                        "type": "ap2.mandates.CartMandate",
-                        "id": cart_mandate["id"],
-                        "payload": signed_cart_mandate
+                        "is_artifact": True,
+                        "artifact_name": "CartMandate",
+                        "artifact_data": signed_cart_mandate,
+                        "data_type_key": "CartMandate"
                     }
 
                 # 手動署名モードの場合（pending_merchant_signature）
@@ -448,9 +458,8 @@ class MerchantAgent(BaseAgent):
             "merchant_name": self.merchant_name,
             "created_at": now.isoformat().replace('+00:00', 'Z'),
             "expires_at": expires_at.isoformat().replace('+00:00', 'Z'),
-            # 署名はMerchantが追加
-            "merchant_signature": None,
-            "user_signature": None
+            # AP2仕様準拠：Merchant署名のみ（user_signatureは不要）
+            "merchant_signature": None
         }
 
         logger.info(f"[MerchantAgent] Created CartMandate: {cart_mandate['id']}, total={cart_mandate['total']}")

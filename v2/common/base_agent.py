@@ -169,14 +169,24 @@ class BaseAgent(ABC):
                 # メッセージ処理（署名検証＋ハンドラー呼び出し）
                 result = await self.a2a_handler.handle_message(message)
 
-                # レスポンスメッセージを作成
-                response = self.a2a_handler.create_response_message(
-                    recipient=message.header.sender,
-                    data_type=result.get("type", "ap2/Response"),
-                    data_id=result.get("id", message.dataPart.id),
-                    payload=result.get("payload", {}),
-                    sign=True
-                )
+                # Artifactレスポンスの場合（AP2/A2A仕様準拠）
+                if result.get("is_artifact"):
+                    response = self.a2a_handler.create_artifact_response(
+                        recipient=message.header.sender,
+                        artifact_name=result.get("artifact_name", "Artifact"),
+                        artifact_data=result.get("artifact_data", {}),
+                        data_type_key=result.get("data_type_key", "data"),
+                        sign=True
+                    )
+                # 通常のメッセージレスポンス
+                else:
+                    response = self.a2a_handler.create_response_message(
+                        recipient=message.header.sender,
+                        data_type=result.get("type", "ap2/Response"),
+                        data_id=result.get("id", message.dataPart.id),
+                        payload=result.get("payload", {}),
+                        sign=True
+                    )
 
                 logger.info(
                     f"[{self.agent_name}] A2Aレスポンス返却: "
@@ -217,6 +227,43 @@ class BaseAgent(ABC):
             """ヘルスチェック（Docker向け）"""
             return {"status": "healthy"}
 
+        @self.app.get("/.well-known/agent-card.json")
+        async def get_agent_card():
+            """
+            GET /.well-known/agent-card.json - AgentCard取得
+
+            AP2/A2A仕様準拠：a2a-extension.md
+            各エージェントはAP2拡張をサポートすることを宣言する
+            """
+            try:
+                # サブクラスから情報を取得
+                ap2_roles = self.get_ap2_roles()
+                description = self.get_agent_description()
+
+                # AgentCard構造（A2A標準 + AP2拡張）
+                agent_card = {
+                    "name": self.agent_name,
+                    "description": description,
+                    "capabilities": {
+                        "extensions": [
+                            {
+                                "uri": "https://github.com/google-agentic-commerce/ap2/tree/v0.1",
+                                "description": "This agent supports the Agent Payments Protocol (AP2)",
+                                "params": {
+                                    "roles": ap2_roles
+                                }
+                            }
+                        ]
+                    }
+                }
+
+                logger.info(f"[{self.agent_name}] Serving AgentCard: roles={ap2_roles}")
+                return agent_card
+
+            except Exception as e:
+                logger.error(f"[{self.agent_name}] Error generating AgentCard: {e}", exc_info=True)
+                raise HTTPException(status_code=500, detail="Failed to generate AgentCard")
+
     @abstractmethod
     def register_a2a_handlers(self):
         """
@@ -236,6 +283,27 @@ class BaseAgent(ABC):
         @self.app.post("/chat/stream")
         async def chat_stream(...):
             ...
+        """
+        pass
+
+    @abstractmethod
+    def get_ap2_roles(self) -> list[str]:
+        """
+        サブクラスでオーバーライド：AP2でのロールを返す
+
+        Returns:
+            list[str]: AP2ロールのリスト
+                       ["merchant", "shopper", "credentials-provider", "payment-processor"]
+        """
+        pass
+
+    @abstractmethod
+    def get_agent_description(self) -> str:
+        """
+        サブクラスでオーバーライド：エージェントの説明を返す
+
+        Returns:
+            str: エージェントの説明文
         """
         pass
 

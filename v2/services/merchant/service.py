@@ -58,6 +58,14 @@ class MerchantService(BaseAgent):
 
         logger.info(f"[{self.agent_name}] Initialized")
 
+    def get_ap2_roles(self) -> list[str]:
+        """AP2でのロールを返す"""
+        return ["merchant"]
+
+    def get_agent_description(self) -> str:
+        """エージェントの説明を返す"""
+        return "Merchant Service for AP2 Protocol - handles cart mandate signing, product management, and order approval"
+
     def register_a2a_handlers(self):
         """
         A2Aハンドラーの登録
