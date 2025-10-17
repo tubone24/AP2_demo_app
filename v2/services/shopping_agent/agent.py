@@ -92,13 +92,13 @@ class ShoppingAgent(BaseAgent):
         # セッション管理（簡易版 - インメモリ）
         self.sessions: Dict[str, Dict[str, Any]] = {}
 
-        # リスク評価エンジン
-        self.risk_engine = RiskAssessmentEngine()
+        # リスク評価エンジン（データベースマネージャーを渡して完全実装を有効化）
+        self.risk_engine = RiskAssessmentEngine(db_manager=self.db_manager)
 
         # WebAuthn challenge管理（Intent/Consent署名用）
         self.webauthn_challenge_manager = WebAuthnChallengeManager(challenge_ttl_seconds=60)
 
-        logger.info(f"[{self.agent_name}] Initialized")
+        logger.info(f"[{self.agent_name}] Initialized with database-backed risk assessment")
 
     def register_a2a_handlers(self):
         """

@@ -227,6 +227,70 @@ class Attestation(Base):
         }
 
 
+class TransactionHistory(Base):
+    """
+    transaction_historyテーブル
+
+    リスク評価エンジンのための取引履歴を保存
+    - id (uuid)
+    - payer_id (user_id)
+    - amount_value (cents)
+    - currency (JPY, USD, etc.)
+    - risk_score (0-100)
+    - timestamp
+    """
+    __tablename__ = "transaction_history"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    payer_id = Column(String, nullable=False, index=True)
+    amount_value = Column(Integer, nullable=False)  # cents
+    currency = Column(String, nullable=False, default="JPY")
+    risk_score = Column(Integer, nullable=False)
+    timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "id": self.id,
+            "payer_id": self.payer_id,
+            "amount_value": self.amount_value,
+            "currency": self.currency,
+            "risk_score": self.risk_score,
+            "timestamp": self.timestamp.isoformat() if self.timestamp else None,
+        }
+
+
+class AgentSession(Base):
+    """
+    agent_sessionsテーブル
+
+    Shopping Agentのセッション管理
+    - session_id (uuid, primary key)
+    - user_id (user_id)
+    - session_data (json) - セッション状態を保存
+    - created_at
+    - updated_at
+    - expires_at
+    """
+    __tablename__ = "agent_sessions"
+
+    session_id = Column(String, primary_key=True)
+    user_id = Column(String, nullable=False, index=True)
+    session_data = Column(Text, nullable=False)  # JSON as text
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    expires_at = Column(DateTime, nullable=False, index=True)  # セッション有効期限
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "session_id": self.session_id,
+            "user_id": self.user_id,
+            "session_data": json.loads(self.session_data) if self.session_data else {},
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+            "expires_at": self.expires_at.isoformat() if self.expires_at else None,
+        }
+
+
 # ========================================
 # Database Manager
 # ========================================
@@ -563,3 +627,162 @@ class UserCRUD:
             select(User).order_by(User.created_at.desc()).limit(limit)
         )
         return list(result.scalars().all())
+
+
+class TransactionHistoryCRUD:
+    """TransactionHistory CRUD操作"""
+
+    @staticmethod
+    async def create(session: AsyncSession, history_data: Dict[str, Any]) -> TransactionHistory:
+        """取引履歴作成"""
+        history = TransactionHistory(
+            id=history_data.get("id", str(uuid.uuid4())),
+            payer_id=history_data["payer_id"],
+            amount_value=history_data["amount_value"],
+            currency=history_data.get("currency", "JPY"),
+            risk_score=history_data["risk_score"]
+        )
+        session.add(history)
+        await session.commit()
+        await session.refresh(history)
+        return history
+
+    @staticmethod
+    async def get_by_payer_id(
+        session: AsyncSession,
+        payer_id: str,
+        days: int = 30,
+        limit: int = 100
+    ) -> List[TransactionHistory]:
+        """
+        指定されたユーザーの取引履歴を取得（過去N日間）
+
+        Args:
+            session: データベースセッション
+            payer_id: ユーザーID
+            days: 過去何日間の履歴を取得するか（デフォルト30日）
+            limit: 最大取得件数
+
+        Returns:
+            取引履歴リスト
+        """
+        from datetime import timedelta
+        cutoff_date = datetime.now(timezone.utc) - timedelta(days=days)
+
+        result = await session.execute(
+            select(TransactionHistory)
+            .where(TransactionHistory.payer_id == payer_id)
+            .where(TransactionHistory.timestamp >= cutoff_date)
+            .order_by(TransactionHistory.timestamp.desc())
+            .limit(limit)
+        )
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def cleanup_old_records(session: AsyncSession, days: int = 30) -> int:
+        """
+        古い取引履歴を削除
+
+        Args:
+            session: データベースセッション
+            days: 保持期間（日数）
+
+        Returns:
+            削除件数
+        """
+        from datetime import timedelta
+        from sqlalchemy import delete
+
+        cutoff_date = datetime.now(timezone.utc) - timedelta(days=days)
+
+        stmt = delete(TransactionHistory).where(TransactionHistory.timestamp < cutoff_date)
+        result = await session.execute(stmt)
+        await session.commit()
+
+        return result.rowcount if result.rowcount else 0
+
+
+class AgentSessionCRUD:
+    """AgentSession CRUD操作"""
+
+    @staticmethod
+    async def create(session: AsyncSession, session_data_input: Dict[str, Any]) -> AgentSession:
+        """
+        セッション作成
+
+        Args:
+            session: データベースセッション
+            session_data_input: セッションデータ
+                - session_id: セッションID
+                - user_id: ユーザーID
+                - session_data: セッション状態（dict）
+                - expires_at: 有効期限（datetime）
+        """
+        from datetime import timedelta
+
+        # 有効期限が指定されていない場合は1時間後に設定
+        expires_at = session_data_input.get("expires_at")
+        if not expires_at:
+            expires_at = datetime.now(timezone.utc) + timedelta(hours=1)
+
+        agent_session = AgentSession(
+            session_id=session_data_input["session_id"],
+            user_id=session_data_input["user_id"],
+            session_data=json.dumps(session_data_input["session_data"]),
+            expires_at=expires_at
+        )
+        session.add(agent_session)
+        await session.commit()
+        await session.refresh(agent_session)
+        return agent_session
+
+    @staticmethod
+    async def get_by_session_id(session: AsyncSession, session_id: str) -> Optional[AgentSession]:
+        """セッションID でセッション取得"""
+        result = await session.execute(
+            select(AgentSession).where(AgentSession.session_id == session_id)
+        )
+        return result.scalar_one_or_none()
+
+    @staticmethod
+    async def update_session_data(
+        session: AsyncSession,
+        session_id: str,
+        new_session_data: Dict[str, Any]
+    ) -> Optional[AgentSession]:
+        """セッションデータ更新"""
+        agent_session = await AgentSessionCRUD.get_by_session_id(session, session_id)
+        if agent_session:
+            agent_session.session_data = json.dumps(new_session_data)
+            agent_session.updated_at = datetime.now(timezone.utc)
+            await session.commit()
+            await session.refresh(agent_session)
+        return agent_session
+
+    @staticmethod
+    async def delete_session(session: AsyncSession, session_id: str) -> bool:
+        """セッション削除"""
+        agent_session = await AgentSessionCRUD.get_by_session_id(session, session_id)
+        if agent_session:
+            await session.delete(agent_session)
+            await session.commit()
+            return True
+        return False
+
+    @staticmethod
+    async def cleanup_expired_sessions(session: AsyncSession) -> int:
+        """
+        期限切れセッションを削除
+
+        Returns:
+            削除件数
+        """
+        from sqlalchemy import delete
+
+        now = datetime.now(timezone.utc)
+
+        stmt = delete(AgentSession).where(AgentSession.expires_at < now)
+        result = await session.execute(stmt)
+        await session.commit()
+
+        return result.rowcount if result.rowcount else 0

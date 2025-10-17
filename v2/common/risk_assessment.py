@@ -50,11 +50,18 @@ class RiskAssessmentEngine:
     EXTREME_VALUE_THRESHOLD = 500000 * 100    # 500,000円
     SUSPICIOUS_VALUE_THRESHOLD = 1000000 * 100  # 1,000,000円
 
-    def __init__(self):
-        """リスク評価エンジンを初期化"""
-        # 簡易的な取引履歴（実際はデータベースに保存）
+    def __init__(self, db_manager=None):
+        """
+        リスク評価エンジンを初期化
+
+        Args:
+            db_manager: データベースマネージャー（オプション）
+                        指定されない場合はインメモリで動作（後方互換性のため）
+        """
+        self.db_manager = db_manager
+        # 後方互換性のため、インメモリストアも残す（db_managerが指定されない場合）
         self.transaction_history: Dict[str, List[Dict]] = {}
-        logger.info("[RiskAssessmentEngine] Initialized")
+        logger.info(f"[RiskAssessmentEngine] Initialized (database_mode={'enabled' if db_manager else 'disabled'})")
 
     def assess_payment_mandate(
         self,
@@ -347,15 +354,30 @@ class RiskAssessmentEngine:
 
     def _assess_transaction_pattern(self, payer_id: str, amount_value_str: str) -> int:
         """
-        取引パターンのリスクを評価
+        取引パターンのリスクを評価（データベースまたはインメモリ）
 
         Returns:
             0-30のリスクスコア
         """
+        import asyncio
+
+        # 非同期処理が必要な場合はイベントループを取得
+        # ただし、このメソッドは同期メソッドなので、非同期処理を避ける
+        # そのため、データベースモードでも同期的に動作させる必要がある
+
         risk = 0
 
-        # 過去の取引履歴を確認
-        history = self.transaction_history.get(payer_id, [])
+        # データベースモードまたはインメモリモードで履歴を取得
+        if self.db_manager:
+            # データベースから取引履歴を取得（同期的に）
+            # 注意: ここは本来非同期メソッドだが、既存のインターフェースを維持するため
+            # データベースアクセスはskip（次のリファクタリングで対応）
+            # 一旦インメモリフォールバック
+            logger.debug("[RiskAssessmentEngine] Database mode enabled but sync context - using fallback")
+            history = self.transaction_history.get(payer_id, [])
+        else:
+            # インメモリモード
+            history = self.transaction_history.get(payer_id, [])
 
         if not history:
             # 初回取引（新規ユーザー）
@@ -517,7 +539,13 @@ class RiskAssessmentEngine:
             return "decline"
 
     def _record_transaction(self, payer_id: str, amount_value_str: str, risk_score: int):
-        """取引を履歴に記録"""
+        """
+        取引を履歴に記録（データベースまたはインメモリ）
+
+        注意: このメソッドは同期メソッドですが、将来的に非同期化する必要があります。
+        現時点では、データベース保存は別途非同期コンテキストで行う必要があります。
+        """
+        # インメモリ履歴に記録（後方互換性）
         if payer_id not in self.transaction_history:
             self.transaction_history[payer_id] = []
 
@@ -533,3 +561,76 @@ class RiskAssessmentEngine:
             t for t in self.transaction_history[payer_id]
             if datetime.fromisoformat(t['timestamp']) > cutoff
         ]
+
+        # データベースモードの場合、呼び出し元で非同期保存を行う必要がある
+        # （このメソッドは同期メソッドのため、ここでは保存しない）
+        logger.debug(f"[RiskAssessmentEngine] Transaction recorded: payer_id={payer_id}, risk_score={risk_score}")
+
+    async def record_transaction_to_db(self, payer_id: str, amount_value_str: str, risk_score: int, currency: str = "JPY"):
+        """
+        取引履歴をデータベースに保存（非同期メソッド）
+
+        Args:
+            payer_id: ユーザーID
+            amount_value_str: 金額（文字列形式、例: "10000.00"）
+            risk_score: リスクスコア
+            currency: 通貨（デフォルト: JPY）
+        """
+        if not self.db_manager:
+            logger.warning("[RiskAssessmentEngine] Database manager not configured, skipping DB save")
+            return
+
+        try:
+            # 金額をcent単位の整数に変換
+            if "." in amount_value_str:
+                amount_cents = int(float(amount_value_str) * 100)
+            else:
+                amount_cents = int(amount_value_str)
+
+            # データベースに保存
+            from v2.common.database import TransactionHistoryCRUD
+
+            async with self.db_manager.get_session() as session:
+                await TransactionHistoryCRUD.create(session, {
+                    "payer_id": payer_id,
+                    "amount_value": amount_cents,
+                    "currency": currency,
+                    "risk_score": risk_score
+                })
+
+            logger.info(f"[RiskAssessmentEngine] Transaction history saved to database: payer_id={payer_id}, amount_cents={amount_cents}, risk_score={risk_score}")
+
+        except Exception as e:
+            logger.error(f"[RiskAssessmentEngine] Failed to save transaction history to database: {e}", exc_info=True)
+
+    async def get_transaction_history_from_db(self, payer_id: str, days: int = 30) -> List[Dict]:
+        """
+        データベースから取引履歴を取得（非同期メソッド）
+
+        Args:
+            payer_id: ユーザーID
+            days: 過去何日間の履歴を取得するか
+
+        Returns:
+            取引履歴のリスト
+        """
+        if not self.db_manager:
+            logger.warning("[RiskAssessmentEngine] Database manager not configured, returning empty history")
+            return []
+
+        try:
+            from v2.common.database import TransactionHistoryCRUD
+
+            async with self.db_manager.get_session() as session:
+                history_records = await TransactionHistoryCRUD.get_by_payer_id(session, payer_id, days=days)
+
+            # TransactionHistoryオブジェクトをdictに変換
+            history = [record.to_dict() for record in history_records]
+
+            logger.info(f"[RiskAssessmentEngine] Retrieved {len(history)} transaction history records from database for payer_id={payer_id}")
+
+            return history
+
+        except Exception as e:
+            logger.error(f"[RiskAssessmentEngine] Failed to retrieve transaction history from database: {e}", exc_info=True)
+            return []
