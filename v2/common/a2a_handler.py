@@ -16,6 +16,7 @@ import logging
 from v2.common.crypto import SignatureManager, KeyManager
 from v2.common.models import A2AMessage, A2AMessageHeader, A2ADataPart, A2ASignature, A2AProof, Signature
 from v2.common.did_resolver import DIDResolver
+from v2.common.nonce_manager import NonceManager
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +49,9 @@ class A2AMessageHandler:
 
         # DID解決機能（専門家の指摘対応：DIDベースの公開鍵解決）
         self.did_resolver = DIDResolver(key_manager)
+
+        # Nonce管理（専門家の指摘対応：リプレイ攻撃対策）
+        self.nonce_manager = NonceManager(ttl_seconds=300)  # タイムスタンプ検証と同じ5分のTTL
 
         # @typeごとのハンドラーを登録
         self._handlers: Dict[str, Callable] = {}
@@ -133,11 +137,22 @@ class A2AMessageHandler:
                     return False
 
                 # 4. Nonce検証（専門家の指摘：リプレイ攻撃対策）
-                # TODO: NonceManagerを実装してnonce再利用をチェック
-                # 現時点では、nonceフィールドの存在確認のみ
                 if not message.header.nonce:
                     logger.error("[A2AHandler] Nonce is required but missing")
                     return False
+
+                # NonceManagerで再利用攻撃をチェック
+                if not self.nonce_manager.is_valid_nonce(message.header.nonce):
+                    logger.error(
+                        f"[A2AHandler] Nonce reuse detected (replay attack): "
+                        f"nonce={message.header.nonce}, sender={message.header.sender}"
+                    )
+                    return False
+
+                logger.debug(
+                    f"[A2AHandler] Nonce validation successful: "
+                    f"nonce={message.header.nonce[:16]}..."  # ログには先頭16文字のみ表示
+                )
 
                 # 5. DIDベースの公開鍵解決（専門家の指摘対応）
                 public_key_to_verify = proof.publicKey  # デフォルトは埋め込み公開鍵
