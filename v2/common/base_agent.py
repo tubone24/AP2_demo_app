@@ -62,8 +62,12 @@ class BaseAgent(ABC):
         # CORS設定
         self._setup_cors()
 
+        # 環境変数からkeys_directoryを取得（Docker環境対応）
+        import os
+        keys_dir = os.getenv("AP2_KEYS_DIRECTORY", keys_directory)
+
         # 鍵管理と署名管理の初期化
-        self.key_manager = KeyManager(keys_directory=keys_directory)
+        self.key_manager = KeyManager(keys_directory=keys_dir)
         self.signature_manager = SignatureManager(self.key_manager)
 
         # 鍵の読み込みまたは生成
@@ -120,6 +124,13 @@ class BaseAgent(ABC):
             self.key_manager.save_private_key_encrypted(key_id, private_key, self.passphrase)
             self.key_manager.save_public_key(key_id, public_key)
 
+            # DIDドキュメントを更新（専門家の指摘対応：DIDベースの公開鍵解決）
+            # A2AMessageHandlerは後で初期化されるため、ここではDIDResolverを直接使用
+            from v2.common.did_resolver import DIDResolver
+            did_resolver = DIDResolver(self.key_manager)
+            did_resolver.update_public_key(self.agent_id, key_id)
+            logger.info(f"[{self.agent_name}] Updated DID document for: {self.agent_id}")
+
     def _register_common_endpoints(self):
         """共通エンドポイントの登録"""
 
@@ -147,8 +158,12 @@ class BaseAgent(ABC):
             """
             try:
                 logger.info(
-                    f"[{self.agent_name}] Received A2A message: "
-                    f"from={message.header.sender}, type={message.dataPart.type}"
+                    f"\n{'='*80}\n"
+                    f"[{self.agent_name}] A2Aエンドポイント: POST /a2a/message\n"
+                    f"  受信メッセージ: ID={message.header.message_id}\n"
+                    f"  送信元: {message.header.sender}\n"
+                    f"  タイプ: {message.dataPart.type}\n"
+                    f"{'='*80}"
                 )
 
                 # メッセージ処理（署名検証＋ハンドラー呼び出し）
@@ -163,10 +178,19 @@ class BaseAgent(ABC):
                     sign=True
                 )
 
+                logger.info(
+                    f"[{self.agent_name}] A2Aレスポンス返却: "
+                    f"type={result.get('type')}, to={message.header.sender}"
+                )
+
                 return response
 
             except ValueError as e:
-                logger.error(f"[{self.agent_name}] Validation error: {e}")
+                logger.error(
+                    f"[{self.agent_name}] Validation error in A2A message: {e}\n"
+                    f"  Message ID: {message.header.message_id}\n"
+                    f"  Sender: {message.header.sender}"
+                )
                 error_response = self.a2a_handler.create_error_response(
                     recipient=message.header.sender,
                     error_code="invalid_request",
@@ -175,7 +199,12 @@ class BaseAgent(ABC):
                 raise HTTPException(status_code=400, detail=error_response.model_dump())
 
             except Exception as e:
-                logger.error(f"[{self.agent_name}] Internal error: {e}", exc_info=True)
+                logger.error(
+                    f"[{self.agent_name}] Internal error in A2A message: {e}\n"
+                    f"  Message ID: {message.header.message_id}\n"
+                    f"  Sender: {message.header.sender}",
+                    exc_info=True
+                )
                 error_response = self.a2a_handler.create_error_response(
                     recipient=message.header.sender,
                     error_code="internal_error",

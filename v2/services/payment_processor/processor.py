@@ -495,29 +495,16 @@ class PaymentProcessorService(BaseAgent):
                         else:
                             cart_mandate = cart_mandate_record.payload
 
-            # CartMandateが取得できない場合は簡易版を作成
+            # AP2仕様準拠：CartMandateは必須
+            # CartMandateにはMerchant署名とIntent参照が含まれており、取引の正当性を保証する重要なデータ
+            # CartMandateが存在しない取引はAP2仕様違反のため、エラーとする
             if not cart_mandate:
-                logger.warning(f"[PaymentProcessor] CartMandate not found, creating simplified version")
-                amount = payment_mandate.get("amount", {})
-                cart_mandate = {
-                    "id": cart_mandate_id or "unknown",
-                    "merchant_name": "Demo Merchant",
-                    "merchant_id": payment_mandate.get("payee_id", "unknown"),
-                    "items": [
-                        {
-                            "name": "商品",
-                            "quantity": 1,
-                            "unit_price": amount,
-                            "total_price": amount
-                        }
-                    ],
-                    "subtotal": amount,
-                    "tax": {"value": "0", "currency": amount.get("currency", "JPY")},
-                    "shipping": {
-                        "cost": {"value": "0", "currency": amount.get("currency", "JPY")}
-                    },
-                    "total": amount
-                }
+                error_msg = (
+                    f"AP2 specification violation: CartMandate not found (id={cart_mandate_id}). "
+                    f"CartMandate with Merchant signature is required for all transactions."
+                )
+                logger.error(f"[PaymentProcessor] {error_msg}")
+                raise ValueError(error_msg)
 
             # トランザクション結果を整形（receipt_generator.generate_receipt_pdf用）
             transaction_result = {

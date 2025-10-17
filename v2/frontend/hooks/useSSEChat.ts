@@ -226,6 +226,10 @@ export function useSSEChat() {
     setSignatureRequest(null);
   }, []);
 
+  const clearWebauthnRequest = useCallback(() => {
+    setWebauthnRequest(null);
+  }, []);
+
   const stopStreaming = useCallback(() => {
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
@@ -245,8 +249,10 @@ export function useSSEChat() {
     shippingFormRequest,
     paymentMethods,
     webauthnRequest,
+    sessionId: sessionIdRef.current,
     sendMessage,
     clearSignatureRequest,
+    clearWebauthnRequest,
     stopStreaming,
   };
 }

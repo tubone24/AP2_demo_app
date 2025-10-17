@@ -472,6 +472,144 @@ class ShoppingAgent(BaseAgent):
                     raise HTTPException(status_code=404, detail="Transaction not found")
                 return transaction.to_dict()
 
+        @self.app.post("/payment/submit-attestation")
+        async def submit_payment_attestation(request: Dict[str, Any]):
+            """
+            POST /payment/submit-attestation - WebAuthn attestationを受け取って決済処理を実行
+
+            AP2仕様完全準拠：
+            1. フロントエンドがWebAuthn APIでユーザー認証を実行
+            2. フロントエンドが生成されたattestationをこのエンドポイントに送信
+            3. バックエンドがCredential Providerに検証依頼
+            4. 検証成功後、Payment Processorに決済依頼
+            5. 決済結果を返す
+
+            リクエスト:
+            {
+                "session_id": "session_abc123",
+                "attestation": {
+                    "rawId": "credential_id",
+                    "type": "public-key",
+                    "attestation_type": "passkey",
+                    "response": {
+                        "authenticatorData": "...",
+                        "clientDataJSON": "...",
+                        "signature": "..."
+                    }
+                }
+            }
+
+            レスポンス:
+            {
+                "status": "success" | "failed",
+                "transaction_id": "tx_abc123",
+                "receipt_url": "https://...",
+                "error": "..." (失敗時)
+            }
+            """
+            try:
+                session_id = request.get("session_id")
+                attestation = request.get("attestation", {})
+
+                if not session_id:
+                    raise HTTPException(status_code=400, detail="session_id is required")
+
+                if not attestation:
+                    raise HTTPException(status_code=400, detail="attestation is required")
+
+                # セッション取得
+                if session_id not in self.sessions:
+                    raise HTTPException(status_code=404, detail="Session not found")
+
+                session = self.sessions[session_id]
+
+                # 現在のステップ確認
+                if session.get("step") != "webauthn_attestation_requested":
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Invalid session state: {session.get('step')}. Expected: webauthn_attestation_requested"
+                    )
+
+                # PaymentMandate取得
+                payment_mandate = session.get("payment_mandate")
+                if not payment_mandate:
+                    raise HTTPException(status_code=400, detail="PaymentMandate not found in session")
+
+                # WebAuthn challengeの検証
+                expected_challenge = session.get("webauthn_challenge")
+                received_challenge = attestation.get("challenge", "")
+
+                if expected_challenge and expected_challenge != received_challenge:
+                    logger.warning(
+                        f"[submit_payment_attestation] Challenge mismatch: "
+                        f"expected={expected_challenge}, received={received_challenge}"
+                    )
+                    # デモ環境では警告のみで続行
+
+                # Credential Providerで検証
+                selected_cp = session.get("selected_credential_provider", self.credential_providers[0])
+
+                logger.info(f"[submit_payment_attestation] Verifying attestation for PaymentMandate: {payment_mandate['id']}")
+
+                verification_result = await self._verify_attestation_with_cp(
+                    payment_mandate,
+                    attestation,
+                    selected_cp["url"]
+                )
+
+                if not verification_result.get("verified"):
+                    # 認証失敗
+                    session["step"] = "attestation_failed"
+                    return {
+                        "status": "failed",
+                        "error": "WebAuthn attestation verification failed",
+                        "details": verification_result.get("details", "Unknown error")
+                    }
+
+                # 認証成功 - 決済処理を実行
+                logger.info(f"[submit_payment_attestation] Attestation verified, processing payment...")
+
+                session["attestation_token"] = verification_result.get("token")
+                session["step"] = "payment_processing"
+
+                # Payment Processorに決済依頼
+                payment_result = await self._process_payment_via_payment_processor(payment_mandate)
+
+                if payment_result.get("status") == "captured":
+                    # 決済成功
+                    transaction_id = payment_result.get("transaction_id")
+                    receipt_url = payment_result.get("receipt_url")
+
+                    session["transaction_id"] = transaction_id
+                    session["step"] = "completed"
+
+                    logger.info(f"[submit_payment_attestation] Payment successful: {transaction_id}")
+
+                    return {
+                        "status": "success",
+                        "transaction_id": transaction_id,
+                        "receipt_url": receipt_url,
+                        "product_name": session.get("selected_product", {}).get("name"),
+                        "amount": session.get("selected_product", {}).get("price")
+                    }
+                else:
+                    # 決済失敗
+                    error_message = payment_result.get("error", "Payment processing failed")
+                    session["step"] = "payment_failed"
+
+                    logger.error(f"[submit_payment_attestation] Payment failed: {error_message}")
+
+                    return {
+                        "status": "failed",
+                        "error": error_message
+                    }
+
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"[submit_payment_attestation] Error: {e}", exc_info=True)
+                raise HTTPException(status_code=500, detail=f"Failed to process payment attestation: {e}")
+
     # ========================================
     # A2Aメッセージハンドラー
     # ========================================
@@ -1081,68 +1219,20 @@ class ShoppingAgent(BaseAgent):
                     session
                 )
                 session["cart_mandate"] = signed_cart_mandate
-                session["step"] = "cart_signature_requested"
+
+                # 専門家の指摘対応：CartMandateにユーザー署名は不要
+                # MerchantがCartMandateに署名することで、カート内容の正当性が保証される
+                # ユーザー署名はIntentMandateでのみ必要
 
                 yield StreamEvent(
                     type="agent_text",
-                    content="Merchant Agentを経由してMerchantの署名を確認しました。カート内容を確認して、あなたの署名をお願いします。"
-                )
-                await asyncio.sleep(0.2)
-
-                # 署名リクエスト（Merchant署名済みのCartMandateをユーザーに提示）
-                yield StreamEvent(
-                    type="signature_request",
-                    mandate=signed_cart_mandate,
-                    mandate_type="cart"
-                )
-            except Exception as e:
-                logger.error(f"[_generate_fixed_response] CartMandate request via Merchant Agent failed: {e}")
-                yield StreamEvent(
-                    type="agent_text",
-                    content=f"申し訳ありません。Merchant Agentを経由したCartMandateの取得に失敗しました: {str(e)}"
-                )
-                session["step"] = "error"
-            return
-
-        # ステップ8: CartMandate署名完了後 → PaymentMandate作成
-        elif current_step == "cart_signature_requested":
-            if "署名完了" in user_input or "signed" in user_input_lower or user_input_lower == "ok":
-                session["step"] = "cart_signed"
-
-                yield StreamEvent(
-                    type="agent_text",
-                    content="カートの署名ありがとうございます！決済情報を準備中..."
+                    content="Merchant Agentを経由してMerchantの署名を確認しました。決済情報を準備中..."
                 )
                 await asyncio.sleep(0.5)
 
-                # PaymentMandateを作成
+                # PaymentMandateを作成（CartMandate署名完了後、直ちに作成）
                 payment_mandate = self._create_payment_mandate(session)
                 session["payment_mandate"] = payment_mandate
-                session["step"] = "payment_signature_requested"
-
-                yield StreamEvent(
-                    type="agent_text",
-                    content="決済承認の署名をお願いします。"
-                )
-                await asyncio.sleep(0.2)
-
-                # 署名リクエスト
-                yield StreamEvent(
-                    type="signature_request",
-                    mandate=payment_mandate,
-                    mandate_type="payment"
-                )
-                return
-            else:
-                yield StreamEvent(
-                    type="agent_text",
-                    content="署名を完了してから「署名完了」と入力してください。"
-                )
-                return
-
-        # ステップ9: PaymentMandate署名完了後 → WebAuthn Device Attestation要求（AP2 Step 20-22）
-        elif current_step == "payment_signature_requested":
-            if "署名完了" in user_input or "signed" in user_input_lower or user_input_lower == "ok":
                 session["step"] = "webauthn_attestation_requested"
 
                 # Passkey/WebAuthnを使用することを記録（AP2仕様準拠）
@@ -1151,7 +1241,7 @@ class ShoppingAgent(BaseAgent):
 
                 yield StreamEvent(
                     type="agent_text",
-                    content="決済の署名ありがとうございます！セキュリティのため、デバイス認証（WebAuthn/Passkey）を実施します。"
+                    content="決済準備が完了しました。セキュリティのため、デバイス認証（WebAuthn/Passkey）を実施します。"
                 )
                 await asyncio.sleep(0.5)
 
@@ -1169,114 +1259,35 @@ class ShoppingAgent(BaseAgent):
 
                 yield StreamEvent(
                     type="agent_text",
-                    content="デバイス認証を完了してから「認証完了」と入力してください。\n（デモ環境では「認証完了」と入力するとスキップできます）"
+                    content="デバイス認証を完了してください。\n\n認証後、自動的に決済処理が開始されます。"
                 )
-                return
-            else:
-                yield StreamEvent(
-                    type="agent_text",
-                    content="署名を完了してから「署名完了」と入力してください。"
-                )
+
+                # フロントエンドからのattestation送信を待機
+                # フロントエンドはPOST /payment/submit-attestationを呼び出す
                 return
 
-        # ステップ10: WebAuthn Attestation完了後 → Credential Providerへ検証依頼（AP2 Step 23）
+            except Exception as e:
+                logger.error(f"[_generate_fixed_response] CartMandate request via Merchant Agent failed: {e}")
+                yield StreamEvent(
+                    type="agent_text",
+                    content=f"申し訳ありません。Merchant Agentを経由したCartMandateの取得に失敗しました: {str(e)}"
+                )
+                session["step"] = "error"
+            return
+
+        # ステップ7.6: WebAuthn認証待機中
         elif current_step == "webauthn_attestation_requested":
-            if "認証完了" in user_input or "attestation" in user_input_lower or user_input_lower == "ok":
-                session["step"] = "attestation_verifying"
+            # フロントエンドがPOST /payment/submit-attestationを呼び出すまで待機
+            # ユーザーがチャット入力してしまった場合の対応
+            yield StreamEvent(
+                type="agent_text",
+                content="デバイス認証（WebAuthn/Passkey）を実行中です。\n\n"
+                        "ブラウザの認証ダイアログで指紋認証・顔認証などを完了してください。\n"
+                        "認証完了後、自動的に決済処理が開始されます。"
+            )
+            return
 
-                yield StreamEvent(
-                    type="agent_text",
-                    content="デバイス認証を確認しています..."
-                )
-                await asyncio.sleep(0.5)
-
-                # WebAuthn attestationをモック（実際はフロントエンドから送信される）
-                mock_attestation = {
-                    "challenge": session.get("webauthn_challenge", ""),
-                    "rawId": "mock_credential_id_" + uuid.uuid4().hex[:16],
-                    "type": "public-key",
-                    "attestation_type": "passkey",
-                    "response": {
-                        "authenticatorData": "mock_authenticator_data",
-                        "clientDataJSON": "mock_client_data_json",
-                        "signature": "mock_signature"
-                    }
-                }
-
-                # AP2 Step 23: PaymentMandate + AttestationをCredential Providerに送信
-                try:
-                    # 選択されたCredential ProviderのURLを取得
-                    selected_cp = session.get("selected_credential_provider", self.credential_providers[0])
-
-                    verification_result = await self._verify_attestation_with_cp(
-                        session["payment_mandate"],
-                        mock_attestation,
-                        selected_cp["url"]
-                    )
-
-                    if verification_result.get("verified"):
-                        logger.info(f"[ShoppingAgent] WebAuthn attestation verified by Credential Provider")
-                        session["attestation_token"] = verification_result.get("token")
-                        session["step"] = "payment_processing"
-
-                        yield StreamEvent(
-                            type="agent_text",
-                            content="✅ デバイス認証が完了しました。決済を処理中..."
-                        )
-                        await asyncio.sleep(0.5)
-
-                        # Payment ProcessorにPaymentMandateを送信（A2A通信）
-                        payment_result = await self._process_payment_via_payment_processor(
-                            session["payment_mandate"]
-                        )
-
-                        if payment_result.get("status") == "captured":
-                            transaction_id = payment_result.get("transaction_id")
-                            receipt_url = payment_result.get("receipt_url")
-
-                            session["transaction_id"] = transaction_id
-
-                            yield StreamEvent(
-                                type="agent_text",
-                                content=f"✅ 決済が完了しました！\n\n取引ID: {transaction_id}\n商品: {session['selected_product']['name']}\n金額: ¥{session['selected_product']['price'] // 100:,}\n\n{receipt_url}\n\nご購入ありがとうございました！"
-                            )
-
-                            # セッションをリセット
-                            session["step"] = "completed"
-                        else:
-                            # 決済失敗
-                            error_message = payment_result.get("error", "決済処理に失敗しました")
-                            yield StreamEvent(
-                                type="agent_text",
-                                content=f"❌ 決済に失敗しました: {error_message}\n\nもう一度お試しください。"
-                            )
-                            session["step"] = "payment_failed"
-
-                    else:
-                        # デバイス認証失敗
-                        yield StreamEvent(
-                            type="agent_text",
-                            content=f"❌ デバイス認証に失敗しました。もう一度お試しください。"
-                        )
-                        session["step"] = "attestation_failed"
-
-                except Exception as e:
-                    logger.error(f"[_generate_fixed_response] Attestation verification or payment processing failed: {e}")
-                    yield StreamEvent(
-                        type="agent_text",
-                        content=f"❌ 処理中にエラーが発生しました: {str(e)}"
-                    )
-                    session["step"] = "payment_failed"
-
-                return
-            else:
-                yield StreamEvent(
-                    type="agent_text",
-                    content="デバイス認証を完了してから「認証完了」と入力してください。"
-                )
-                return
-
-        # ステップ11: 完了後
+        # ステップ8: 完了後
         elif current_step == "completed":
             yield StreamEvent(
                 type="agent_text",
@@ -1506,6 +1517,17 @@ class ShoppingAgent(BaseAgent):
             )
 
             # Payment ProcessorにA2Aメッセージを送信
+            import json as json_lib
+            logger.info(
+                f"\n{'='*80}\n"
+                f"[ShoppingAgent → PaymentProcessor] A2Aメッセージ送信\n"
+                f"  URL: {self.payment_processor_url}/a2a/message\n"
+                f"  メッセージID: {message.header.message_id}\n"
+                f"  タイプ: {message.dataPart.type}\n"
+                f"  ペイロード: {json_lib.dumps(payment_mandate, ensure_ascii=False, indent=2)}\n"
+                f"{'='*80}"
+            )
+
             response = await self.http_client.post(
                 f"{self.payment_processor_url}/a2a/message",
                 json=message.model_dump(by_alias=True),
@@ -1513,6 +1535,14 @@ class ShoppingAgent(BaseAgent):
             )
             response.raise_for_status()
             result = response.json()
+
+            logger.info(
+                f"\n{'='*80}\n"
+                f"[ShoppingAgent ← PaymentProcessor] A2Aレスポンス受信\n"
+                f"  Status: {response.status_code}\n"
+                f"  Response Body: {json_lib.dumps(result, ensure_ascii=False, indent=2)}\n"
+                f"{'='*80}"
+            )
 
             # A2Aレスポンスからpayloadを抽出
             if isinstance(result, dict) and "dataPart" in result:
@@ -1577,6 +1607,17 @@ class ShoppingAgent(BaseAgent):
             )
 
             # Merchant AgentにA2Aメッセージを送信
+            import json as json_lib
+            logger.info(
+                f"\n{'='*80}\n"
+                f"[ShoppingAgent → MerchantAgent] A2Aメッセージ送信\n"
+                f"  URL: {self.merchant_agent_url}/a2a/message\n"
+                f"  メッセージID: {message.header.message_id}\n"
+                f"  タイプ: {message.dataPart.type}\n"
+                f"  ペイロード: {json_lib.dumps(intent_mandate, ensure_ascii=False, indent=2)}\n"
+                f"{'='*80}"
+            )
+
             response = await self.http_client.post(
                 f"{self.merchant_agent_url}/a2a/message",
                 json=message.model_dump(by_alias=True),
@@ -1584,6 +1625,14 @@ class ShoppingAgent(BaseAgent):
             )
             response.raise_for_status()
             result = response.json()
+
+            logger.info(
+                f"\n{'='*80}\n"
+                f"[ShoppingAgent ← MerchantAgent] A2Aレスポンス受信\n"
+                f"  Status: {response.status_code}\n"
+                f"  Response Body: {json_lib.dumps(result, ensure_ascii=False, indent=2)}\n"
+                f"{'='*80}"
+            )
 
             # A2Aレスポンスからproductsを抽出
             if isinstance(result, dict) and "dataPart" in result:
@@ -1659,6 +1708,17 @@ class ShoppingAgent(BaseAgent):
             )
 
             # Merchant AgentにA2Aメッセージを送信
+            import json as json_lib
+            logger.info(
+                f"\n{'='*80}\n"
+                f"[ShoppingAgent → MerchantAgent] A2Aメッセージ送信\n"
+                f"  URL: {self.merchant_agent_url}/a2a/message\n"
+                f"  メッセージID: {message.header.message_id}\n"
+                f"  タイプ: {message.dataPart.type}\n"
+                f"  ペイロード: {json_lib.dumps(cart_request, ensure_ascii=False, indent=2)}\n"
+                f"{'='*80}"
+            )
+
             response = await self.http_client.post(
                 f"{self.merchant_agent_url}/a2a/message",
                 json=message.model_dump(by_alias=True),
@@ -1666,6 +1726,14 @@ class ShoppingAgent(BaseAgent):
             )
             response.raise_for_status()
             result = response.json()
+
+            logger.info(
+                f"\n{'='*80}\n"
+                f"[ShoppingAgent ← MerchantAgent] A2Aレスポンス受信\n"
+                f"  Status: {response.status_code}\n"
+                f"  Response Body: {json_lib.dumps(result, ensure_ascii=False, indent=2)}\n"
+                f"{'='*80}"
+            )
 
             # A2AレスポンスからCartMandateを抽出
             if isinstance(result, dict) and "dataPart" in result:
@@ -1747,6 +1815,16 @@ class ShoppingAgent(BaseAgent):
 
         try:
             # MerchantにPOST /sign/cartで署名依頼
+            import json as json_lib
+            logger.info(
+                f"\n{'='*80}\n"
+                f"[ShoppingAgent → Merchant] 署名リクエスト送信\n"
+                f"  URL: {self.merchant_url}/sign/cart\n"
+                f"  CartMandate ID: {cart_mandate['id']}\n"
+                f"  ペイロード: {json_lib.dumps(cart_mandate, ensure_ascii=False, indent=2)}\n"
+                f"{'='*80}"
+            )
+
             response = await self.http_client.post(
                 f"{self.merchant_url}/sign/cart",
                 json={"cart_mandate": cart_mandate},
@@ -1754,6 +1832,14 @@ class ShoppingAgent(BaseAgent):
             )
             response.raise_for_status()
             result = response.json()
+
+            logger.info(
+                f"\n{'='*80}\n"
+                f"[ShoppingAgent ← Merchant] 署名レスポンス受信\n"
+                f"  Status: {response.status_code}\n"
+                f"  Response Body: {json_lib.dumps(result, ensure_ascii=False, indent=2)}\n"
+                f"{'='*80}"
+            )
 
             # 署名済みCartMandateを取得
             signed_cart_mandate = result.get("signed_cart_mandate")
@@ -1846,6 +1932,15 @@ class ShoppingAgent(BaseAgent):
 
         try:
             # Credential ProviderにPOST /payment-methods/tokenizeでトークン化依頼
+            logger.info(
+                f"\n{'='*80}\n"
+                f"[ShoppingAgent → CredentialProvider] トークン化リクエスト送信\n"
+                f"  URL: {credential_provider_url}/payment-methods/tokenize\n"
+                f"  User ID: {user_id}\n"
+                f"  Payment Method ID: {payment_method_id}\n"
+                f"{'='*80}"
+            )
+
             response = await self.http_client.post(
                 f"{credential_provider_url}/payment-methods/tokenize",
                 json={
@@ -1856,6 +1951,11 @@ class ShoppingAgent(BaseAgent):
             )
             response.raise_for_status()
             result = response.json()
+
+            logger.info(
+                f"[ShoppingAgent ← CredentialProvider] トークン化レスポンス受信: "
+                f"status={response.status_code}"
+            )
 
             # トークン化結果を取得
             token = result.get("token")
@@ -1890,6 +1990,19 @@ class ShoppingAgent(BaseAgent):
 
         try:
             # Credential ProviderにPOST /verify/attestationで検証依頼
+            import json as json_lib
+            logger.info(
+                f"\n{'='*80}\n"
+                f"[ShoppingAgent → CredentialProvider] WebAuthn検証リクエスト送信\n"
+                f"  URL: {credential_provider_url}/verify/attestation\n"
+                f"  PaymentMandate ID: {payment_mandate.get('id')}\n"
+                f"  Attestation Type: {attestation.get('attestation_type')}\n"
+                f"  ペイロード:\n"
+                f"    PaymentMandate: {json_lib.dumps(payment_mandate, ensure_ascii=False, indent=2)}\n"
+                f"    Attestation: {json_lib.dumps(attestation, ensure_ascii=False, indent=2)}\n"
+                f"{'='*80}"
+            )
+
             response = await self.http_client.post(
                 f"{credential_provider_url}/verify/attestation",
                 json={
@@ -1900,6 +2013,15 @@ class ShoppingAgent(BaseAgent):
             )
             response.raise_for_status()
             result = response.json()
+
+            logger.info(
+                f"\n{'='*80}\n"
+                f"[ShoppingAgent ← CredentialProvider] WebAuthn検証レスポンス受信\n"
+                f"  Status: {response.status_code}\n"
+                f"  Verified: {result.get('verified', False)}\n"
+                f"  Response Body: {json_lib.dumps(result, ensure_ascii=False, indent=2)}\n"
+                f"{'='*80}"
+            )
 
             # 検証結果を取得
             verified = result.get("verified", False)

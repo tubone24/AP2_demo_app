@@ -365,6 +365,14 @@ class KeyManager:
         """メモリ上の秘密鍵を取得"""
         return self._active_keys.get(key_id)
 
+    def public_key_to_pem(self, public_key: ec.EllipticCurvePublicKey) -> str:
+        """公開鍵をPEM文字列に変換"""
+        pem_bytes = public_key.public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo
+        )
+        return pem_bytes.decode('utf-8')
+
     def public_key_to_base64(self, public_key: ec.EllipticCurvePublicKey) -> str:
         """公開鍵をBase64文字列に変換"""
         pem = public_key.public_bytes(

@@ -276,6 +276,15 @@ class RiskAssessmentEngine:
             )
             return 50
 
+        # ブランド制約チェック（未実装）
+        # AP2仕様では、Intent制約にブランド指定がある場合、Cart内の商品ブランドが
+        # 制約に準拠しているかを検証する必要がある
+        # デモ実装では、商品のブランド情報が不完全なため、このチェックは省略している
+        # 本番実装では、以下のようなチェックが必要：
+        # - cart_mandate内の全itemsに対してbrand情報を取得
+        # - intent_mandate.constraints.brandsリストと照合
+        # - 違反があれば50を返す
+
         return 0
 
     def _assess_agent_involvement(self, agent_involved: bool) -> int:

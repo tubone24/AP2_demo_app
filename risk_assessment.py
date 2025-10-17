@@ -251,10 +251,15 @@ class RiskAssessmentEngine:
             return 50
 
         # ブランド制約違反（商品ブランドがIntent制約外）
+        # AP2仕様では、Intent制約にブランド指定がある場合、Cart内の商品ブランドが
+        # 制約に準拠しているかを検証する必要がある
+        # デモ実装では、商品のブランド情報が不完全なため、このチェックは省略している
+        # 本番実装では、以下のようなチェックが必要：
         if intent_mandate.constraints.brands:
             for item in cart_mandate.items:
-                # 実際の商品ブランドチェックはここで行う
-                # 簡易版なので省略
+                # 各商品のbrand属性を取得
+                # intent_mandate.constraints.brandsリストと照合
+                # 違反があれば50を返す
                 pass
 
         return 0

@@ -9,7 +9,7 @@ v1のreceipt_generator.pyをv2のDict構造に適応
 
 from io import BytesIO
 from datetime import datetime
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 import logging
 
 from reportlab.lib.pagesizes import A4
@@ -23,16 +23,18 @@ logger = logging.getLogger(__name__)
 
 def generate_receipt_pdf(
     transaction_result: Dict[str, Any],
-    cart_mandate: Dict[str, Any],
+    cart_mandate: Optional[Dict[str, Any]],
     payment_mandate: Dict[str, Any],
     user_name: str
 ) -> BytesIO:
     """
     領収書PDFを生成
 
+    AP2仕様準拠：CartMandateがNoneの場合は、PaymentMandateから取得可能な情報のみで領収書を生成
+
     Args:
         transaction_result: トランザクション結果（Dict形式）
-        cart_mandate: カート情報（Dict形式）
+        cart_mandate: カート情報（Dict形式、Noneの場合あり）
         payment_mandate: 支払い情報（Dict形式）
         user_name: ユーザー名
 
@@ -134,12 +136,18 @@ def generate_receipt_pdf(
     y_position -= 5 * mm
 
     c.drawString(25 * mm, y_position, f"店舗名:")
-    merchant_name = cart_mandate.get("merchant_name", "Unknown Merchant")
+    # AP2仕様準拠：CartMandateがない場合はPaymentMandateから情報を取得
+    if cart_mandate:
+        merchant_name = cart_mandate.get("merchant_name", "Unknown Merchant")
+        merchant_id = cart_mandate.get("merchant_id", "N/A")
+    else:
+        merchant_name = payment_mandate.get("payee_name", "Unknown Merchant")
+        merchant_id = payment_mandate.get("payee_id", "N/A")
+
     c.drawString(60 * mm, y_position, merchant_name)
     y_position -= 5 * mm
 
     c.drawString(25 * mm, y_position, f"店舗ID:")
-    merchant_id = cart_mandate.get("merchant_id", "N/A")
     c.drawString(60 * mm, y_position, merchant_id)
     y_position -= 10 * mm
 
@@ -152,74 +160,89 @@ def generate_receipt_pdf(
     c.line(20 * mm, y_position + 2 * mm, width - 20 * mm, y_position + 2 * mm)
     y_position -= 5 * mm
 
-    # テーブルヘッダー
-    c.drawString(25 * mm, y_position, "商品名")
-    c.drawRightString(100 * mm, y_position, "数量")
-    c.drawRightString(130 * mm, y_position, "単価")
-    c.drawRightString(160 * mm, y_position, "小計")
-    y_position -= 5 * mm
-
-    # 商品リスト
-    items = cart_mandate.get("items", [])
-    for item in items:
-        # 商品名（長い場合は切り詰め）
-        item_name = item.get("name", "Unknown Item")[:30]
-        c.drawString(25 * mm, y_position, item_name)
-
-        # 数量
-        quantity = item.get("quantity", 1)
-        c.drawRightString(100 * mm, y_position, str(quantity))
-
-        # 単価（Dict形式の Amount を文字列化）
-        unit_price = item.get("unit_price", {})
-        unit_price_str = _format_amount(unit_price)
-        c.drawRightString(130 * mm, y_position, unit_price_str)
-
-        # 小計
-        total_price = item.get("total_price", {})
-        total_price_str = _format_amount(total_price)
-        c.drawRightString(160 * mm, y_position, total_price_str)
-
+    # AP2仕様準拠：CartMandateがない場合は詳細情報なし
+    if cart_mandate:
+        # テーブルヘッダー
+        c.drawString(25 * mm, y_position, "商品名")
+        c.drawRightString(100 * mm, y_position, "数量")
+        c.drawRightString(130 * mm, y_position, "単価")
+        c.drawRightString(160 * mm, y_position, "小計")
         y_position -= 5 * mm
 
-    y_position -= 3 * mm
+        # 商品リスト
+        items = cart_mandate.get("items", [])
+        for item in items:
+            # 商品名（長い場合は切り詰め）
+            item_name = item.get("name", "Unknown Item")[:30]
+            c.drawString(25 * mm, y_position, item_name)
 
-    # --- 金額詳細 ---
-    c.line(110 * mm, y_position + 2 * mm, width - 20 * mm, y_position + 2 * mm)
-    y_position -= 5 * mm
+            # 数量
+            quantity = item.get("quantity", 1)
+            c.drawRightString(100 * mm, y_position, str(quantity))
 
-    # 小計
-    c.drawString(110 * mm, y_position, "小計:")
-    subtotal = cart_mandate.get("subtotal", {})
-    subtotal_str = _format_amount(subtotal)
-    c.drawRightString(160 * mm, y_position, subtotal_str)
-    y_position -= 5 * mm
+            # 単価（Dict形式の Amount を文字列化）
+            unit_price = item.get("unit_price", {})
+            unit_price_str = _format_amount(unit_price)
+            c.drawRightString(130 * mm, y_position, unit_price_str)
 
-    # 税金
-    c.drawString(110 * mm, y_position, "税金:")
-    tax = cart_mandate.get("tax", {})
-    tax_str = _format_amount(tax)
-    c.drawRightString(160 * mm, y_position, tax_str)
-    y_position -= 5 * mm
+            # 小計
+            total_price = item.get("total_price", {})
+            total_price_str = _format_amount(total_price)
+            c.drawRightString(160 * mm, y_position, total_price_str)
 
-    # 配送料
-    c.drawString(110 * mm, y_position, "配送料:")
-    shipping = cart_mandate.get("shipping", {})
-    shipping_cost = shipping.get("cost", {})
-    shipping_cost_str = _format_amount(shipping_cost)
-    c.drawRightString(160 * mm, y_position, shipping_cost_str)
-    y_position -= 5 * mm
+            y_position -= 5 * mm
 
-    # 合計金額（太字）
-    c.line(110 * mm, y_position + 2 * mm, width - 20 * mm, y_position + 2 * mm)
-    y_position -= 5 * mm
+        y_position -= 3 * mm
 
-    c.setFont(font_name, 12)
-    c.drawString(110 * mm, y_position, "合計金額:")
-    total = cart_mandate.get("total", {})
-    total_str = _format_amount(total)
-    c.drawRightString(160 * mm, y_position, total_str)
-    y_position -= 10 * mm
+        # --- 金額詳細 ---
+        c.line(110 * mm, y_position + 2 * mm, width - 20 * mm, y_position + 2 * mm)
+        y_position -= 5 * mm
+
+        # 小計
+        c.drawString(110 * mm, y_position, "小計:")
+        subtotal = cart_mandate.get("subtotal", {})
+        subtotal_str = _format_amount(subtotal)
+        c.drawRightString(160 * mm, y_position, subtotal_str)
+        y_position -= 5 * mm
+
+        # 税金
+        c.drawString(110 * mm, y_position, "税金:")
+        tax = cart_mandate.get("tax", {})
+        tax_str = _format_amount(tax)
+        c.drawRightString(160 * mm, y_position, tax_str)
+        y_position -= 5 * mm
+
+        # 配送料
+        c.drawString(110 * mm, y_position, "配送料:")
+        shipping = cart_mandate.get("shipping", {})
+        shipping_cost = shipping.get("cost", {})
+        shipping_cost_str = _format_amount(shipping_cost)
+        c.drawRightString(160 * mm, y_position, shipping_cost_str)
+        y_position -= 5 * mm
+
+        # 合計金額（太字）
+        c.line(110 * mm, y_position + 2 * mm, width - 20 * mm, y_position + 2 * mm)
+        y_position -= 5 * mm
+
+        c.setFont(font_name, 12)
+        c.drawString(110 * mm, y_position, "合計金額:")
+        total = cart_mandate.get("total", {})
+        total_str = _format_amount(total)
+        c.drawRightString(160 * mm, y_position, total_str)
+        y_position -= 10 * mm
+
+    else:
+        # CartMandateがない場合は合計金額のみ表示
+        c.drawString(25 * mm, y_position, "商品詳細情報は利用できません")
+        y_position -= 8 * mm
+
+        # 合計金額のみ表示（PaymentMandateから取得）
+        c.setFont(font_name, 12)
+        c.drawString(110 * mm, y_position, "合計金額:")
+        total = payment_mandate.get("amount", {})
+        total_str = _format_amount(total)
+        c.drawRightString(160 * mm, y_position, total_str)
+        y_position -= 10 * mm
 
     # --- フッター ---
     c.setFont(font_name, 8)

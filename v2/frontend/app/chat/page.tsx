@@ -25,8 +25,10 @@ export default function ChatPage() {
     shippingFormRequest,
     paymentMethods,
     webauthnRequest,
+    sessionId,
     sendMessage,
     clearSignatureRequest,
+    clearWebauthnRequest,
     stopStreaming,
   } = useSSEChat();
 
@@ -126,17 +128,51 @@ export default function ChatPage() {
     console.log("WebAuthn authentication completed:", attestation);
 
     try {
-      // 認証完了をエージェントに自動通知
-      sendMessage("認証完了");
+      // AP2仕様準拠：POST /payment/submit-attestationにattestationを送信
+      const shoppingAgentUrl = process.env.NEXT_PUBLIC_SHOPPING_AGENT_URL || "http://localhost:8000";
+
+      console.log("Submitting attestation to Shopping Agent:", {
+        session_id: sessionId,
+        attestation: attestation,
+      });
+
+      const response = await fetch(`${shoppingAgentUrl}/payment/submit-attestation`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          session_id: sessionId,
+          attestation: attestation,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const result = await response.json();
+      console.log("Payment attestation result:", result);
+
+      // WebAuthn認証ダイアログを閉じる
+      clearWebauthnRequest();
+
+      if (result.status === "success") {
+        // 決済成功 - 成功メッセージを表示
+        sendMessage(`決済が完了しました！トランザクションID: ${result.transaction_id}`);
+      } else {
+        // 決済失敗
+        sendMessage(`決済に失敗しました: ${result.error}`);
+      }
     } catch (error: any) {
-      console.error("WebAuthn error:", error);
-      sendMessage("デバイス認証処理中にエラーが発生しました。");
+      console.error("WebAuthn attestation submission error:", error);
+      clearWebauthnRequest();
+      sendMessage(`デバイス認証処理中にエラーが発生しました: ${error.message}`);
     }
   };
 
   // WebAuthn認証失敗時の処理
   const handleWebAuthnError = (error: string) => {
     console.error("WebAuthn authentication failed:", error);
+    clearWebauthnRequest();
     sendMessage(`デバイス認証に失敗しました: ${error}`);
   };
 

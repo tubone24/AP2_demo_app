@@ -33,18 +33,24 @@ class A2AProof(BaseModel):
     W3C Verifiable Credentials仕様に準拠したproof構造
     A2A仕様準拠：header.proof として使用
 
+    専門家の指摘対応：
+    - kid（鍵ID）を追加してDIDベースの鍵解決を可能に
+    - algorithmの検証を強化（ES256のみ許可など）
+
     Example:
     {
       "algorithm": "ecdsa",
       "signatureValue": "MEUCIQDx...",
       "publicKey": "LS0tLS1CRU...",
+      "kid": "did:ap2:agent:shopping_agent#key-1",
       "created": "2025-10-16T12:34:56Z",
       "proofPurpose": "authentication"
     }
     """
-    algorithm: Literal["ed25519", "ecdsa"] = Field(default="ecdsa", description="署名アルゴリズム")
+    algorithm: Literal["ed25519", "ecdsa"] = Field(default="ecdsa", description="署名アルゴリズム（ES256/EdDSA）")
     signatureValue: str = Field(..., description="BASE64エンコードされた署名値")
     publicKey: str = Field(..., description="BASE64エンコードされた公開鍵")
+    kid: Optional[str] = Field(None, description="鍵ID（DIDフラグメント）例: did:ap2:agent:shopping_agent#key-1")
     created: str = Field(..., description="署名作成日時（ISO 8601）")
     proofPurpose: Literal["authentication", "assertionMethod", "agreement"] = Field(
         default="authentication",
@@ -193,21 +199,119 @@ class UserConsent(BaseModel):
         }
 
 
+# ========================================
+# DID Document Models (W3C DID仕様準拠)
+# ========================================
+
+class VerificationMethod(BaseModel):
+    """
+    DIDドキュメントの検証メソッド
+
+    W3C DID仕様準拠：公開鍵とその用途を定義
+    専門家の指摘対応：DIDベースの公開鍵解決を実現
+
+    Example:
+    {
+      "id": "did:ap2:agent:shopping_agent#key-1",
+      "type": "EcdsaSecp256k1VerificationKey2019",
+      "controller": "did:ap2:agent:shopping_agent",
+      "publicKeyPem": "-----BEGIN PUBLIC KEY-----..."
+    }
+    """
+    id: str = Field(..., description="検証メソッドID（DIDフラグメント形式）")
+    type: str = Field(..., description="公開鍵タイプ（例: EcdsaSecp256k1VerificationKey2019）")
+    controller: str = Field(..., description="コントローラーDID")
+    publicKeyPem: str = Field(..., description="PEM形式の公開鍵")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "id": "did:ap2:agent:shopping_agent#key-1",
+                "type": "EcdsaSecp256k1VerificationKey2019",
+                "controller": "did:ap2:agent:shopping_agent",
+                "publicKeyPem": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE...\n-----END PUBLIC KEY-----"
+            }
+        }
+
+
+class DIDDocument(BaseModel):
+    """
+    DIDドキュメント
+
+    W3C DID仕様準拠：DIDの解決結果として返されるドキュメント
+    専門家の指摘対応：sender_didから公開鍵を解決するための基盤
+
+    Example:
+    {
+      "id": "did:ap2:agent:shopping_agent",
+      "verificationMethod": [
+        {
+          "id": "did:ap2:agent:shopping_agent#key-1",
+          "type": "EcdsaSecp256k1VerificationKey2019",
+          "controller": "did:ap2:agent:shopping_agent",
+          "publicKeyPem": "-----BEGIN PUBLIC KEY-----..."
+        }
+      ],
+      "authentication": ["#key-1"]
+    }
+    """
+    id: str = Field(..., description="DID（例: did:ap2:agent:shopping_agent）")
+    verificationMethod: List[VerificationMethod] = Field(
+        default_factory=list,
+        description="検証メソッドのリスト（公開鍵情報）"
+    )
+    authentication: List[str] = Field(
+        default_factory=list,
+        description="認証に使用できる検証メソッドのIDリスト"
+    )
+    assertionMethod: Optional[List[str]] = Field(
+        None,
+        description="アサーションに使用できる検証メソッドのIDリスト"
+    )
+    keyAgreement: Optional[List[str]] = Field(
+        None,
+        description="鍵共有に使用できる検証メソッドのIDリスト"
+    )
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "id": "did:ap2:agent:shopping_agent",
+                "verificationMethod": [
+                    {
+                        "id": "did:ap2:agent:shopping_agent#key-1",
+                        "type": "EcdsaSecp256k1VerificationKey2019",
+                        "controller": "did:ap2:agent:shopping_agent",
+                        "publicKeyPem": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----"
+                    }
+                ],
+                "authentication": ["#key-1"]
+            }
+        }
+
+
 class A2AMessageHeader(BaseModel):
     """
     A2A Message Header
 
     A2A仕様準拠（2025年版）：
+
+    専門家の指摘対応：
+    - nonce: リプレイ攻撃対策として必須（一度きりの使用を保証）
+    - timestamp: タイムスタンプ検証によるリプレイ攻撃対策
+
     {
       "message_id": "uuid-v4",
       "sender": "did:ap2:agent:shopping_agent",
       "recipient": "did:ap2:agent:merchant_agent",
       "timestamp": "2025-10-15T12:34:56Z",
+      "nonce": "random_hex_64_chars",
       "schema_version": "0.2",
       "proof": {
         "algorithm": "ecdsa",
         "signatureValue": "...",
         "publicKey": "...",
+        "kid": "did:ap2:agent:shopping_agent#key-1",
         "created": "2025-10-15T12:34:56Z",
         "proofPurpose": "authentication"
       }
@@ -217,6 +321,7 @@ class A2AMessageHeader(BaseModel):
     sender: str = Field(..., description="送信者エージェントDID (e.g., did:ap2:agent:shopping_agent)")
     recipient: str = Field(..., description="受信者エージェントDID (e.g., did:ap2:agent:merchant_agent)")
     timestamp: str = Field(..., description="ISO 8601タイムスタンプ (e.g., 2025-10-15T12:34:56Z)")
+    nonce: str = Field(..., description="リプレイ攻撃対策用のワンタイムノンス（hex形式、32バイト以上推奨）")
     schema_version: str = Field(default="0.2", description="スキーマバージョン")
 
     # A2A仕様準拠：proof構造を使用（推奨）
