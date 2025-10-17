@@ -230,6 +230,10 @@ export function useSSEChat() {
     setWebauthnRequest(null);
   }, []);
 
+  const addMessage = useCallback((message: ChatMessage) => {
+    setMessages((prev) => [...prev, message]);
+  }, []);
+
   const stopStreaming = useCallback(() => {
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
@@ -251,6 +255,7 @@ export function useSSEChat() {
     webauthnRequest,
     sessionId: sessionIdRef.current,
     sendMessage,
+    addMessage,
     clearSignatureRequest,
     clearWebauthnRequest,
     stopStreaming,

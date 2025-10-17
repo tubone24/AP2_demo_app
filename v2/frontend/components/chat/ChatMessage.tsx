@@ -16,16 +16,19 @@ export function ChatMessage({ message, onAddToCart }: ChatMessageProps) {
   const isUser = message.role === "user";
   const hasProducts = message.metadata?.products && message.metadata.products.length > 0;
 
-  // 領収書URLを検出
+  // 決済結果のメタデータから領収書URLを取得（優先）
+  const paymentResult = message.metadata?.payment_result;
+  let receiptUrl: string | null = paymentResult?.receipt_url || null;
+  let transactionId: string | null = paymentResult?.transaction_id || null;
+
+  // メタデータにない場合は、従来の正規表現で検出（後方互換性）
   const receiptUrlPattern = /http:\/\/payment_processor:8004\/receipts\/([a-zA-Z0-9_]+)\.pdf/;
   const receiptMatch = message.content.match(receiptUrlPattern);
 
   // URLを抽出してテキストから除去
   let displayContent = message.content;
-  let receiptUrl: string | null = null;
-  let transactionId: string | null = null;
 
-  if (receiptMatch) {
+  if (!receiptUrl && receiptMatch) {
     receiptUrl = receiptMatch[0];
     transactionId = receiptMatch[1];
     // URLをテキストから削除（改行も削除）
@@ -33,7 +36,7 @@ export function ChatMessage({ message, onAddToCart }: ChatMessageProps) {
   }
 
   const handleDownloadReceipt = () => {
-    if (!receiptUrl || !transactionId) return;
+    if (!receiptUrl) return;
 
     // フロントエンドからアクセス可能なURLに変換
     // Docker環境の内部URLをlocalhostに変換
@@ -74,7 +77,7 @@ export function ChatMessage({ message, onAddToCart }: ChatMessageProps) {
         </div>
 
         {/* 領収書ダウンロードボタン */}
-        {receiptUrl && transactionId && (
+        {receiptUrl && (
           <div className="mt-2">
             <Button
               onClick={handleDownloadReceipt}

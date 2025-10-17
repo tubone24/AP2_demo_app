@@ -27,6 +27,7 @@ export default function ChatPage() {
     webauthnRequest,
     sessionId,
     sendMessage,
+    addMessage,
     clearSignatureRequest,
     clearWebauthnRequest,
     stopStreaming,
@@ -156,8 +157,23 @@ export default function ChatPage() {
       clearWebauthnRequest();
 
       if (result.status === "success") {
-        // 決済成功 - 成功メッセージを表示
-        sendMessage(`決済が完了しました！トランザクションID: ${result.transaction_id}`);
+        // 決済成功 - 領収書URLを含めたメッセージを追加
+        const successMessage = {
+          id: `agent-payment-success-${Date.now()}`,
+          role: "agent" as const,
+          content: `✅ 決済が完了しました！\n\nトランザクションID: ${result.transaction_id}\n商品: ${result.product_name}\n金額: ¥${result.amount?.toLocaleString() || "N/A"}`,
+          timestamp: new Date(),
+          metadata: {
+            payment_result: {
+              status: "success" as const,
+              transaction_id: result.transaction_id,
+              receipt_url: result.receipt_url,
+              product_name: result.product_name,
+              amount: result.amount,
+            },
+          },
+        };
+        addMessage(successMessage);
       } else {
         // 決済失敗
         sendMessage(`決済に失敗しました: ${result.error}`);
