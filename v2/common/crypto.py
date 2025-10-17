@@ -373,6 +373,24 @@ class KeyManager:
         )
         return pem_bytes.decode('utf-8')
 
+    def get_public_key_pem(self, key_id: str) -> str:
+        """
+        公開鍵をPEM文字列として取得
+
+        key_idから公開鍵を読み込み、PEM文字列に変換して返す便利メソッド
+
+        Args:
+            key_id: 鍵の識別子
+
+        Returns:
+            str: PEM形式の公開鍵文字列
+
+        Raises:
+            CryptoError: 公開鍵ファイルが見つからない場合
+        """
+        public_key = self.load_public_key(key_id)
+        return self.public_key_to_pem(public_key)
+
     def public_key_to_base64(self, public_key: ec.EllipticCurvePublicKey) -> str:
         """公開鍵をBase64文字列に変換"""
         pem = public_key.public_bytes(
