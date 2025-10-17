@@ -1,0 +1,146 @@
+version: "3.8"
+
+services:
+  # Shopping Agent - ユーザー向けエージェント
+  shopping_agent:
+    build:
+      context: ..
+      dockerfile: v2/services/shopping_agent/Dockerfile
+    container_name: ap2_shopping_agent
+    ports:
+      - "8000:8000"
+    volumes:
+      - ../keys:/app/keys
+      - ./data:/app/v2/data
+    environment:
+      - PYTHONUNBUFFERED=1
+      - AGENT_ID=did:ap2:agent:shopping_agent
+      - MERCHANT_AGENT_URL=http://merchant_agent:8001
+      - MERCHANT_URL=http://merchant:8002
+      - CREDENTIAL_PROVIDER_URL=http://credential_provider:8003
+      - PAYMENT_PROCESSOR_URL=http://payment_processor:8004
+      - AP2_KEYS_DIRECTORY=/app/keys
+    networks:
+      - ap2_network
+    restart: unless-stopped
+
+  # Merchant Agent - 商品検索・CartMandate作成
+  merchant_agent:
+    build:
+      context: ..
+      dockerfile: v2/services/merchant_agent/Dockerfile
+    container_name: ap2_merchant_agent
+    ports:
+      - "8001:8001"
+    volumes:
+      - ../keys:/app/keys
+      - ./data:/app/v2/data
+    environment:
+      - PYTHONUNBUFFERED=1
+      - AGENT_ID=did:ap2:agent:merchant_agent
+      - AP2_KEYS_DIRECTORY=/app/keys
+    networks:
+      - ap2_network
+    restart: unless-stopped
+
+  # Merchant - CartMandate署名
+  merchant:
+    build:
+      context: ..
+      dockerfile: v2/services/merchant/Dockerfile
+    container_name: ap2_merchant
+    ports:
+      - "8002:8002"
+    volumes:
+      - ../keys:/app/keys
+      - ./data:/app/v2/data
+    environment:
+      - PYTHONUNBUFFERED=1
+      - AGENT_ID=did:ap2:agent:merchant
+      - AP2_KEYS_DIRECTORY=/app/keys
+    networks:
+      - ap2_network
+    restart: unless-stopped
+
+  # Credential Provider - WebAuthn検証・トークン発行
+  credential_provider:
+    build:
+      context: ..
+      dockerfile: v2/services/credential_provider/Dockerfile
+    container_name: ap2_credential_provider
+    ports:
+      - "8003:8003"
+    volumes:
+      - ../keys:/app/keys
+      - ./data:/app/v2/data
+    environment:
+      - PYTHONUNBUFFERED=1
+      - AGENT_ID=did:ap2:agent:credential_provider
+      - AP2_KEYS_DIRECTORY=/app/keys
+    networks:
+      - ap2_network
+    restart: unless-stopped
+
+  # Payment Processor - 決済処理
+  payment_processor:
+    build:
+      context: ..
+      dockerfile: v2/services/payment_processor/Dockerfile
+    container_name: ap2_payment_processor
+    ports:
+      - "8004:8004"
+    volumes:
+      - ../keys:/app/keys
+      - ./data:/app/v2/data
+    environment:
+      - PYTHONUNBUFFERED=1
+      - AGENT_ID=did:ap2:agent:payment_processor
+      - AP2_KEYS_DIRECTORY=/app/keys
+    networks:
+      - ap2_network
+    restart: unless-stopped
+
+  # Frontend - Next.js
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: ap2_frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      # ブラウザから直接バックエンドにアクセス（プロキシなし）
+      - NEXT_PUBLIC_SHOPPING_AGENT_URL=http://localhost:8000
+      - NEXT_PUBLIC_CREDENTIAL_PROVIDER_URL=http://localhost:8003
+      - NEXT_PUBLIC_RP_ID=localhost
+      - NEXT_PUBLIC_RP_NAME=AP2 Demo App v2
+    networks:
+      - ap2_network
+    depends_on:
+      - shopping_agent
+      - merchant_agent
+      - merchant
+      - credential_provider
+      - payment_processor
+    restart: unless-stopped
+
+#    # Ollama - ローカルLLMサーバー
+#  ollama:
+#    build: ./ollama
+#    container_name: ollama
+#    ports:
+#      # ホスト側のアドレスは11435に変更(コンテナ側は11434のまま)
+#        - "11435:11434"
+#    volumes:
+#      - ollama_data:/root/.ollama
+#    restart: unless-stopped
+
+networks:
+  ap2_network:
+    driver: bridge
+
+volumes:
+  keys:
+  data:
+  ollama_data:
