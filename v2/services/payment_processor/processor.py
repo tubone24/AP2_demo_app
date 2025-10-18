@@ -56,6 +56,10 @@ class PaymentProcessorService(BaseAgent):
         # Credential Providerエンドポイント（Docker Compose環境想定）
         self.credential_provider_url = "http://credential_provider:8003"
 
+        # 領収書送信を有効化するかどうか（環境変数で制御可能）
+        import os
+        self.enable_receipt_notification = os.getenv("ENABLE_RECEIPT_NOTIFICATION", "true").lower() == "true"
+
         # 起動イベントハンドラー登録
         @self.app.on_event("startup")
         async def startup_event():
@@ -304,6 +308,15 @@ class PaymentProcessorService(BaseAgent):
         # レスポンス
         if result["status"] == "captured":
             receipt_url = await self._generate_receipt(transaction_id, payment_mandate, cart_mandate)
+
+            # AP2 Step 29: Credential Providerに領収書を送信
+            if self.enable_receipt_notification:
+                await self._send_receipt_to_credential_provider(
+                    transaction_id=transaction_id,
+                    receipt_url=receipt_url,
+                    payer_id=payment_mandate.get("payer_id"),
+                    payment_mandate=payment_mandate
+                )
 
             return {
                 "type": "ap2.responses.PaymentResult",
@@ -1025,6 +1038,61 @@ class PaymentProcessorService(BaseAgent):
         except Exception as e:
             logger.error(f"[_verify_credential_with_cp] Error: {e}", exc_info=True)
             raise
+
+    async def _send_receipt_to_credential_provider(
+        self,
+        transaction_id: str,
+        receipt_url: str,
+        payer_id: str,
+        payment_mandate: Dict[str, Any]
+    ):
+        """
+        Credential Providerに領収書を送信
+
+        AP2 Step 29対応: Payment ProcessorがCredential Providerに領収書通知を送信
+
+        Args:
+            transaction_id: トランザクションID
+            receipt_url: 領収書URL
+            payer_id: 支払者ID
+            payment_mandate: PaymentMandate
+        """
+        try:
+            logger.info(
+                f"[PaymentProcessor] Sending receipt notification to Credential Provider: "
+                f"transaction_id={transaction_id}, payer_id={payer_id}"
+            )
+
+            # Credential ProviderにPOST /receiptsで領収書通知
+            response = await self.http_client.post(
+                f"{self.credential_provider_url}/receipts",
+                json={
+                    "transaction_id": transaction_id,
+                    "receipt_url": receipt_url,
+                    "payer_id": payer_id,
+                    "amount": payment_mandate.get("amount"),
+                    "timestamp": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
+                },
+                timeout=10.0
+            )
+            response.raise_for_status()
+
+            logger.info(
+                f"[PaymentProcessor] Receipt notification sent successfully: "
+                f"transaction_id={transaction_id}, status={response.status_code}"
+            )
+
+        except httpx.HTTPError as e:
+            # 領収書送信失敗は致命的エラーではないので、ログのみ出力
+            logger.warning(
+                f"[PaymentProcessor] Failed to send receipt to Credential Provider: {e}. "
+                f"Continuing with payment process."
+            )
+        except Exception as e:
+            logger.warning(
+                f"[PaymentProcessor] Unexpected error while sending receipt: {e}. "
+                f"Continuing with payment process."
+            )
 
     async def _generate_receipt(
         self,

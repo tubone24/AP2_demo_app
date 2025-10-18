@@ -493,6 +493,94 @@ class ShoppingAgent(BaseAgent):
                     raise HTTPException(status_code=404, detail="Transaction not found")
                 return transaction.to_dict()
 
+        @self.app.post("/payment/step-up-callback")
+        async def handle_step_up_callback(request: Dict[str, Any]):
+            """
+            POST /payment/step-up-callback - Step-up完了コールバック
+            
+            AP2 Step 13対応: Step-up認証完了後、フロントエンドから呼び出される
+            
+            リクエスト:
+            {
+              "session_id": "sess_abc123",
+              "step_up_session_id": "stepup_xyz789",
+              "status": "success" | "cancelled" | "failed"
+            }
+            
+            レスポンス:
+            {
+              "status": "success" | "failed",
+              "message": "...",
+              "can_continue": true | false
+            }
+            """
+            try:
+                session_id = request.get("session_id")
+                step_up_session_id = request.get("step_up_session_id")
+                status = request.get("status", "failed")
+                
+                if not session_id or not step_up_session_id:
+                    raise HTTPException(status_code=400, detail="session_id and step_up_session_id are required")
+                
+                # セッション取得
+                if session_id not in self.sessions:
+                    raise HTTPException(status_code=404, detail="Session not found")
+                
+                session = self.sessions[session_id]
+                
+                # Step-upセッションIDを検証
+                if session.get("step_up_session_id") != step_up_session_id:
+                    raise HTTPException(status_code=400, detail="Step-up session ID mismatch")
+                
+                if status == "success":
+                    # Step-up成功 - トークン化は完了済みなので、次のステップに進む
+                    session["step"] = "cart_selected_need_shipping"
+                    
+                    logger.info(
+                        f"[handle_step_up_callback] Step-up completed successfully: "
+                        f"session_id={session_id}, step_up_session_id={step_up_session_id}"
+                    )
+                    
+                    return {
+                        "status": "success",
+                        "message": "Step-up authentication completed successfully",
+                        "can_continue": True
+                    }
+                elif status == "cancelled":
+                    # Step-upキャンセル - 支払い方法選択に戻る
+                    session["step"] = "select_payment_method"
+                    
+                    logger.info(
+                        f"[handle_step_up_callback] Step-up cancelled: "
+                        f"session_id={session_id}, step_up_session_id={step_up_session_id}"
+                    )
+                    
+                    return {
+                        "status": "cancelled",
+                        "message": "Step-up authentication was cancelled. Please select another payment method.",
+                        "can_continue": False
+                    }
+                else:
+                    # Step-up失敗 - 支払い方法選択に戻る
+                    session["step"] = "select_payment_method"
+                    
+                    logger.warning(
+                        f"[handle_step_up_callback] Step-up failed: "
+                        f"session_id={session_id}, step_up_session_id={step_up_session_id}, status={status}"
+                    )
+                    
+                    return {
+                        "status": "failed",
+                        "message": "Step-up authentication failed. Please select another payment method.",
+                        "can_continue": False
+                    }
+                
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"[handle_step_up_callback] Error: {e}", exc_info=True)
+                raise HTTPException(status_code=500, detail=str(e))
+
         @self.app.post("/payment/submit-attestation")
         async def submit_payment_attestation(request: Dict[str, Any]):
             """
@@ -1422,6 +1510,70 @@ class ShoppingAgent(BaseAgent):
 
             session["selected_payment_method"] = selected_payment_method
 
+            # AP2 Step 13: Step-upが必要な支払い方法の場合
+            if selected_payment_method.get("requires_step_up", False):
+                logger.info(
+                    f"[ShoppingAgent] Payment method requires step-up: "
+                    f"{selected_payment_method['id']}, brand={selected_payment_method['brand']}"
+                )
+                
+                try:
+                    # Credential ProviderにStep-upセッション作成を依頼
+                    selected_cp = session.get("selected_credential_provider", self.credential_providers[0])
+                    cart_mandate = session.get("cart_mandate", {})
+                    total_amount = cart_mandate.get("total", {})
+                    
+                    response = await self.http_client.post(
+                        f"{selected_cp['url']}/payment-methods/initiate-step-up",
+                        json={
+                            "user_id": session.get("user_id", "user_demo_001"),
+                            "payment_method_id": selected_payment_method["id"],
+                            "transaction_context": {
+                                "amount": total_amount,
+                                "merchant_id": cart_mandate.get("merchant_id")
+                            },
+                            "return_url": "http://localhost:3000/chat"
+                        },
+                        timeout=10.0
+                    )
+                    response.raise_for_status()
+                    step_up_result = response.json()
+                    
+                    step_up_url = step_up_result.get("step_up_url")
+                    session_id = step_up_result.get("session_id")
+                    
+                    # Step-up情報をセッションに保存
+                    session["step_up_session_id"] = session_id
+                    session["step"] = "step_up_redirect"
+                    
+                    logger.info(
+                        f"[ShoppingAgent] Step-up session created: "
+                        f"session_id={session_id}, step_up_url={step_up_url}"
+                    )
+                    
+                    # フロントエンドにStep-upリダイレクト指示を送信
+                    yield StreamEvent(
+                        type="agent_text",
+                        content=f"{selected_payment_method['brand'].upper()} ****{selected_payment_method['last4']}を選択しました。\n\n追加認証が必要です。認証画面にリダイレクトします..."
+                    )
+                    await asyncio.sleep(0.5)
+                    
+                    yield StreamEvent(
+                        type="step_up_redirect",
+                        step_up_url=step_up_url,
+                        session_id=session_id,
+                        reason=selected_payment_method.get("step_up_reason", "Additional authentication required")
+                    )
+                    return
+                    
+                except Exception as e:
+                    logger.error(f"[ShoppingAgent] Failed to initiate step-up: {e}", exc_info=True)
+                    yield StreamEvent(
+                        type="agent_text",
+                        content=f"申し訳ありません。追加認証の開始に失敗しました: {str(e)}\n\n別の支払い方法を選択してください。"
+                    )
+                    return
+
             yield StreamEvent(
                 type="agent_text",
                 content=f"{selected_payment_method['brand'].upper()} ****{selected_payment_method['last4']}を選択しました。"
@@ -2072,13 +2224,15 @@ class ShoppingAgent(BaseAgent):
 
     async def _process_payment_via_payment_processor(self, payment_mandate: Dict[str, Any], cart_mandate: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Payment ProcessorにPaymentMandateを送信して決済処理を依頼
+        Merchant Agent経由でPayment ProcessorにPaymentMandateを送信して決済処理を依頼
 
-        AP2仕様準拠：
-        1. Shopping AgentがPaymentMandateをPayment Processorに送信（A2A通信）
-        2. VDC交換の原則に従い、CartMandateも含めて送信（領収書生成に必要）
-        3. Payment Processorが決済処理を実行
-        4. Payment Processorが決済結果を返却
+        AP2仕様準拠（Step 24, 30-31）：
+        1. Shopping AgentがPaymentMandateをMerchant Agentに送信（A2A通信）
+        2. Merchant AgentがPayment Processorに転送（A2A通信）
+        3. VDC交換の原則に従い、CartMandateも含めて送信（領収書生成に必要）
+        4. Payment Processorが決済処理を実行
+        5. Payment ProcessorがMerchant Agentに決済結果を返却
+        6. Merchant AgentがShopping Agentに決済結果を返却
 
         Args:
             payment_mandate: PaymentMandate（最小限のペイロード）
@@ -2095,20 +2249,21 @@ class ShoppingAgent(BaseAgent):
             }
 
             # A2Aメッセージを作成（署名付き）
+            # AP2 Step 24: Merchant Agent経由での決済処理依頼
             message = self.a2a_handler.create_response_message(
-                recipient="did:ap2:agent:payment_processor",
-                data_type="ap2.mandates.PaymentMandate",
+                recipient="did:ap2:agent:merchant_agent",  # Merchant Agentに送信
+                data_type="ap2.mandates.PaymentMandate",  # AP2仕様準拠: PaymentMandateを使用
                 data_id=payment_mandate["id"],
                 payload=payload,
                 sign=True
             )
 
-            # Payment ProcessorにA2Aメッセージを送信
+            # Merchant AgentにA2Aメッセージを送信
             import json as json_lib
             logger.info(
                 f"\n{'='*80}\n"
-                f"[ShoppingAgent → PaymentProcessor] A2Aメッセージ送信\n"
-                f"  URL: {self.payment_processor_url}/a2a/message\n"
+                f"[ShoppingAgent → MerchantAgent] A2Aメッセージ送信（PaymentRequest）\n"
+                f"  URL: {self.merchant_agent_url}/a2a/message\n"
                 f"  メッセージID: {message.header.message_id}\n"
                 f"  タイプ: {message.dataPart.type}\n"
                 f"  ペイロード: {json_lib.dumps(payment_mandate, ensure_ascii=False, indent=2)}\n"
@@ -2116,7 +2271,7 @@ class ShoppingAgent(BaseAgent):
             )
 
             response = await self.http_client.post(
-                f"{self.payment_processor_url}/a2a/message",
+                f"{self.merchant_agent_url}/a2a/message",
                 json=message.model_dump(by_alias=True),
                 timeout=30.0
             )
@@ -2125,7 +2280,7 @@ class ShoppingAgent(BaseAgent):
 
             logger.info(
                 f"\n{'='*80}\n"
-                f"[ShoppingAgent ← PaymentProcessor] A2Aレスポンス受信\n"
+                f"[ShoppingAgent ← MerchantAgent] A2Aレスポンス受信\n"
                 f"  Status: {response.status_code}\n"
                 f"  Response Body: {json_lib.dumps(result, ensure_ascii=False, indent=2)}\n"
                 f"{'='*80}"
@@ -2143,15 +2298,15 @@ class ShoppingAgent(BaseAgent):
                     return payload
                 elif response_type == "ap2.errors.Error":
                     error_payload = data_part["payload"]
-                    raise ValueError(f"Payment Processor error: {error_payload.get('error_message')}")
+                    raise ValueError(f"Merchant Agent/Payment Processor error: {error_payload.get('error_message')}")
                 else:
                     raise ValueError(f"Unexpected response type: {response_type}")
             else:
-                raise ValueError("Invalid response format from Payment Processor")
+                raise ValueError("Invalid response format from Merchant Agent")
 
         except httpx.HTTPError as e:
             logger.error(f"[_process_payment_via_payment_processor] HTTP error: {e}")
-            raise ValueError(f"Failed to process payment: {e}")
+            raise ValueError(f"Failed to process payment via Merchant Agent: {e}")
         except Exception as e:
             logger.error(f"[_process_payment_via_payment_processor] Error: {e}", exc_info=True)
             raise

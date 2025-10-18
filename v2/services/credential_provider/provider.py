@@ -61,6 +61,7 @@ class CredentialProviderService(BaseAgent):
         self.attestation_manager = DeviceAttestationManager(self.key_manager)
 
         # 支払い方法データ（インメモリ）
+        # AP2 Step 13対応: requires_step_up と step_up_url フィールドを追加
         self.payment_methods: Dict[str, List[Dict[str, Any]]] = {
             "user_demo_001": [
                 {
@@ -71,7 +72,20 @@ class CredentialProviderService(BaseAgent):
                     "brand": "visa",
                     "expiry_month": 12,
                     "expiry_year": 2025,
-                    "holder_name": "山田太郎"
+                    "holder_name": "山田太郎",
+                    "requires_step_up": False  # 通常のカードはStep-up不要
+                },
+                {
+                    "id": "pm_003",
+                    "type": "card",
+                    "token": "tok_amex_3782",
+                    "last4": "3782",
+                    "brand": "amex",
+                    "expiry_month": 9,
+                    "expiry_year": 2026,
+                    "holder_name": "山田太郎",
+                    "requires_step_up": True,  # American ExpressはStep-upが必要（デモ用）
+                    "step_up_reason": "3D Secure authentication required"
                 }
             ],
             "user_demo_002": [
@@ -83,10 +97,19 @@ class CredentialProviderService(BaseAgent):
                     "brand": "mastercard",
                     "expiry_month": 6,
                     "expiry_year": 2026,
-                    "holder_name": "佐藤花子"
+                    "holder_name": "佐藤花子",
+                    "requires_step_up": False
                 }
             ]
         }
+        
+        # Step-upセッション管理（インメモリ）
+        # 本番環境ではRedis等のKVストアを使用
+        self.step_up_sessions: Dict[str, Dict[str, Any]] = {}
+        
+        # 領収書ストア（インメモリ）
+        # 本番環境ではデータベースを使用
+        self.receipts: Dict[str, List[Dict[str, Any]]] = {}  # user_id -> [receipts]
 
         # トークンストア（AP2仕様準拠：トークン→支払い方法のマッピング）
         # 本番環境ではRedis等のKVストアやデータベースを使用
@@ -264,15 +287,24 @@ class CredentialProviderService(BaseAgent):
                 if credential_id.startswith("mock_credential_id_"):
                     logger.info(f"[verify_attestation] Mock attestation detected, skipping verification")
 
-                    # トークン発行
+                    # トークン発行（Credential Provider内部の認証トークン）
                     token = self._generate_token(payment_mandate, attestation)
 
-                    # AP2 Step 23: 決済ネットワークへのトークン化呼び出し
-                    agent_token = await self._request_agent_token_from_network(
-                        payment_mandate=payment_mandate,
-                        attestation=attestation,
-                        payment_method_token=token
-                    )
+                    # AP2準拠：PaymentMandateに支払い方法トークンが含まれている場合のみPayment Networkに送信
+                    # IntentMandate署名時（Step 3-4）はpayment_method未設定なのでスキップ
+                    # PaymentMandate署名時（Step 20-22）はpayment_method設定済みなので送信
+                    agent_token = None
+                    payment_method_token = payment_mandate.get("payment_method", {}).get("token")
+                    if payment_method_token:
+                        logger.info(f"[verify_attestation] PaymentMandate contains payment_method.token, calling Payment Network (Step 23)")
+                        # AP2 Step 23: 決済ネットワークへのトークン化呼び出し
+                        agent_token = await self._request_agent_token_from_network(
+                            payment_mandate=payment_mandate,
+                            attestation=attestation,
+                            payment_method_token=payment_method_token  # PaymentMandateから取得したトークンを使用
+                        )
+                    else:
+                        logger.info(f"[verify_attestation] No payment_method.token in mandate (likely IntentMandate signature), skipping Payment Network call")
 
                     # データベースに保存
                     await self._save_attestation(
@@ -328,16 +360,25 @@ class CredentialProviderService(BaseAgent):
 
                         logger.info(f"[verify_attestation] Signature counter updated: {passkey_credential.counter} → {new_counter}")
 
-                        # トークン発行
+                        # トークン発行（Credential Provider内部の認証トークン）
                         token = self._generate_token(payment_mandate, attestation)
 
-                        # AP2 Step 23: 決済ネットワークへのトークン化呼び出し
-                        # PaymentMandateと支払い方法トークンから、Agent Tokenを取得
-                        agent_token = await self._request_agent_token_from_network(
-                            payment_mandate=payment_mandate,
-                            attestation=attestation,
-                            payment_method_token=token
-                        )
+                        # AP2準拠：PaymentMandateに支払い方法トークンが含まれている場合のみPayment Networkに送信
+                        # IntentMandate署名時（Step 3-4）はpayment_method未設定なのでスキップ
+                        # PaymentMandate署名時（Step 20-22）はpayment_method設定済みなので送信
+                        agent_token = None
+                        payment_method_token = payment_mandate.get("payment_method", {}).get("token")
+                        if payment_method_token:
+                            logger.info(f"[verify_attestation] PaymentMandate contains payment_method.token, calling Payment Network (Step 23)")
+                            # AP2 Step 23: 決済ネットワークへのトークン化呼び出し
+                            # PaymentMandateと支払い方法トークンから、Agent Tokenを取得
+                            agent_token = await self._request_agent_token_from_network(
+                                payment_mandate=payment_mandate,
+                                attestation=attestation,
+                                payment_method_token=payment_method_token  # PaymentMandateから取得したトークンを使用
+                            )
+                        else:
+                            logger.info(f"[verify_attestation] No payment_method.token in mandate (likely IntentMandate signature), skipping Payment Network call")
 
                         # データベースに保存
                         await self._save_attestation(
@@ -497,6 +538,475 @@ class CredentialProviderService(BaseAgent):
             except Exception as e:
                 logger.error(f"[tokenize_payment_method] Error: {e}", exc_info=True)
                 raise HTTPException(status_code=400, detail=str(e))
+
+        @self.app.post("/payment-methods/initiate-step-up")
+        async def initiate_step_up(request: Dict[str, Any]):
+            """
+            POST /payment-methods/initiate-step-up - Step-upフロー開始
+            
+            AP2 Step 13対応: 決済ネットワークがStep-upを要求する場合の処理
+            
+            リクエスト:
+            {
+              "user_id": "user_demo_001",
+              "payment_method_id": "pm_003",
+              "transaction_context": {
+                "amount": {"value": "10000.00", "currency": "JPY"},
+                "merchant_id": "did:ap2:merchant:demo_merchant"
+              },
+              "return_url": "http://localhost:3000/payment/step-up-callback"
+            }
+            
+            レスポンス:
+            {
+              "session_id": "stepup_abc123",
+              "step_up_url": "http://localhost:8003/step-up/stepup_abc123",
+              "expires_at": "2025-10-18T12:49:56Z"
+            }
+            """
+            try:
+                user_id = request["user_id"]
+                payment_method_id = request["payment_method_id"]
+                transaction_context = request.get("transaction_context", {})
+                return_url = request.get("return_url", "http://localhost:3000/chat")
+                
+                # 支払い方法を取得
+                user_payment_methods = self.payment_methods.get(user_id, [])
+                payment_method = next(
+                    (pm for pm in user_payment_methods if pm["id"] == payment_method_id),
+                    None
+                )
+                
+                if not payment_method:
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"Payment method not found: {payment_method_id}"
+                    )
+                
+                # Step-upが必要かチェック
+                if not payment_method.get("requires_step_up", False):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Payment method does not require step-up: {payment_method_id}"
+                    )
+                
+                # Step-upセッション作成
+                session_id = f"stepup_{uuid.uuid4().hex[:16]}"
+                now = datetime.now(timezone.utc)
+                expires_at = now + timedelta(minutes=10)  # 10分間有効
+                
+                self.step_up_sessions[session_id] = {
+                    "session_id": session_id,
+                    "user_id": user_id,
+                    "payment_method_id": payment_method_id,
+                    "payment_method": payment_method,
+                    "transaction_context": transaction_context,
+                    "return_url": return_url,
+                    "status": "pending",  # pending, completed, failed
+                    "created_at": now.isoformat(),
+                    "expires_at": expires_at.isoformat()
+                }
+                
+                # Step-up URL生成
+                step_up_url = f"http://localhost:8003/step-up/{session_id}"
+                
+                logger.info(
+                    f"[initiate_step_up] Created step-up session: "
+                    f"session_id={session_id}, payment_method_id={payment_method_id}"
+                )
+                
+                return {
+                    "session_id": session_id,
+                    "step_up_url": step_up_url,
+                    "expires_at": expires_at.isoformat().replace('+00:00', 'Z'),
+                    "step_up_reason": payment_method.get("step_up_reason", "Additional authentication required")
+                }
+                
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"[initiate_step_up] Error: {e}", exc_info=True)
+                raise HTTPException(status_code=500, detail=str(e))
+        
+        @self.app.get("/step-up/{session_id}")
+        async def get_step_up_page(session_id: str):
+            """
+            GET /step-up/{session_id} - Step-up認証画面
+            
+            決済ネットワークのStep-up画面をシミュレート
+            実際の環境では3D Secureなどの決済ネットワーク画面にリダイレクト
+            """
+            try:
+                from fastapi.responses import HTMLResponse
+                
+                # Step-upセッション取得
+                session_data = self.step_up_sessions.get(session_id)
+                
+                if not session_data:
+                    return HTMLResponse(
+                        content="""
+                        <html>
+                            <head><title>Step-up Session Not Found</title></head>
+                            <body style="font-family: sans-serif; padding: 40px; text-align: center;">
+                                <h1>Step-up Session Not Found</h1>
+                                <p>The step-up session has expired or is invalid.</p>
+                            </body>
+                        </html>
+                        """,
+                        status_code=404
+                    )
+                
+                # 有効期限チェック
+                expires_at = datetime.fromisoformat(session_data["expires_at"])
+                if datetime.now(timezone.utc) > expires_at:
+                    return HTMLResponse(
+                        content="""
+                        <html>
+                            <head><title>Step-up Session Expired</title></head>
+                            <body style="font-family: sans-serif; padding: 40px; text-align: center;">
+                                <h1>Step-up Session Expired</h1>
+                                <p>This step-up session has expired. Please try again.</p>
+                            </body>
+                        </html>
+                        """,
+                        status_code=400
+                    )
+                
+                payment_method = session_data["payment_method"]
+                transaction_context = session_data.get("transaction_context", {})
+                amount = transaction_context.get("amount", {})
+                
+                # シンプルなStep-up画面HTML（デモ用）
+                html_content = f"""
+                <html>
+                    <head>
+                        <title>3D Secure Authentication</title>
+                        <meta charset="utf-8">
+                        <style>
+                            body {{
+                                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+                                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                                padding: 20px;
+                                margin: 0;
+                            }}
+                            .container {{
+                                max-width: 480px;
+                                margin: 60px auto;
+                                background: white;
+                                border-radius: 12px;
+                                box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+                                padding: 40px;
+                            }}
+                            h1 {{
+                                color: #333;
+                                margin-top: 0;
+                                font-size: 24px;
+                            }}
+                            .info {{
+                                background: #f7f7f7;
+                                padding: 16px;
+                                border-radius: 8px;
+                                margin: 20px 0;
+                            }}
+                            .info-row {{
+                                display: flex;
+                                justify-content: space-between;
+                                margin: 8px 0;
+                            }}
+                            .label {{
+                                color: #666;
+                                font-weight: 500;
+                            }}
+                            .value {{
+                                color: #333;
+                                font-weight: 600;
+                            }}
+                            button {{
+                                width: 100%;
+                                padding: 16px;
+                                background: #667eea;
+                                color: white;
+                                border: none;
+                                border-radius: 8px;
+                                font-size: 16px;
+                                font-weight: 600;
+                                cursor: pointer;
+                                transition: background 0.2s;
+                            }}
+                            button:hover {{
+                                background: #5568d3;
+                            }}
+                            .cancel {{
+                                background: #e0e0e0;
+                                color: #666;
+                                margin-top: 12px;
+                            }}
+                            .cancel:hover {{
+                                background: #d0d0d0;
+                            }}
+                            .message {{
+                                background: #fff3cd;
+                                border: 1px solid #ffc107;
+                                color: #856404;
+                                padding: 12px;
+                                border-radius: 6px;
+                                margin-bottom: 20px;
+                            }}
+                        </style>
+                    </head>
+                    <body>
+                        <div class="container">
+                            <h1>🔐 3D Secure Authentication</h1>
+                            <div class="message">
+                                追加認証が必要です。お支払いを完了するには、カード情報を確認してください。
+                            </div>
+                            <div class="info">
+                                <div class="info-row">
+                                    <span class="label">カードブランド:</span>
+                                    <span class="value">{payment_method.get('brand', 'N/A').upper()}</span>
+                                </div>
+                                <div class="info-row">
+                                    <span class="label">カード番号:</span>
+                                    <span class="value">**** **** **** {payment_method.get('last4', '0000')}</span>
+                                </div>
+                                <div class="info-row">
+                                    <span class="label">金額:</span>
+                                    <span class="value">¥{amount.get('value', '0')}</span>
+                                </div>
+                            </div>
+                            <button onclick="completeStepUp()">認証を完了する</button>
+                            <button class="cancel" onclick="cancelStepUp()">キャンセル</button>
+                        </div>
+                        <script>
+                            async function completeStepUp() {{
+                                try {{
+                                    const response = await fetch('/step-up/{session_id}/complete', {{
+                                        method: 'POST',
+                                        headers: {{ 'Content-Type': 'application/json' }},
+                                        body: JSON.stringify({{ status: 'success' }})
+                                    }});
+                                    const result = await response.json();
+                                    
+                                    if (result.status === 'completed') {{
+                                        alert('認証が完了しました。元のページに戻ります。');
+                                        window.location.href = result.return_url + '?step_up_status=success&session_id={session_id}';
+                                    }} else {{
+                                        alert('認証に失敗しました: ' + result.message);
+                                    }}
+                                }} catch (error) {{
+                                    alert('エラーが発生しました: ' + error.message);
+                                }}
+                            }}
+                            
+                            function cancelStepUp() {{
+                                if (confirm('認証をキャンセルしますか？')) {{
+                                    window.location.href = '{session_data["return_url"]}?step_up_status=cancelled&session_id={session_id}';
+                                }}
+                            }}
+                        </script>
+                    </body>
+                </html>
+                """
+                
+                return HTMLResponse(content=html_content)
+                
+            except Exception as e:
+                logger.error(f"[get_step_up_page] Error: {e}", exc_info=True)
+                return HTMLResponse(
+                    content=f"""
+                    <html>
+                        <head><title>Error</title></head>
+                        <body style="font-family: sans-serif; padding: 40px; text-align: center;">
+                            <h1>Error</h1>
+                            <p>{str(e)}</p>
+                        </body>
+                    </html>
+                    """,
+                    status_code=500
+                )
+        
+        @self.app.post("/step-up/{session_id}/complete")
+        async def complete_step_up(session_id: str, request: Dict[str, Any]):
+            """
+            POST /step-up/{session_id}/complete - Step-up完了
+            
+            リクエスト:
+            {
+              "status": "success" | "failed"
+            }
+            
+            レスポンス:
+            {
+              "status": "completed" | "failed",
+              "session_id": "stepup_abc123",
+              "return_url": "...",
+              "token"?: "..." (成功時のみ)
+            }
+            """
+            try:
+                # Step-upセッション取得
+                session_data = self.step_up_sessions.get(session_id)
+                
+                if not session_data:
+                    raise HTTPException(status_code=404, detail="Step-up session not found")
+                
+                # 有効期限チェック
+                expires_at = datetime.fromisoformat(session_data["expires_at"])
+                if datetime.now(timezone.utc) > expires_at:
+                    raise HTTPException(status_code=400, detail="Step-up session expired")
+                
+                status = request.get("status", "success")
+                
+                if status == "success":
+                    # Step-up成功 - トークン発行
+                    import secrets
+                    random_bytes = secrets.token_urlsafe(32)
+                    token = f"tok_stepup_{uuid.uuid4().hex[:8]}_{random_bytes[:24]}"
+                    
+                    # トークンストアに保存
+                    now = datetime.now(timezone.utc)
+                    token_expires_at = now + timedelta(minutes=15)
+                    
+                    self.token_store[token] = {
+                        "user_id": session_data["user_id"],
+                        "payment_method_id": session_data["payment_method_id"],
+                        "payment_method": session_data["payment_method"],
+                        "issued_at": now.isoformat(),
+                        "expires_at": token_expires_at.isoformat(),
+                        "step_up_completed": True
+                    }
+                    
+                    # セッション更新
+                    session_data["status"] = "completed"
+                    session_data["token"] = token
+                    session_data["completed_at"] = now.isoformat()
+                    
+                    logger.info(
+                        f"[complete_step_up] Step-up completed successfully: "
+                        f"session_id={session_id}, token={token[:20]}..."
+                    )
+                    
+                    return {
+                        "status": "completed",
+                        "session_id": session_id,
+                        "return_url": session_data["return_url"],
+                        "token": token,
+                        "message": "Step-up authentication completed successfully"
+                    }
+                else:
+                    # Step-up失敗
+                    session_data["status"] = "failed"
+                    session_data["failed_at"] = datetime.now(timezone.utc).isoformat()
+                    
+                    logger.warning(f"[complete_step_up] Step-up failed: session_id={session_id}")
+                    
+                    return {
+                        "status": "failed",
+                        "session_id": session_id,
+                        "return_url": session_data["return_url"],
+                        "message": "Step-up authentication failed"
+                    }
+                
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"[complete_step_up] Error: {e}", exc_info=True)
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.post("/receipts")
+        async def receive_receipt(receipt_data: Dict[str, Any]):
+            """
+            POST /receipts - 領収書受信
+            
+            AP2 Step 29対応: Payment Processorから領収書通知を受信
+            
+            リクエスト:
+            {
+              "transaction_id": "txn_abc123",
+              "receipt_url": "http://localhost:8004/receipts/txn_abc123.pdf",
+              "payer_id": "user_demo_001",
+              "amount": {"value": "8068.00", "currency": "JPY"},
+              "timestamp": "2025-10-18T12:34:56Z"
+            }
+            
+            レスポンス:
+            {
+              "status": "received",
+              "message": "Receipt stored successfully"
+            }
+            """
+            try:
+                transaction_id = receipt_data.get("transaction_id")
+                receipt_url = receipt_data.get("receipt_url")
+                payer_id = receipt_data.get("payer_id")
+                
+                if not transaction_id or not receipt_url or not payer_id:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="transaction_id, receipt_url, and payer_id are required"
+                    )
+                
+                # 領収書情報を保存
+                if payer_id not in self.receipts:
+                    self.receipts[payer_id] = []
+                
+                self.receipts[payer_id].append({
+                    "transaction_id": transaction_id,
+                    "receipt_url": receipt_url,
+                    "amount": receipt_data.get("amount"),
+                    "received_at": datetime.now(timezone.utc).isoformat(),
+                    "payment_timestamp": receipt_data.get("timestamp")
+                })
+                
+                logger.info(
+                    f"[CredentialProvider] Receipt received and stored: "
+                    f"transaction_id={transaction_id}, payer_id={payer_id}, "
+                    f"receipt_url={receipt_url}"
+                )
+                
+                return {
+                    "status": "received",
+                    "message": "Receipt stored successfully",
+                    "transaction_id": transaction_id
+                }
+                
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"[receive_receipt] Error: {e}", exc_info=True)
+                raise HTTPException(status_code=500, detail=str(e))
+        
+        @self.app.get("/receipts")
+        async def get_receipts(user_id: str):
+            """
+            GET /receipts?user_id=... - ユーザーの領収書一覧取得
+            
+            レスポンス:
+            {
+              "user_id": "user_demo_001",
+              "receipts": [
+                {
+                  "transaction_id": "txn_abc123",
+                  "receipt_url": "...",
+                  "amount": {...},
+                  "received_at": "...",
+                  "payment_timestamp": "..."
+                }
+              ]
+            }
+            """
+            try:
+                receipts = self.receipts.get(user_id, [])
+                
+                return {
+                    "user_id": user_id,
+                    "receipts": receipts,
+                    "total_count": len(receipts)
+                }
+                
+            except Exception as e:
+                logger.error(f"[get_receipts] Error: {e}", exc_info=True)
+                raise HTTPException(status_code=500, detail=str(e))
 
         @self.app.post("/credentials/verify")
         async def verify_credentials(verify_request: Dict[str, Any]):

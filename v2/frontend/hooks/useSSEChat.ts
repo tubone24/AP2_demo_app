@@ -187,6 +187,57 @@ export function useSSEChat() {
                   });
                   break;
 
+                case "step_up_redirect":
+                  // AP2 Step 13: Step-upリダイレクト
+                  const stepUpEvent = event as any;
+                  const stepUpUrl = stepUpEvent.step_up_url;
+                  const stepUpSessionId = stepUpEvent.session_id;
+
+                  console.log("[Step-up Redirect]", {
+                    stepUpUrl,
+                    stepUpSessionId,
+                    reason: stepUpEvent.reason
+                  });
+
+                  // 新しいウィンドウでStep-up画面を開く
+                  const stepUpWindow = window.open(
+                    stepUpUrl,
+                    "ap2_step_up",
+                    "width=600,height=800,scrollbars=yes,resizable=yes"
+                  );
+
+                  if (!stepUpWindow) {
+                    console.error("Failed to open step-up window. Please allow pop-ups.");
+                    agentMessageContent += "\n\n❌ ポップアップがブロックされました。ブラウザの設定でポップアップを許可してください。";
+                    setCurrentAgentMessage(agentMessageContent);
+                  } else {
+                    // ウィンドウが閉じられるのを監視
+                    const checkWindowClosed = setInterval(() => {
+                      if (stepUpWindow.closed) {
+                        clearInterval(checkWindowClosed);
+                        console.log("[Step-up Window] Closed");
+
+                        // Step-up完了のコールバックを送信
+                        // URLパラメータからステータスを取得できるようにする
+                        const urlParams = new URLSearchParams(window.location.search);
+                        const stepUpStatus = urlParams.get("step_up_status");
+
+                        if (stepUpStatus === "success") {
+                          // Step-up成功時の処理
+                          console.log("[Step-up] Success callback");
+                          // フロー続行のために次のメッセージを送信
+                          sendMessage("step-up completed");
+                        } else if (stepUpStatus === "cancelled") {
+                          // キャンセル時の処理
+                          console.log("[Step-up] Cancelled");
+                          agentMessageContent += "\n\n認証がキャンセルされました。別の支払い方法を選択してください。";
+                          setCurrentAgentMessage(agentMessageContent);
+                        }
+                      }
+                    }, 500);
+                  }
+                  break;
+
                 case "done":
                   // エージェントメッセージを確定
                   if (agentMessageContent) {

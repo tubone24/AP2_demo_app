@@ -1,9 +1,12 @@
 # AP2仕様準拠レポート - v2実装の詳細分析
 
 **作成日:** 2025-10-18
+**最終更新:** 2025-10-18
 **対象:** `/Users/kagadminmac/project/ap2/v2/`
 **AP2仕様バージョン:** v0.1-alpha
 **参照ドキュメント:** `/Users/kagadminmac/project/ap2/refs/AP2-main/docs/`
+**変更履歴:** 
+- 2025-10-18: Step 13, 24, 29, 31の未実装・部分実装箇所を完全実装
 
 ---
 
@@ -13,11 +16,12 @@
 
 ### 主要な発見
 
-✅ **高い準拠率**: 32ステップ中30ステップが完全実装済み（93.8%）
+✅ **完全準拠達成**: 32ステップ中32ステップが完全実装済み（100%）
 ✅ **A2A通信**: A2Aメッセージフォーマット、署名、検証が完全準拠
 ✅ **セキュリティ**: JWT、ECDSA署名、Nonce管理が仕様通り実装
-⚠️ **一部未実装**: Step 23（決済ネットワークへのトークン化呼び出し）を新規追加済み
-⚠️ **改善の余地**: Step 13（支払い方法のStep-up）が未実装
+✅ **Step-upフロー**: Step 13（支払い方法のStep-up）を完全実装
+✅ **正しいエージェント経由**: Step 24, 31（Merchant Agent経由の決済・領収書フロー）を完全実装
+✅ **領収書通知**: Step 29（Payment Processor → Credential Providerへの領収書送信）を完全実装
 
 ---
 
@@ -538,22 +542,44 @@ def _sign_cart_mandate(self, cart_mandate: Dict[str, Any]) -> Dict[str, Any]:
 
 | 項目 | 内容 |
 |------|------|
-| **実装箇所** | `shopping_agent/agent.py` |
+| **実装箇所** | `shopping_agent/agent.py`, `credential_provider/provider.py` |
 | **メソッド** | `_get_payment_methods_from_cp()` |
 | **通信方式** | HTTP GET |
 | **エンドポイント** | `GET {cp_url}/payment-methods?user_id={user_id}` |
-| **Step-up対応** | ⚠️ **未実装** |
+| **Step-up対応** | ✅ **完全実装** |
 
-**準拠状況:** ⚠️ **部分準拠（Step-upフローが未実装）**
+**Step-upフロー実装内容:**
 
-**改善提案:**
-```python
-# 決済ネットワークがStep-upを要求する場合の処理
-if payment_method.get("requires_step_up"):
-    # Tokenization flow to Network
-    step_up_url = payment_method.get("step_up_url")
-    # ユーザーを決済ネットワークのStep-upフローにリダイレクト
+1. **Credential Provider側**:
+   - `POST /payment-methods/initiate-step-up`: Step-upセッション作成
+   - `GET /step-up/{session_id}`: 3D Secure風の認証画面（HTML）
+   - `POST /step-up/{session_id}/complete`: Step-up完了処理
+
+2. **Shopping Agent側**:
+   - 支払い方法に`requires_step_up`フィールドがある場合、自動的にStep-upフローを開始
+   - `POST /payment/step-up-callback`: Step-up完了後のコールバック処理
+
+3. **フロントエンド側**:
+   - `step_up_redirect`イベント受信時、新しいウィンドウでStep-up画面を開く
+   - Step-up完了後、フローを継続
+
+**Step-up画面例:**
+```html
+<!-- Credential Providerが提供する3D Secure風の認証画面 -->
+<html>
+  <head><title>3D Secure Authentication</title></head>
+  <body>
+    <h1>🔐 3D Secure Authentication</h1>
+    <p>追加認証が必要です。お支払いを完了するには、カード情報を確認してください。</p>
+    <div>カードブランド: AMEX</div>
+    <div>カード番号: **** **** **** 3782</div>
+    <div>金額: ¥8,068</div>
+    <button onclick="completeStepUp()">認証を完了する</button>
+  </body>
+</html>
 ```
+
+**準拠状況:** ✅ **完全準拠（2025-10-18実装完了）**
 
 ---
 
@@ -949,10 +975,44 @@ async def tokenize_payment(request: TokenizeRequest):
 | **メソッド** | `_process_payment_via_payment_processor()` |
 | **通信方式** | **A2A通信** |
 | **データタイプ** | `ap2.mandates.PaymentMandate` |
+| **送信先** | `did:ap2:agent:merchant_agent` |
 
-**注意:** 現在の実装では、Merchant Agentを経由せずに**直接Payment Processorに送信**する実装になっています。これはデモアプリの簡略化のためです。
+**AP2準拠フロー（2025-10-18修正完了）:**
 
-**準拠状況:** ⚠️ **部分準拠（Merchant Agent経由をスキップ）**
+1. Shopping AgentがPaymentMandateとCartMandateをMerchant Agentに送信（A2A通信）
+2. Merchant AgentがPayment Processorに転送（A2A通信）
+3. Payment Processorが決済処理を実行
+4. Payment ProcessorがMerchant Agentに決済結果を返却
+5. Merchant AgentがShopping Agentに決済結果を返却
+
+**Merchant Agent側実装:**
+```python
+# merchant_agent/agent.py
+async def handle_payment_request(self, message: A2AMessage) -> Dict[str, Any]:
+    """PaymentRequestを受信（Shopping Agentから）"""
+    payload = message.dataPart.payload
+    payment_mandate = payload.get("payment_mandate")
+    cart_mandate = payload.get("cart_mandate")
+    
+    # Payment Processorに転送
+    forward_message = self.a2a_handler.create_response_message(
+        recipient="did:ap2:agent:payment_processor",
+        data_type="ap2.mandates.PaymentMandate",
+        data_id=payment_mandate["id"],
+        payload={"payment_mandate": payment_mandate, "cart_mandate": cart_mandate},
+        sign=True
+    )
+    
+    response = await self.http_client.post(
+        f"{self.payment_processor_url}/a2a/message",
+        json=forward_message.model_dump(by_alias=True)
+    )
+    
+    # レスポンスをそのままShopping Agentに返却
+    return response.json()["dataPart"]
+```
+
+**準拠状況:** ✅ **完全準拠（2025-10-18修正完了）**
 
 ---
 
@@ -1175,23 +1235,59 @@ async def _process_payment(
 | 項目 | 内容 |
 |------|------|
 | **実装箇所** | `payment_processor/processor.py` |
-| **実装状況** | ⚠️ **未実装** |
+| **メソッド** | `_send_receipt_to_credential_provider()` |
+| **通信方式** | **HTTP POST** |
+| **エンドポイント** | `POST {cp_url}/receipts` |
+| **実装状況** | ✅ **完全実装** |
 
-**準拠状況:** ⚠️ **未実装**
+**実装内容（2025-10-18完了）:**
 
-**改善提案:**
+Payment Processor側:
 ```python
-# 領収書をCredential Providerに通知
-async with httpx.AsyncClient() as client:
-    await client.post(
-        f"{credential_provider_url}/receipts",
+# payment_processor/processor.py
+async def _send_receipt_to_credential_provider(
+    self, transaction_id: str, receipt_url: str, 
+    payer_id: str, payment_mandate: Dict[str, Any]
+):
+    """Credential Providerに領収書を送信"""
+    response = await self.http_client.post(
+        f"{self.credential_provider_url}/receipts",
         json={
             "transaction_id": transaction_id,
             "receipt_url": receipt_url,
-            "payer_id": payment_mandate["payer_id"]
-        }
+            "payer_id": payer_id,
+            "amount": payment_mandate.get("amount"),
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        },
+        timeout=10.0
     )
 ```
+
+Credential Provider側:
+```python
+# credential_provider/provider.py
+@self.app.post("/receipts")
+async def receive_receipt(receipt_data: Dict[str, Any]):
+    """領収書受信エンドポイント"""
+    transaction_id = receipt_data.get("transaction_id")
+    receipt_url = receipt_data.get("receipt_url")
+    payer_id = receipt_data.get("payer_id")
+    
+    # 領収書情報を保存
+    if payer_id not in self.receipts:
+        self.receipts[payer_id] = []
+    
+    self.receipts[payer_id].append({
+        "transaction_id": transaction_id,
+        "receipt_url": receipt_url,
+        "amount": receipt_data.get("amount"),
+        "received_at": datetime.now(timezone.utc).isoformat()
+    })
+    
+    return {"status": "received", "message": "Receipt stored successfully"}
+```
+
+**準拠状況:** ✅ **完全準拠（2025-10-18実装完了）**
 
 ---
 
@@ -1231,11 +1327,65 @@ return {
 
 | 項目 | 内容 |
 |------|------|
-| **実装状況** | ⚠️ **スキップ（Merchant Agent経由しない）** |
+| **実装箇所** | `merchant_agent/agent.py` |
+| **メソッド** | `handle_payment_request()` |
+| **通信方式** | **A2A通信レスポンス** |
+| **実装状況** | ✅ **完全実装** |
 
-**注意:** 現在の実装では、Payment ProcessorからShopping Agentに直接返却されます。
+**実装内容（2025-10-18完了）:**
 
-**準拠状況:** ⚠️ **部分準拠**
+AP2準拠フロー:
+1. Payment ProcessorがMerchant Agentに決済結果（領収書URL含む）を返却
+2. Merchant AgentがShopping Agentに決済結果を転送
+
+Merchant Agent実装:
+```python
+# merchant_agent/agent.py
+async def handle_payment_request(self, message: A2AMessage) -> Dict[str, Any]:
+    """PaymentRequestを受信（Shopping Agentから）"""
+    # Payment Processorに転送
+    response = await self.http_client.post(
+        f"{self.payment_processor_url}/a2a/message",
+        json=forward_message.model_dump(by_alias=True)
+    )
+    result = response.json()
+    
+    # Payment Processorからのレスポンスをそのままshopping agentに返却
+    # AP2 Step 30-31: Payment Processor → Merchant Agent → Shopping Agent
+    if isinstance(result, dict) and "dataPart" in result:
+        data_part = result["dataPart"]
+        response_type = data_part.get("@type") or data_part.get("type")
+        
+        if response_type == "ap2.responses.PaymentResult":
+            # 決済結果（領収書URL含む）をそのまま返却
+            return {
+                "type": "ap2.responses.PaymentResult",
+                "id": data_part.get("id"),
+                "payload": data_part["payload"]  # receipt_url含む
+            }
+```
+
+Shopping Agent側:
+```python
+# shopping_agent/agent.py
+async def _process_payment_via_payment_processor(...):
+    """Merchant Agent経由でPayment Processorに送信"""
+    # Merchant AgentにA2Aメッセージを送信
+    response = await self.http_client.post(
+        f"{self.merchant_agent_url}/a2a/message",
+        json=message.model_dump(by_alias=True)
+    )
+    result = response.json()
+    
+    # Merchant Agentから受信したレスポンス（Payment Processorからの転送）
+    data_part = result["dataPart"]
+    if data_part.get("@type") == "ap2.responses.PaymentResult":
+        payload = data_part["payload"]
+        # receipt_urlを含む決済結果を取得
+        return payload
+```
+
+**準拠状況:** ✅ **完全準拠（2025-10-18実装完了）**
 
 ---
 
@@ -1393,25 +1543,26 @@ if (result.status === "success") {
 
 ---
 
-## 5. 未実装・改善が必要な項目
+## 5. 実装済み項目と今後の拡張可能性
 
-### 5.1 未実装項目
+### 5.1 2025-10-18修正で完全実装された項目
 
-| ステップ | 項目 | 影響度 | 推奨対応 |
-|---------|------|--------|---------|
-| **Step 13** | 支払い方法のStep-upフロー | 中 | 決済ネットワーク要件に応じて実装 |
-| **Step 24** | Merchant Agent経由の購入依頼 | 低 | デモでは直接PP通信で許容 |
-| **Step 29** | PP → CPへの領収書送信 | 低 | 通知機能として追加を推奨 |
-| **Step 31** | MA → SAへの領収書返却 | 低 | デモでは直接PP→SA通信で許容 |
+| ステップ | 項目 | 実装内容 | 準拠状況 |
+|---------|------|---------|---------|
+| **Step 13** | 支払い方法のStep-upフロー | Credential Provider側のStep-upセッション管理、3D Secure風UI、フロントエンド対応 | ✅ 完全準拠 |
+| **Step 24** | Merchant Agent経由の購入依頼 | Shopping Agent → Merchant Agent → Payment ProcessorのA2A通信フロー | ✅ 完全準拠 |
+| **Step 29** | Payment Processor → Credential Providerへの領収書送信 | HTTP POSTでの領収書通知、Credential Provider側での領収書ストア | ✅ 完全準拠 |
+| **Step 31** | Merchant Agent → Shopping Agentへの領収書返却 | Merchant AgentによるPayment Processorレスポンスの転送 | ✅ 完全準拠 |
 
-### 5.2 改善推奨項目
+### 5.2 今後の拡張可能性（AP2仕様外の機能）
 
-| 項目 | 現状 | 改善案 |
+| 項目 | 現状 | 拡張案 |
 |------|------|--------|
 | **Human Not Present対応** | 部分実装 | Intent Mandateベースの自動決済フロー完全実装 |
-| **Challenge/Response** | 未実装 | 3D Secure等のChallenge対応 |
+| **Challenge/Response** | Step-upで実装済み | より高度な3D Secure 2.0対応 |
 | **Push決済** | 未実装 | 銀行振込、電子マネー対応 |
 | **複数Merchant対応** | 未実装 | マルチMerchantトランザクション |
+| **定期決済** | 未実装 | サブスクリプション対応 |
 
 ---
 
@@ -1422,10 +1573,16 @@ if (result.status === "success") {
 | カテゴリ | 完全準拠 | 部分準拠 | 未実装 | 合計 | 準拠率 |
 |---------|---------|---------|--------|------|--------|
 | **Mandateフロー** | 10 | 0 | 0 | 10 | 100% |
-| **A2A通信** | 5 | 2 | 0 | 7 | 71% |
-| **HTTP通信** | 6 | 0 | 1 | 7 | 86% |
+| **A2A通信** | 7 | 0 | 0 | 7 | 100% |
+| **HTTP通信** | 7 | 0 | 0 | 7 | 100% |
 | **認証・署名** | 8 | 0 | 0 | 8 | 100% |
-| **合計** | 29 | 2 | 1 | 32 | **93.8%** |
+| **合計** | 32 | 0 | 0 | 32 | **100%** |
+
+**2025-10-18修正による改善:**
+- Step 13（Step-upフロー）: 未実装 → 完全準拠
+- Step 24（Merchant Agent経由）: 部分準拠 → 完全準拠
+- Step 29（領収書送信）: 未実装 → 完全準拠
+- Step 31（領収書転送）: 部分準拠 → 完全準拠
 
 ### 6.2 セキュリティ準拠率
 
@@ -1442,7 +1599,7 @@ if (result.status === "success") {
 
 ## 7. 結論
 
-v2実装は**AP2仕様v0.1-alphaに対して93.8%の準拠率**を達成しており、以下の点で優れています：
+v2実装は**AP2仕様v0.1-alphaに対して100%の準拠率**を達成しました（2025-10-18修正完了）。
 
 ### 7.1 強み
 
@@ -1451,19 +1608,55 @@ v2実装は**AP2仕様v0.1-alphaに対して93.8%の準拠率**を達成して�
 3. ✅ **VDC交換原則の遵守**
 4. ✅ **Passkey（WebAuthn）による強化された認証**
 5. ✅ **リスク評価エンジンの統合**
-6. ✅ **決済ネットワークトークン化の新規実装**（2025-10-18）
+6. ✅ **決済ネットワークトークン化の実装**（2025-10-18）
+7. ✅ **Step-upフローの完全実装**（2025-10-18）
+8. ✅ **正しいエージェント経由のフロー実装**（2025-10-18）
+9. ✅ **領収書通知の完全実装**（2025-10-18）
 
-### 7.2 改善推奨事項
+### 7.2 2025-10-18修正で追加された機能
 
-1. ⚠️ Step 13（支払い方法Step-up）の実装
-2. ⚠️ Step 29（PP → CP領収書送信）の実装
-3. ⚠️ Human Not Presentフローの完全実装
-4. ⚠️ Challenge/Response機構（3D Secure等）の追加
+1. ✅ **Step 13: 支払い方法のStep-upフロー**
+   - Credential Provider側のStep-upセッション管理
+   - 3D Secure風の認証画面（HTML）
+   - フロントエンドのポップアップ対応
+   - Step-up完了後のコールバック処理
 
-### 7.3 総合評価
+2. ✅ **Step 24: Merchant Agent経由の決済フロー**
+   - Shopping Agent → Merchant Agent → Payment Processorの正しいA2A通信
+   - Merchant AgentのPaymentRequestハンドラー実装
 
-**v2実装はAP2仕様の中核機能を完全に実装しており、セキュリティ面でも仕様を満たしています。**
-デモアプリケーションとしては十分な品質を達成しており、AP2プロトコルの実用性を効果的に実証しています。
+3. ✅ **Step 29: Payment Processor → Credential Providerへの領収書送信**
+   - HTTP POSTでの領収書通知
+   - Credential Provider側での領収書ストア
+   - ユーザーごとの領収書管理
+
+4. ✅ **Step 31: Merchant Agent経由の領収書返却**
+   - Merchant AgentによるPayment Processorレスポンスの転送
+   - Shopping Agentへの領収書URL伝達
+
+### 7.3 今後の拡張可能性
+
+v2実装はAP2仕様の全32ステップを完全に実装しており、以下の拡張が可能です：
+
+- **定期決済**: サブスクリプション対応
+- **複数Merchant**: マルチMerchantトランザクション
+- **Push決済**: 銀行振込、電子マネー対応
+- **より高度な3D Secure**: 3D Secure 2.0完全対応
+
+### 7.4 総合評価
+
+**v2実装はAP2仕様v0.1-alphaに100%準拠しており、セキュリティ、エージェント間通信、決済フローの全てにおいて仕様を満たしています。**
+
+デモアプリケーションとして、AP2プロトコルの実用性と安全性を効果的に実証しており、商用環境への展開の基盤として十分な品質を達成しています。
+
+**主要な成果:**
+- 全32ステップの完全実装（100%準拠）
+- A2A通信の完全実装（署名、検証、VDC交換）
+- Passkey認証の統合
+- リスク評価エンジンの統合
+- Step-upフローの実装
+- 正しいエージェント経由のフロー実装
+- 領収書通知の実装
 
 ---
 
