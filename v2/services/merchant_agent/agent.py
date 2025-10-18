@@ -58,6 +58,9 @@ class MerchantAgent(BaseAgent):
         # Merchantエンドポイント（Docker Compose環境想定）
         self.merchant_url = "http://merchant:8002"
 
+        # Payment Processorエンドポイント（Docker Compose環境想定）
+        self.payment_processor_url = "http://payment_processor:8004"
+
         # このMerchantの情報（固定）
         self.merchant_id = "did:ap2:merchant:demo_merchant"
         self.merchant_name = "AP2デモストア"
@@ -102,6 +105,7 @@ class MerchantAgent(BaseAgent):
         self.a2a_handler.register_handler("ap2.mandates.IntentMandate", self.handle_intent_mandate)
         self.a2a_handler.register_handler("ap2.requests.ProductSearch", self.handle_product_search_request)
         self.a2a_handler.register_handler("ap2.requests.CartRequest", self.handle_cart_request)
+        self.a2a_handler.register_handler("ap2.mandates.PaymentMandate", self.handle_payment_request)  # AP2仕様準拠
 
     def register_endpoints(self):
         """
@@ -403,6 +407,131 @@ class MerchantAgent(BaseAgent):
                 "id": str(uuid.uuid4()),
                 "payload": {
                     "error_code": "cart_creation_failed",
+                    "error_message": str(e)
+                }
+            }
+
+    async def handle_payment_request(self, message: A2AMessage) -> Dict[str, Any]:
+        """
+        PaymentRequestを受信（Shopping Agentから）
+
+        AP2仕様準拠（Step 24-25, 30-31）：
+        1. Merchant AgentがShopping AgentからPaymentRequestを受信
+        2. Merchant AgentがPayment ProcessorにPaymentMandateを転送（A2A通信）
+        3. Payment Processorが決済処理を実行
+        4. Payment ProcessorがMerchant Agentに決済結果を返却
+        5. Merchant AgentがShopping Agentに決済結果を返却
+        """
+        logger.info("[MerchantAgent] Received PaymentRequest from Shopping Agent")
+        payload = message.dataPart.payload
+
+        payment_mandate = payload.get("payment_mandate")
+        cart_mandate = payload.get("cart_mandate")
+
+        if not payment_mandate:
+            logger.error("[MerchantAgent] PaymentMandate not found in PaymentRequest")
+            return {
+                "type": "ap2.errors.Error",
+                "id": str(uuid.uuid4()),
+                "payload": {
+                    "error_code": "missing_payment_mandate",
+                    "error_message": "PaymentMandate is required in PaymentRequest"
+                }
+            }
+
+        try:
+            # Payment ProcessorにPaymentMandateを転送（A2A通信）
+            logger.info(
+                f"[MerchantAgent] Forwarding PaymentMandate to Payment Processor: "
+                f"payment_mandate_id={payment_mandate.get('id')}"
+            )
+
+            # A2Aメッセージを作成（署名付き）
+            forward_message = self.a2a_handler.create_response_message(
+                recipient="did:ap2:agent:payment_processor",
+                data_type="ap2.mandates.PaymentMandate",
+                data_id=payment_mandate["id"],
+                payload={
+                    "payment_mandate": payment_mandate,
+                    "cart_mandate": cart_mandate  # VDC交換
+                },
+                sign=True
+            )
+
+            # Payment ProcessorにA2Aメッセージを送信
+            import json as json_lib
+            logger.info(
+                f"\n{'='*80}\n"
+                f"[MerchantAgent → PaymentProcessor] A2Aメッセージ転送\n"
+                f"  URL: {self.payment_processor_url}/a2a/message\n"
+                f"  メッセージID: {forward_message.header.message_id}\n"
+                f"  タイプ: {forward_message.dataPart.type}\n"
+                f"{'='*80}"
+            )
+
+            response = await self.http_client.post(
+                f"{self.payment_processor_url}/a2a/message",
+                json=forward_message.model_dump(by_alias=True),
+                timeout=30.0
+            )
+            response.raise_for_status()
+            result = response.json()
+
+            logger.info(
+                f"\n{'='*80}\n"
+                f"[MerchantAgent ← PaymentProcessor] A2Aレスポンス受信\n"
+                f"  Status: {response.status_code}\n"
+                f"  Response Body: {json_lib.dumps(result, ensure_ascii=False, indent=2)}\n"
+                f"{'='*80}"
+            )
+
+            # Payment Processorからのレスポンスをそのままshopping agentに返却
+            # AP2 Step 30-31: Payment Processor → Merchant Agent → Shopping Agent
+            if isinstance(result, dict) and "dataPart" in result:
+                data_part = result["dataPart"]
+                response_type = data_part.get("@type") or data_part.get("type")
+
+                if response_type == "ap2.responses.PaymentResult":
+                    logger.info(
+                        f"[MerchantAgent] Payment processing completed, forwarding result to Shopping Agent"
+                    )
+                    # そのまま返却（Shopping Agentが期待する形式）
+                    return {
+                        "type": "ap2.responses.PaymentResult",
+                        "id": data_part.get("id", str(uuid.uuid4())),
+                        "payload": data_part["payload"]
+                    }
+                elif response_type == "ap2.errors.Error":
+                    logger.warning(
+                        f"[MerchantAgent] Payment Processor returned error, forwarding to Shopping Agent"
+                    )
+                    return {
+                        "type": "ap2.errors.Error",
+                        "id": data_part.get("id", str(uuid.uuid4())),
+                        "payload": data_part["payload"]
+                    }
+                else:
+                    raise ValueError(f"Unexpected response type from Payment Processor: {response_type}")
+            else:
+                raise ValueError("Invalid response format from Payment Processor")
+
+        except httpx.HTTPError as e:
+            logger.error(f"[handle_payment_request] HTTP error: {e}")
+            return {
+                "type": "ap2.errors.Error",
+                "id": str(uuid.uuid4()),
+                "payload": {
+                    "error_code": "payment_processor_communication_failed",
+                    "error_message": f"Failed to communicate with Payment Processor: {str(e)}"
+                }
+            }
+        except Exception as e:
+            logger.error(f"[handle_payment_request] Error: {e}", exc_info=True)
+            return {
+                "type": "ap2.errors.Error",
+                "id": str(uuid.uuid4()),
+                "payload": {
+                    "error_code": "payment_request_failed",
                     "error_message": str(e)
                 }
             }
