@@ -45,14 +45,26 @@ class PaymentProcessorService(BaseAgent):
             keys_directory="./keys"
         )
 
-        # データベースマネージャー（絶対パスを使用）
-        self.db_manager = DatabaseManager(database_url="sqlite+aiosqlite:////app/v2/data/ap2.db")
+        # データベースマネージャー（環境変数から読み込み、絶対パスを使用）
+        import os
+        database_url = os.getenv("DATABASE_URL", "sqlite+aiosqlite:////app/v2/data/payment_processor.db")
+        self.db_manager = DatabaseManager(database_url=database_url)
 
         # HTTPクライアント（Credential Providerとの通信用）
         self.http_client = httpx.AsyncClient(timeout=30.0)
 
         # Credential Providerエンドポイント（Docker Compose環境想定）
         self.credential_provider_url = "http://credential_provider:8003"
+
+        # 起動イベントハンドラー登録
+        @self.app.on_event("startup")
+        async def startup_event():
+            """起動時の初期化処理"""
+            logger.info(f"[{self.agent_name}] Running startup tasks...")
+
+            # データベース初期化
+            await self.db_manager.init_db()
+            logger.info(f"[{self.agent_name}] Database initialized")
 
         logger.info(f"[{self.agent_name}] Initialized")
 
@@ -102,6 +114,7 @@ class PaymentProcessorService(BaseAgent):
             """
             try:
                 payment_mandate = request.payment_mandate
+                cart_mandate = request.cart_mandate  # VDC交換：CartMandateを取得
                 credential_token = request.credential_token
 
                 # 1. PaymentMandateバリデーション
@@ -126,8 +139,8 @@ class PaymentProcessorService(BaseAgent):
 
                 # 5. レスポンス生成
                 if result["status"] == "captured":
-                    # レシート生成（PDF形式）
-                    receipt_url = await self._generate_receipt(transaction_id, payment_mandate)
+                    # レシート生成（PDF形式、VDC交換によりCartMandateを渡す）
+                    receipt_url = await self._generate_receipt(transaction_id, payment_mandate, cart_mandate)
 
                     return ProcessPaymentResponse(
                         transaction_id=transaction_id,
@@ -239,9 +252,22 @@ class PaymentProcessorService(BaseAgent):
     # ========================================
 
     async def handle_payment_mandate(self, message: A2AMessage) -> Dict[str, Any]:
-        """PaymentMandateを受信（Shopping Agentから）"""
+        """
+        PaymentMandateを受信（Shopping Agentから）
+
+        AP2仕様準拠：
+        - VDC交換の原則に従い、PaymentMandateとCartMandateを受信
+        - CartMandateは領収書生成に必要
+        """
         logger.info("[PaymentProcessor] Received PaymentMandate")
-        payment_mandate = message.dataPart.payload
+        payload = message.dataPart.payload
+
+        # VDC交換：PaymentMandateとCartMandateを取り出す
+        payment_mandate = payload.get("payment_mandate", payload)  # フォールバック対応
+        cart_mandate = payload.get("cart_mandate")
+
+        if not cart_mandate:
+            logger.warning("[PaymentProcessor] CartMandate not found in payload, receipt generation may fail")
 
         # 決済処理実行
         transaction_id = f"txn_{uuid.uuid4().hex[:12]}"
@@ -252,7 +278,7 @@ class PaymentProcessorService(BaseAgent):
 
         # レスポンス
         if result["status"] == "captured":
-            receipt_url = await self._generate_receipt(transaction_id, payment_mandate)
+            receipt_url = await self._generate_receipt(transaction_id, payment_mandate, cart_mandate)
 
             return {
                 "type": "ap2.responses.PaymentResult",
@@ -473,13 +499,23 @@ class PaymentProcessorService(BaseAgent):
     async def _generate_receipt(
         self,
         transaction_id: str,
-        payment_mandate: Dict[str, Any]
+        payment_mandate: Dict[str, Any],
+        cart_mandate: Optional[Dict[str, Any]] = None
     ) -> str:
         """
         レシート生成（実際のPDF生成）
 
-        v2/common/receipt_generator.pyを使用してPDF領収書を生成し、
-        ファイルシステムに保存して、アクセス可能なURLを返す
+        AP2仕様準拠：
+        - VDC交換の原則に従い、CartMandateは引数として受け取る
+        - データベースからではなく、暗号的に署名されたVDCを直接使用
+
+        Args:
+            transaction_id: トランザクションID
+            payment_mandate: PaymentMandate（最小限のペイロード）
+            cart_mandate: CartMandate（注文詳細、領収書生成に必要）
+
+        Returns:
+            str: 領収書PDF URL
         """
         try:
             # receipt_generatorをインポート
@@ -507,28 +543,14 @@ class PaymentProcessorService(BaseAgent):
                     logger.warning(f"[PaymentProcessor] Payment result not found in transaction events")
                     return f"https://receipts.ap2-demo.com/{transaction_id}.pdf"
 
-            # CartMandateを取得（payment_mandateにcart_mandate_idがある）
-            cart_mandate_id = payment_mandate.get("cart_mandate_id")
-            cart_mandate = None
-            if cart_mandate_id:
-                async with self.db_manager.get_session() as session:
-                    from v2.common.database import MandateCRUD
-                    import json
-                    cart_mandate_record = await MandateCRUD.get_by_id(session, cart_mandate_id)
-                    if cart_mandate_record:
-                        # payloadがJSON文字列の場合はパース
-                        if isinstance(cart_mandate_record.payload, str):
-                            cart_mandate = json.loads(cart_mandate_record.payload)
-                        else:
-                            cart_mandate = cart_mandate_record.payload
-
             # AP2仕様準拠：CartMandateは必須
+            # VDC交換の原則：Shopping AgentからCartMandateを受け取る
             # CartMandateにはMerchant署名とIntent参照が含まれており、取引の正当性を保証する重要なデータ
-            # CartMandateが存在しない取引はAP2仕様違反のため、エラーとする
             if not cart_mandate:
                 error_msg = (
-                    f"AP2 specification violation: CartMandate not found (id={cart_mandate_id}). "
-                    f"CartMandate with Merchant signature is required for all transactions."
+                    f"AP2 specification violation: CartMandate not provided. "
+                    f"CartMandate with Merchant signature is required for all transactions. "
+                    f"VDC exchange principle: CartMandate must be passed from Shopping Agent."
                 )
                 logger.error(f"[PaymentProcessor] {error_msg}")
                 raise ValueError(error_msg)
@@ -576,8 +598,9 @@ class PaymentProcessorService(BaseAgent):
 
             logger.info(f"[PaymentProcessor] Generated receipt PDF: {receipt_file_path}")
 
-            # URLを生成（Docker環境でPayment Processorのエンドポイント経由でアクセス）
-            receipt_url = f"http://payment_processor:8004/receipts/{transaction_id}.pdf"
+            # URLを生成（ブラウザからアクセス可能なlocalhost URL）
+            # Docker環境ではホストマシンのlocalhostからポート8004でアクセス可能
+            receipt_url = f"http://localhost:8004/receipts/{transaction_id}.pdf"
 
             return receipt_url
 

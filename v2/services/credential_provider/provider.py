@@ -48,8 +48,10 @@ class CredentialProviderService(BaseAgent):
             keys_directory="./keys"
         )
 
-        # データベースマネージャー（絶対パスを使用）
-        self.db_manager = DatabaseManager(database_url="sqlite+aiosqlite:////app/v2/data/ap2.db")
+        # データベースマネージャー（環境変数から読み込み、絶対パスを使用）
+        import os
+        database_url = os.getenv("DATABASE_URL", "sqlite+aiosqlite:////app/v2/data/credential_provider.db")
+        self.db_manager = DatabaseManager(database_url=database_url)
 
         # Device Attestation Manager（既存のap2_crypto.pyを使用）
         self.attestation_manager = DeviceAttestationManager(self.key_manager)
@@ -85,6 +87,16 @@ class CredentialProviderService(BaseAgent):
         # トークンストア（AP2仕様準拠：トークン→支払い方法のマッピング）
         # 本番環境ではRedis等のKVストアやデータベースを使用
         self.token_store: Dict[str, Dict[str, Any]] = {}
+
+        # 起動イベントハンドラー登録
+        @self.app.on_event("startup")
+        async def startup_event():
+            """起動時の初期化処理"""
+            logger.info(f"[{self.agent_name}] Running startup tasks...")
+
+            # データベース初期化
+            await self.db_manager.init_db()
+            logger.info(f"[{self.agent_name}] Database initialized")
 
         logger.info(f"[{self.agent_name}] Initialized")
 

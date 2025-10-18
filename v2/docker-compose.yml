@@ -38,6 +38,7 @@ services:
       - CREDENTIAL_PROVIDER_URL=http://credential_provider:8003
       - PAYMENT_PROCESSOR_URL=http://payment_processor:8004
       - AP2_KEYS_DIRECTORY=/app/v2/keys
+      - DATABASE_URL=sqlite+aiosqlite:////app/v2/data/shopping_agent.db
     networks:
       - ap2_network
     depends_on:
@@ -62,6 +63,7 @@ services:
       - PYTHONUNBUFFERED=1
       - AGENT_ID=did:ap2:agent:merchant_agent
       - AP2_KEYS_DIRECTORY=/app/v2/keys
+      - DATABASE_URL=sqlite+aiosqlite:////app/v2/data/merchant_agent.db
     networks:
       - ap2_network
     depends_on:
@@ -86,6 +88,7 @@ services:
       - PYTHONUNBUFFERED=1
       - AGENT_ID=did:ap2:agent:merchant
       - AP2_KEYS_DIRECTORY=/app/v2/keys
+      - DATABASE_URL=sqlite+aiosqlite:////app/v2/data/merchant.db
     networks:
       - ap2_network
     depends_on:
@@ -110,6 +113,7 @@ services:
       - PYTHONUNBUFFERED=1
       - AGENT_ID=did:ap2:agent:credential_provider
       - AP2_KEYS_DIRECTORY=/app/v2/keys
+      - DATABASE_URL=sqlite+aiosqlite:////app/v2/data/credential_provider.db
     networks:
       - ap2_network
     depends_on:
@@ -134,6 +138,7 @@ services:
       - PYTHONUNBUFFERED=1
       - AGENT_ID=did:ap2:agent:payment_processor
       - AP2_KEYS_DIRECTORY=/app/v2/keys
+      - DATABASE_URL=sqlite+aiosqlite:////app/v2/data/payment_processor.db
     networks:
       - ap2_network
     depends_on:

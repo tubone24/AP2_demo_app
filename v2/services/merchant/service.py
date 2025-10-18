@@ -46,8 +46,10 @@ class MerchantService(BaseAgent):
             keys_directory="./keys"
         )
 
-        # データベースマネージャー（絶対パスを使用）
-        self.db_manager = DatabaseManager(database_url="sqlite+aiosqlite:////app/v2/data/ap2.db")
+        # データベースマネージャー（環境変数から読み込み、絶対パスを使用）
+        import os
+        database_url = os.getenv("DATABASE_URL", "sqlite+aiosqlite:////app/v2/data/merchant.db")
+        self.db_manager = DatabaseManager(database_url=database_url)
 
         # このMerchantの情報
         self.merchant_id = "did:ap2:merchant:demo_merchant"
@@ -55,6 +57,26 @@ class MerchantService(BaseAgent):
 
         # 署名モード設定（メモリ内管理、本番環境ではDBに保存）
         self.auto_sign_mode = True  # デフォルトは自動署名
+
+        # 起動イベントハンドラー登録
+        @self.app.on_event("startup")
+        async def startup_event():
+            """起動時の初期化処理"""
+            logger.info(f"[{self.agent_name}] Running startup tasks...")
+
+            # データベース初期化
+            await self.db_manager.init_db()
+            logger.info(f"[{self.agent_name}] Database initialized")
+
+            # サンプルデータシード（商品・ユーザー）
+            # Merchantは在庫確認のために商品データが必要
+            try:
+                from v2.common.seed_data import seed_products, seed_users
+                await seed_products(self.db_manager)
+                await seed_users(self.db_manager)
+                logger.info(f"[{self.agent_name}] Sample data seeded successfully")
+            except Exception as e:
+                logger.warning(f"[{self.agent_name}] Sample data seeding warning: {e}")
 
         logger.info(f"[{self.agent_name}] Initialized")
 

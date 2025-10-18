@@ -59,8 +59,10 @@ class ShoppingAgent(BaseAgent):
             keys_directory="./keys"
         )
 
-        # データベースマネージャー（絶対パスを使用）
-        self.db_manager = DatabaseManager(database_url="sqlite+aiosqlite:////app/v2/data/ap2.db")
+        # データベースマネージャー（環境変数から読み込み、絶対パスを使用）
+        import os
+        database_url = os.getenv("DATABASE_URL", "sqlite+aiosqlite:////app/v2/data/shopping_agent.db")
+        self.db_manager = DatabaseManager(database_url=database_url)
 
         # HTTPクライアント（他エージェントとの通信用）
         self.http_client = httpx.AsyncClient(timeout=30.0)
@@ -98,6 +100,16 @@ class ShoppingAgent(BaseAgent):
 
         # WebAuthn challenge管理（Intent/Consent署名用）
         self.webauthn_challenge_manager = WebAuthnChallengeManager(challenge_ttl_seconds=60)
+
+        # 起動イベントハンドラー登録
+        @self.app.on_event("startup")
+        async def startup_event():
+            """起動時の初期化処理"""
+            logger.info(f"[{self.agent_name}] Running startup tasks...")
+
+            # データベース初期化
+            await self.db_manager.init_db()
+            logger.info(f"[{self.agent_name}] Database initialized")
 
         logger.info(f"[{self.agent_name}] Initialized with database-backed risk assessment")
 
@@ -581,8 +593,12 @@ class ShoppingAgent(BaseAgent):
                 session["attestation_token"] = verification_result.get("token")
                 session["step"] = "payment_processing"
 
-                # Payment Processorに決済依頼
-                payment_result = await self._process_payment_via_payment_processor(payment_mandate)
+                # Payment Processorに決済依頼（VDC交換：CartMandateも含める）
+                cart_mandate = session.get("cart_mandate")
+                if not cart_mandate:
+                    raise HTTPException(status_code=400, detail="CartMandate not found in session")
+
+                payment_result = await self._process_payment_via_payment_processor(payment_mandate, cart_mandate)
 
                 if payment_result.get("status") == "captured":
                     # 決済成功
@@ -1861,24 +1877,36 @@ class ShoppingAgent(BaseAgent):
 
         return payment_mandate
 
-    async def _process_payment_via_payment_processor(self, payment_mandate: Dict[str, Any]) -> Dict[str, Any]:
+    async def _process_payment_via_payment_processor(self, payment_mandate: Dict[str, Any], cart_mandate: Dict[str, Any]) -> Dict[str, Any]:
         """
         Payment ProcessorにPaymentMandateを送信して決済処理を依頼
 
         AP2仕様準拠：
         1. Shopping AgentがPaymentMandateをPayment Processorに送信（A2A通信）
-        2. Payment Processorが決済処理を実行
-        3. Payment Processorが決済結果を返却
+        2. VDC交換の原則に従い、CartMandateも含めて送信（領収書生成に必要）
+        3. Payment Processorが決済処理を実行
+        4. Payment Processorが決済結果を返却
+
+        Args:
+            payment_mandate: PaymentMandate（最小限のペイロード）
+            cart_mandate: CartMandate（注文詳細、領収書生成に必要）
         """
         logger.info(f"[ShoppingAgent] Requesting payment processing for PaymentMandate: {payment_mandate['id']}")
 
         try:
+            # A2Aメッセージのペイロード：PaymentMandateとCartMandateを含める
+            # VDC交換の原則：暗号的に署名されたVDCをエージェント間で交換
+            payload = {
+                "payment_mandate": payment_mandate,
+                "cart_mandate": cart_mandate  # 領収書生成に必要
+            }
+
             # A2Aメッセージを作成（署名付き）
             message = self.a2a_handler.create_response_message(
                 recipient="did:ap2:agent:payment_processor",
                 data_type="ap2.mandates.PaymentMandate",
                 data_id=payment_mandate["id"],
-                payload=payment_mandate,
+                payload=payload,
                 sign=True
             )
 

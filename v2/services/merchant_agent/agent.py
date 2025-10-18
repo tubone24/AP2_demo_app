@@ -47,8 +47,10 @@ class MerchantAgent(BaseAgent):
             keys_directory="./keys"
         )
 
-        # データベースマネージャー（絶対パスを使用）
-        self.db_manager = DatabaseManager(database_url="sqlite+aiosqlite:////app/v2/data/ap2.db")
+        # データベースマネージャー（環境変数から読み込み、絶対パスを使用）
+        import os
+        database_url = os.getenv("DATABASE_URL", "sqlite+aiosqlite:////app/v2/data/merchant_agent.db")
+        self.db_manager = DatabaseManager(database_url=database_url)
 
         # HTTPクライアント（Merchantとの通信用）
         self.http_client = httpx.AsyncClient(timeout=30.0)
