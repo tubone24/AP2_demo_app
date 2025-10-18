@@ -1001,43 +1001,152 @@ class ShoppingAgent(BaseAgent):
             )
             await asyncio.sleep(0.3)
 
-            # AP2仕様確認: user_signature_requiredフィールドをチェック
-            # CartMandateにuser_signature_requiredがtrueの場合のみユーザー署名が必要
-            user_signature_required = cart_mandate.get("user_signature_required", False)
+            # AP2 Step 4: 配送先を確認・入力
+            # カートの最終価格を確定するために配送先が必要
+            existing_shipping = cart_mandate.get("shipping", {}).get("address")
 
-            if user_signature_required:
-                # ユーザー署名が必要な場合（Consent署名）
+            # AP2仕様準拠：必ず配送先確認ステップを表示
+            # CartMandateに配送先が含まれていても、ユーザーに確認・変更の機会を与える
+            yield StreamEvent(
+                type="agent_text",
+                content="配送先を入力してください。最終的な価格（送料込み）を確定するために必要です。"
+            )
+            await asyncio.sleep(0.2)
+
+            # 配送先フォームをリッチコンテンツで送信
+            # CartMandateに配送先がある場合は、それをデフォルト値として使用
+            yield StreamEvent(
+                type="shipping_form_request",
+                form_schema={
+                    "type": "shipping_address",
+                    "fields": [
+                        {
+                            "name": "recipient",
+                            "label": "受取人名",
+                            "type": "text",
+                            "placeholder": existing_shipping.get("recipient", "山田太郎") if existing_shipping else "山田太郎",
+                            "default": existing_shipping.get("recipient", "") if existing_shipping else "",
+                            "required": True
+                        },
+                        {
+                            "name": "postal_code",
+                            "label": "郵便番号",
+                            "type": "text",
+                            "placeholder": "150-0001",
+                            "default": existing_shipping.get("postal_code", "") if existing_shipping else "",
+                            "required": True
+                        },
+                        {
+                            "name": "address_line1",
+                            "label": "住所1",
+                            "type": "text",
+                            "placeholder": existing_shipping.get("address_line1", "東京都渋谷区神宮前1-1-1") if existing_shipping else "東京都渋谷区神宮前1-1-1",
+                            "default": existing_shipping.get("address_line1", "") if existing_shipping else "",
+                            "required": True
+                        },
+                        {
+                            "name": "address_line2",
+                            "label": "住所2（建物名・部屋番号）",
+                            "type": "text",
+                            "placeholder": "サンプルマンション101",
+                            "default": existing_shipping.get("address_line2", "") if existing_shipping else "",
+                            "required": False
+                        },
+                        {
+                            "name": "country",
+                            "label": "国",
+                            "type": "select",
+                            "options": [
+                                {"value": "JP", "label": "日本"},
+                                {"value": "US", "label": "アメリカ"}
+                            ],
+                            "default": existing_shipping.get("country", "JP") if existing_shipping else "JP",
+                            "required": True
+                        }
+                    ]
+                }
+            )
+
+            session["step"] = "cart_selected_need_shipping"
+            return
+
+        # ステップ6.6: カート選択後の配送先入力
+        elif current_step == "cart_selected_need_shipping":
+            # JSONとしてパース（フロントエンドからJSONで送信される想定）
+            try:
+                import json as json_lib
+                if user_input.strip().startswith("{"):
+                    shipping_address = json_lib.loads(user_input)
+                else:
+                    # デモ用：固定値を使用
+                    shipping_address = {
+                        "recipient": "山田太郎",
+                        "postal_code": "150-0001",
+                        "address_line1": "東京都渋谷区神宮前1-1-1",
+                        "address_line2": "サンプルマンション101",
+                        "country": "JP"
+                    }
+
+                session["shipping_address"] = shipping_address
+
                 yield StreamEvent(
                     type="agent_text",
-                    content="このカートにはユーザー署名が必要です。Consent署名をお願いします。"
+                    content=f"配送先を設定しました：{shipping_address['recipient']} 様"
                 )
-                await asyncio.sleep(0.2)
+                await asyncio.sleep(0.3)
 
-                # Consent署名リクエスト（WebAuthnまたはデバイス認証を使用）
-                # user_cart_confirmation_requiredの場合、ユーザーにカート内容の承認を求める
-                session["step"] = "consent_signature_requested"
-                return
-            else:
-                # ユーザー署名不要の場合は直接Credential Provider選択へ
-                logger.info(
-                    f"[ShoppingAgent] CartMandate does not require user signature. "
-                    f"Proceeding to Credential Provider selection."
-                )
+            except Exception as e:
+                logger.warning(f"[_generate_fixed_response] Failed to parse shipping address: {e}")
+                # デモ用：固定値を使用
+                session["shipping_address"] = {
+                    "recipient": "山田太郎",
+                    "postal_code": "150-0001",
+                    "address_line1": "東京都渋谷区神宮前1-1-1",
+                    "address_line2": "サンプルマンション101",
+                    "country": "JP"
+                }
 
                 yield StreamEvent(
                     type="agent_text",
-                    content="決済に使用するCredential Providerを選択してください。"
+                    content="配送先を設定しました（デモ用固定値）。"
                 )
-                await asyncio.sleep(0.2)
+                await asyncio.sleep(0.3)
 
-                # Credential Providerリストをリッチコンテンツで送信
-                yield StreamEvent(
-                    type="credential_provider_selection",
-                    providers=self.credential_providers
-                )
+            # 次のステップ：Credential Provider選択
+            session["step"] = "shipping_confirmed"
+            # 処理を続行
+            yield StreamEvent(
+                type="agent_text",
+                content="決済に使用するCredential Providerを選択してください。"
+            )
+            await asyncio.sleep(0.2)
 
-                session["step"] = "select_credential_provider"
-                return
+            # Credential Providerリストをリッチコンテンツで送信
+            yield StreamEvent(
+                type="credential_provider_selection",
+                providers=self.credential_providers
+            )
+
+            session["step"] = "select_credential_provider"
+            return
+
+        # ステップ6.7: 配送先確認済み（CartMandateに配送先が既に含まれている場合）
+        elif current_step == "shipping_confirmed":
+            # このステップは自動的にスキップされ、Credential Provider選択に進む
+            yield StreamEvent(
+                type="agent_text",
+                content="決済に使用するCredential Providerを選択してください。"
+            )
+            await asyncio.sleep(0.2)
+
+            # Credential Providerリストをリッチコンテンツで送信
+            yield StreamEvent(
+                type="credential_provider_selection",
+                providers=self.credential_providers
+            )
+
+            session["step"] = "select_credential_provider"
+            return
 
         # ステップ7: 商品選択後 → CartMandate作成（Merchant Agentを経由）
         # 注: この処理は旧フロー（商品個別選択）用。新フロー（カート選択）では使用しない
@@ -1140,201 +1249,64 @@ class ShoppingAgent(BaseAgent):
             )
             await asyncio.sleep(0.3)
 
-            # カート選択フローかどうかを確認
-            selected_cart_mandate = session.get("selected_cart_mandate")
+            # 配送先が既に設定されているかを確認（新フローでは必ず設定されているはず）
+            shipping_address = session.get("shipping_address")
 
-            if selected_cart_mandate:
-                # カート選択フロー：配送先は既にCartMandateに含まれている
-                shipping_info = selected_cart_mandate.get("shipping", {})
-                shipping_address = shipping_info.get("address")
-
-                if shipping_address:
-                    # 配送先が既に設定されている場合はそれを使用
-                    session["shipping_address"] = shipping_address
-                    logger.info(
-                        f"[ShoppingAgent] Using shipping address from CartMandate: "
-                        f"{shipping_address.get('recipient', 'N/A')}"
-                    )
-
-                    yield StreamEvent(
-                        type="agent_text",
-                        content=f"配送先を確認しました：{shipping_address.get('recipient', 'お客様')} 様"
-                    )
-                    await asyncio.sleep(0.3)
-
-                    # 配送先が既に設定されているため、直接支払い方法取得へ進む
-                    # AP2 Step 6-7: Credential Providerから支払い方法を取得
-                    yield StreamEvent(
-                        type="agent_text",
-                        content="Credential Providerから利用可能な支払い方法を取得中..."
-                    )
-                    await asyncio.sleep(0.3)
-
-                    try:
-                        # 選択されたCredential Providerから支払い方法を取得
-                        payment_methods = await self._get_payment_methods_from_cp("user_demo_001", selected_provider["url"])
-
-                        if not payment_methods:
-                            yield StreamEvent(
-                                type="agent_text",
-                                content="申し訳ありません。利用可能な支払い方法が見つかりませんでした。"
-                            )
-                            session["step"] = "error"
-                            return
-
-                        session["available_payment_methods"] = payment_methods
-                        session["step"] = "select_payment_method"
-
-                        # 支払い方法をリッチコンテンツで表示
-                        yield StreamEvent(
-                            type="agent_text",
-                            content="以下の支払い方法から選択してください。"
-                        )
-                        await asyncio.sleep(0.2)
-
-                        yield StreamEvent(
-                            type="payment_method_selection",
-                            payment_methods=payment_methods
-                        )
-                        return
-
-                    except Exception as e:
-                        logger.error(f"[_generate_fixed_response] Payment methods retrieval failed: {e}")
-                        yield StreamEvent(
-                            type="agent_text",
-                            content=f"申し訳ありません。支払い方法の取得に失敗しました: {str(e)}"
-                        )
-                        session["step"] = "error"
-                        return
-
-                else:
-                    # 配送先がない場合は入力を求める（通常はありえない）
-                    logger.warning("[ShoppingAgent] CartMandate does not contain shipping address")
-                    yield StreamEvent(
-                        type="agent_text",
-                        content="配送先情報が見つかりません。配送先を入力してください。"
-                    )
-                    await asyncio.sleep(0.2)
-
-                    # 配送先フォームをリッチコンテンツで送信
-                    yield StreamEvent(
-                        type="shipping_form_request",
-                        form_schema={
-                            "type": "shipping_address",
-                            "fields": [
-                                {
-                                    "name": "recipient",
-                                    "label": "受取人名",
-                                    "type": "text",
-                                    "required": True,
-                                    "placeholder": "山田太郎"
-                                },
-                                {
-                                    "name": "postal_code",
-                                    "label": "郵便番号",
-                                    "type": "text",
-                                    "required": True,
-                                    "placeholder": "150-0001",
-                                    "pattern": "\\d{3}-?\\d{4}"
-                                },
-                                {
-                                    "name": "address_line1",
-                                    "label": "住所1（都道府県・市区町村・番地）",
-                                    "type": "text",
-                                    "required": True,
-                                    "placeholder": "東京都渋谷区神宮前1-1-1"
-                                },
-                                {
-                                    "name": "address_line2",
-                                    "label": "住所2（建物名・部屋番号）",
-                                    "type": "text",
-                                    "required": False,
-                                    "placeholder": "サンプルマンション101"
-                                },
-                                {
-                                    "name": "country",
-                                    "label": "国",
-                                    "type": "select",
-                                    "required": True,
-                                    "options": [
-                                        {"value": "JP", "label": "日本"},
-                                        {"value": "US", "label": "アメリカ"},
-                                        {"value": "GB", "label": "イギリス"}
-                                    ],
-                                    "default": "JP"
-                                }
-                            ]
-                        }
-                    )
-
-                    session["step"] = "input_shipping_address"
-                    return
-
-            else:
-                # 旧フロー（商品個別選択）：配送先入力が必要
+            if not shipping_address:
+                # 万が一配送先が設定されていない場合（エラー処理）
+                logger.warning("[ShoppingAgent] Shipping address not found in session")
                 yield StreamEvent(
                     type="agent_text",
-                    content="配送先を入力してください。最終的な価格（送料込み）を確定するために必要です。"
+                    content="エラー：配送先が設定されていません。最初からやり直してください。"
+                )
+                session["step"] = "error"
+                return
+
+            # AP2 Step 6-7: Credential Providerから支払い方法を取得
+            yield StreamEvent(
+                type="agent_text",
+                content="Credential Providerから利用可能な支払い方法を取得中..."
+            )
+            await asyncio.sleep(0.3)
+
+            try:
+                # 選択されたCredential Providerから支払い方法を取得
+                payment_methods = await self._get_payment_methods_from_cp("user_demo_001", selected_provider["url"])
+
+                if not payment_methods:
+                    yield StreamEvent(
+                        type="agent_text",
+                        content="申し訳ありません。利用可能な支払い方法が見つかりませんでした。"
+                    )
+                    session["step"] = "error"
+                    return
+
+                session["available_payment_methods"] = payment_methods
+                session["step"] = "select_payment_method"
+
+                # 支払い方法をリッチコンテンツで表示
+                yield StreamEvent(
+                    type="agent_text",
+                    content="以下の支払い方法から選択してください。"
                 )
                 await asyncio.sleep(0.2)
 
-                # 配送先フォームをリッチコンテンツで送信
                 yield StreamEvent(
-                    type="shipping_form_request",
-                    form_schema={
-                        "type": "shipping_address",
-                        "fields": [
-                            {
-                                "name": "recipient",
-                                "label": "受取人名",
-                                "type": "text",
-                                "required": True,
-                                "placeholder": "山田太郎"
-                            },
-                            {
-                                "name": "postal_code",
-                                "label": "郵便番号",
-                                "type": "text",
-                                "required": True,
-                                "placeholder": "150-0001",
-                                "pattern": "\\d{3}-?\\d{4}"
-                            },
-                            {
-                                "name": "address_line1",
-                                "label": "住所1（都道府県・市区町村・番地）",
-                                "type": "text",
-                                "required": True,
-                                "placeholder": "東京都渋谷区神宮前1-1-1"
-                            },
-                            {
-                                "name": "address_line2",
-                                "label": "住所2（建物名・部屋番号）",
-                                "type": "text",
-                                "required": False,
-                                "placeholder": "サンプルマンション101"
-                            },
-                            {
-                                "name": "country",
-                                "label": "国",
-                                "type": "select",
-                                "required": True,
-                                "options": [
-                                    {"value": "JP", "label": "日本"},
-                                    {"value": "US", "label": "アメリカ"},
-                                    {"value": "GB", "label": "イギリス"}
-                                ],
-                                "default": "JP"
-                            }
-                        ]
-                    }
+                    type="payment_method_selection",
+                    payment_methods=payment_methods
                 )
-
-                session["step"] = "input_shipping_address"
                 return
 
-            # カート選択フローで配送先が既に設定されている場合、支払い方法取得へ進む
+            except Exception as e:
+                logger.error(f"[_generate_fixed_response] Payment methods retrieval failed: {e}")
+                yield StreamEvent(
+                    type="agent_text",
+                    content=f"申し訳ありません。支払い方法の取得に失敗しました: {str(e)}"
+                )
+                session["step"] = "error"
+                return
 
-        # ステップ7.2: 配送先入力完了 → 支払い方法取得
+        # ステップ7.2: 配送先入力完了 → 支払い方法取得（旧フロー用）
         elif current_step == "input_shipping_address":
             # JSONとしてパース（フロントエンドからJSONで送信される想定）
             try:
