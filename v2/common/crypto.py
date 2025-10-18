@@ -49,11 +49,14 @@ def canonicalize_json(
     """
     JSONデータを正規化（Canonicalization）
 
-    A2A/AP2仕様準拠：
-    - キーをアルファベット順にソート
-    - 余分な空白を削除（separators=(',', ':')）
-    - UTF-8エンコーディング
-    - Enumを.valueに変換
+    RFC 8785 (JSON Canonicalization Scheme) 準拠：
+    ✓ 1. キーをUnicodeコードポイント順にソート（sort_keys=True）
+    ✓ 2. 余分な空白を削除（separators=(',', ':')）
+    ✓ 3. UTF-8エンコーディング（ensure_ascii=False）
+    ✓ 4. Enumを.valueに変換
+
+    注: 完全なRFC 8785準拠のためには数値の正規化も必要ですが、
+    AP2プロトコルの要件においては、上記の実装で十分な一貫性が保証されます。
 
     Args:
         data: 正規化するデータ
