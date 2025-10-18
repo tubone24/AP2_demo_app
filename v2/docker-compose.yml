@@ -114,11 +114,14 @@ services:
       - AGENT_ID=did:ap2:agent:credential_provider
       - AP2_KEYS_DIRECTORY=/app/v2/keys
       - DATABASE_URL=sqlite+aiosqlite:////app/v2/data/credential_provider.db
+      - PAYMENT_NETWORK_URL=http://payment_network:8005
     networks:
       - ap2_network
     depends_on:
       init-keys:
         condition: service_completed_successfully
+      payment_network:
+        condition: service_started
     restart: unless-stopped
 
   # Payment Processor - 決済処理
@@ -144,6 +147,23 @@ services:
     depends_on:
       init-keys:
         condition: service_completed_successfully
+    restart: unless-stopped
+
+  # Payment Network - 決済ネットワーク（Agent Token発行）
+  payment_network:
+    build:
+      context: ..
+      dockerfile: v2/services/payment_network/Dockerfile
+    container_name: ap2_payment_network
+    ports:
+      - "8005:8005"
+    env_file:
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+      - NETWORK_NAME=DemoPaymentNetwork
+    networks:
+      - ap2_network
     restart: unless-stopped
 
   # Frontend - Next.js

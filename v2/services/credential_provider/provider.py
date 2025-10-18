@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timezone
 import logging
+import httpx
 
 from fastapi import HTTPException
 from fido2.webauthn import AttestationObject
@@ -52,6 +53,9 @@ class CredentialProviderService(BaseAgent):
         import os
         database_url = os.getenv("DATABASE_URL", "sqlite+aiosqlite:////app/v2/data/credential_provider.db")
         self.db_manager = DatabaseManager(database_url=database_url)
+
+        # 決済ネットワークURL（環境変数から読み込み）
+        self.payment_network_url = os.getenv("PAYMENT_NETWORK_URL", "http://payment_network:8005")
 
         # Device Attestation Manager（既存のap2_crypto.pyを使用）
         self.attestation_manager = DeviceAttestationManager(self.key_manager)
@@ -263,12 +267,20 @@ class CredentialProviderService(BaseAgent):
                     # トークン発行
                     token = self._generate_token(payment_mandate, attestation)
 
+                    # AP2 Step 23: 決済ネットワークへのトークン化呼び出し
+                    agent_token = await self._request_agent_token_from_network(
+                        payment_mandate=payment_mandate,
+                        attestation=attestation,
+                        payment_method_token=token
+                    )
+
                     # データベースに保存
                     await self._save_attestation(
                         user_id=payment_mandate.get("payer_id", "unknown"),
                         attestation_raw=attestation,
                         verified=True,
-                        token=token
+                        token=token,
+                        agent_token=agent_token
                     )
 
                     return AttestationVerifyResponse(
@@ -277,7 +289,8 @@ class CredentialProviderService(BaseAgent):
                         details={
                             "attestation_type": "mock_passkey",
                             "timestamp": datetime.now(timezone.utc).isoformat(),
-                            "mode": "demo"
+                            "mode": "demo",
+                            "agent_token": agent_token
                         }
                     )
 
@@ -318,12 +331,21 @@ class CredentialProviderService(BaseAgent):
                         # トークン発行
                         token = self._generate_token(payment_mandate, attestation)
 
+                        # AP2 Step 23: 決済ネットワークへのトークン化呼び出し
+                        # PaymentMandateと支払い方法トークンから、Agent Tokenを取得
+                        agent_token = await self._request_agent_token_from_network(
+                            payment_mandate=payment_mandate,
+                            attestation=attestation,
+                            payment_method_token=token
+                        )
+
                         # データベースに保存
                         await self._save_attestation(
                             user_id=payment_mandate.get("payer_id", "unknown"),
                             attestation_raw=attestation,
                             verified=True,
-                            token=token
+                            token=token,
+                            agent_token=agent_token
                         )
 
                         return AttestationVerifyResponse(
@@ -332,7 +354,8 @@ class CredentialProviderService(BaseAgent):
                             details={
                                 "attestation_type": attestation.get("attestation_type", "passkey"),
                                 "timestamp": datetime.now(timezone.utc).isoformat(),
-                                "counter": new_counter
+                                "counter": new_counter,
+                                "agent_token": agent_token  # 決済ネットワークから取得したAgent Token
                             }
                         )
                     else:
@@ -723,6 +746,78 @@ class CredentialProviderService(BaseAgent):
     # 内部メソッド
     # ========================================
 
+    async def _request_agent_token_from_network(
+        self,
+        payment_mandate: Dict[str, Any],
+        attestation: Dict[str, Any],
+        payment_method_token: str
+    ) -> Optional[str]:
+        """
+        決済ネットワークへのトークン化呼び出し（AP2 Step 23）
+
+        CPが決済ネットワークにHTTPリクエストを送信し、Agent Tokenを取得
+
+        Args:
+            payment_mandate: PaymentMandate オブジェクト
+            attestation: デバイス認証情報
+            payment_method_token: CPが発行した支払い方法トークン
+
+        Returns:
+            Agent Token（決済ネットワークが発行）、エラーの場合はNone
+        """
+        try:
+            logger.info(
+                f"[CredentialProvider] Requesting Agent Token from Payment Network: "
+                f"payment_mandate_id={payment_mandate.get('id')}"
+            )
+
+            # 決済ネットワークにHTTP POSTリクエストを送信
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    f"{self.payment_network_url}/network/tokenize",
+                    json={
+                        "payment_mandate": payment_mandate,
+                        "attestation": attestation,
+                        "payment_method_token": payment_method_token,
+                        "transaction_context": {
+                            "credential_provider_id": self.agent_id,
+                            "timestamp": datetime.now(timezone.utc).isoformat()
+                        }
+                    },
+                    timeout=10.0  # 10秒タイムアウト
+                )
+
+                if response.status_code == 200:
+                    data = response.json()
+                    agent_token = data.get("agent_token")
+
+                    logger.info(
+                        f"[CredentialProvider] Received Agent Token from Payment Network: "
+                        f"{agent_token[:32] if agent_token else 'None'}..., "
+                        f"network_name={data.get('network_name')}"
+                    )
+
+                    return agent_token
+                else:
+                    logger.error(
+                        f"[CredentialProvider] Failed to get Agent Token from Payment Network: "
+                        f"status_code={response.status_code}, response={response.text}"
+                    )
+                    return None
+
+        except httpx.RequestError as e:
+            logger.error(
+                f"[CredentialProvider] HTTP request error while requesting Agent Token: {e}",
+                exc_info=True
+            )
+            return None
+        except Exception as e:
+            logger.error(
+                f"[CredentialProvider] Unexpected error while requesting Agent Token: {e}",
+                exc_info=True
+            )
+            return None
+
     def _generate_token(self, payment_mandate: Dict[str, Any], attestation: Dict[str, Any]) -> str:
         """
         認証トークン発行（WebAuthn attestation検証後）
@@ -747,7 +842,8 @@ class CredentialProviderService(BaseAgent):
         user_id: str,
         attestation_raw: Dict[str, Any],
         verified: bool,
-        token: Optional[str] = None
+        token: Optional[str] = None,
+        agent_token: Optional[str] = None
     ):
         """
         Attestationをデータベースに保存
@@ -766,6 +862,7 @@ class CredentialProviderService(BaseAgent):
                 verified=1 if verified else 0,  # SQLiteはboolを0/1で保存
                 verification_details=json.dumps({
                     "token": token,
+                    "agent_token": agent_token,  # 決済ネットワークから取得したAgent Token
                     "verified_at": datetime.now(timezone.utc).isoformat()
                 }) if token else None
             )
@@ -773,4 +870,7 @@ class CredentialProviderService(BaseAgent):
             session.add(attestation_record)
             await session.commit()
 
-        logger.info(f"[CredentialProvider] Saved attestation: user={user_id}, verified={verified}")
+        logger.info(
+            f"[CredentialProvider] Saved attestation: "
+            f"user={user_id}, verified={verified}, agent_token={agent_token[:32] if agent_token else 'None'}..."
+        )
