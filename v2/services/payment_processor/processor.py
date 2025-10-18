@@ -266,8 +266,33 @@ class PaymentProcessorService(BaseAgent):
         payment_mandate = payload.get("payment_mandate", payload)  # フォールバック対応
         cart_mandate = payload.get("cart_mandate")
 
-        if not cart_mandate:
-            logger.warning("[PaymentProcessor] CartMandate not found in payload, receipt generation may fail")
+        # AP2仕様準拠：PaymentMandate検証
+        try:
+            self._validate_payment_mandate(payment_mandate)
+        except Exception as e:
+            logger.error(f"[PaymentProcessor] PaymentMandate validation failed: {e}")
+            return {
+                "type": "ap2.errors.Error",
+                "id": str(uuid.uuid4()),
+                "payload": {
+                    "error_code": "invalid_payment_mandate",
+                    "error_message": str(e)
+                }
+            }
+
+        # AP2仕様準拠：Mandate連鎖検証
+        try:
+            self._validate_mandate_chain(payment_mandate, cart_mandate)
+        except Exception as e:
+            logger.error(f"[PaymentProcessor] Mandate chain validation failed: {e}")
+            return {
+                "type": "ap2.errors.Error",
+                "id": str(uuid.uuid4()),
+                "payload": {
+                    "error_code": "mandate_chain_broken",
+                    "error_message": str(e)
+                }
+            }
 
         # 決済処理実行
         transaction_id = f"txn_{uuid.uuid4().hex[:12]}"
@@ -330,6 +355,511 @@ class PaymentProcessorService(BaseAgent):
             f"[PaymentProcessor] PaymentMandate validation passed: {payment_mandate['id']}, "
             f"user_authorization present: {user_authorization[:20] if user_authorization else 'None'}..."
         )
+
+    def _verify_user_authorization_jwt(self, user_authorization_jwt: str) -> Dict[str, Any]:
+        """
+        user_authorization JWTを検証
+
+        JWT構造（AP2仕様準拠）:
+        - Header: { "alg": "ES256", "kid": "did:ap2:user:xxx#key-1", "typ": "JWT" }
+        - Payload: {
+            "iss": "did:ap2:user:xxx",
+            "aud": "did:ap2:agent:payment_processor",
+            "iat": <timestamp>,
+            "exp": <timestamp>,
+            "nonce": <random>,
+            "transaction_data": {
+              "cart_mandate_hash": "<hash>",
+              "payment_mandate_hash": "<hash>"
+            }
+          }
+        - Signature: ECDSA署名
+
+        検証項目：
+        1. JWT形式の検証（header.payload.signature）
+        2. Base64url デコード
+        3. Header検証（alg, kid, typ）
+        4. Payload検証（iss, aud, iat, exp, nonce, transaction_data）
+        5. 署名検証（ES256: ECDSA with P-256 and SHA-256）
+
+        Args:
+            user_authorization_jwt: JWT文字列
+
+        Returns:
+            Dict[str, Any]: デコードされたペイロード
+
+        Raises:
+            ValueError: JWT検証失敗時
+        """
+        import base64
+        import json
+
+        try:
+            # 1. JWT形式の検証（header.payload.signature）
+            jwt_parts = user_authorization_jwt.split('.')
+            if len(jwt_parts) != 3:
+                raise ValueError(
+                    f"Invalid JWT format: expected 3 parts (header.payload.signature), "
+                    f"got {len(jwt_parts)} parts"
+                )
+
+            header_b64, payload_b64, signature_b64 = jwt_parts
+
+            # 2. Base64url デコード
+            def base64url_decode(data):
+                # パディング追加（base64url は = パディングを省略）
+                padding = '=' * (4 - len(data) % 4)
+                return base64.urlsafe_b64decode(data + padding)
+
+            header_json = base64url_decode(header_b64).decode('utf-8')
+            payload_json = base64url_decode(payload_b64).decode('utf-8')
+
+            header = json.loads(header_json)
+            payload = json.loads(payload_json)
+
+            # 3. Header検証
+            if header.get("alg") != "ES256":
+                logger.warning(
+                    f"[_verify_user_authorization_jwt] Unexpected algorithm: {header.get('alg')}, "
+                    f"expected ES256"
+                )
+
+            if not header.get("kid"):
+                raise ValueError("Missing 'kid' (key ID) in JWT header")
+
+            if header.get("typ") != "JWT":
+                logger.warning(
+                    f"[_verify_user_authorization_jwt] Unexpected type: {header.get('typ')}, "
+                    f"expected JWT"
+                )
+
+            # 4. Payload検証
+            required_claims = ["iss", "aud", "iat", "exp", "nonce", "transaction_data"]
+            for claim in required_claims:
+                if claim not in payload:
+                    raise ValueError(f"Missing required claim in JWT payload: {claim}")
+
+            # aud検証（audienceはPayment Processorであるべき）
+            if payload.get("aud") != "did:ap2:agent:payment_processor":
+                logger.warning(
+                    f"[_verify_user_authorization_jwt] Unexpected audience: {payload.get('aud')}, "
+                    f"expected did:ap2:agent:payment_processor"
+                )
+
+            # exp検証（有効期限）
+            import time
+            current_timestamp = int(time.time())
+            if payload.get("exp", 0) < current_timestamp:
+                raise ValueError(
+                    f"JWT has expired: exp={payload.get('exp')}, "
+                    f"current={current_timestamp}"
+                )
+
+            # transaction_data検証
+            transaction_data = payload.get("transaction_data", {})
+            if not isinstance(transaction_data, dict):
+                raise ValueError("transaction_data must be a dictionary")
+
+            required_tx_fields = ["cart_mandate_hash", "payment_mandate_hash"]
+            for field in required_tx_fields:
+                if field not in transaction_data:
+                    raise ValueError(f"Missing required field in transaction_data: {field}")
+
+            # 5. 署名検証（ES256: ECDSA with P-256 and SHA-256）
+            # KID（Key ID）からDIDドキュメント経由で公開鍵を取得
+            kid = header.get("kid")
+
+            # DID Resolverで公開鍵を取得
+            from v2.common.did_resolver import DIDResolver
+            from cryptography.hazmat.primitives import serialization
+            from cryptography.hazmat.primitives.asymmetric import ec
+            from cryptography.hazmat.primitives import hashes
+            from cryptography.exceptions import InvalidSignature
+
+            did_resolver = DIDResolver(self.key_manager)
+            public_key_pem = did_resolver.resolve_public_key(kid)
+
+            if not public_key_pem:
+                logger.warning(
+                    f"[_verify_user_authorization_jwt] Public key not found for KID: {kid}. "
+                    f"Skipping signature verification (demo mode)."
+                )
+            else:
+                try:
+                    # PEM形式の公開鍵を読み込み
+                    public_key = serialization.load_pem_public_key(
+                        public_key_pem.encode('utf-8')
+                    )
+
+                    # 署名対象データ（header_b64.payload_b64）
+                    message_to_verify = f"{header_b64}.{payload_b64}".encode('utf-8')
+
+                    # 署名をデコード
+                    signature_bytes = base64url_decode(signature_b64)
+
+                    # ECDSA署名を検証
+                    public_key.verify(
+                        signature_bytes,
+                        message_to_verify,
+                        ec.ECDSA(hashes.SHA256())
+                    )
+
+                    logger.info(
+                        f"[_verify_user_authorization_jwt] ✓ JWT signature verified successfully"
+                    )
+
+                except InvalidSignature:
+                    raise ValueError(f"Invalid JWT signature: signature verification failed")
+                except Exception as e:
+                    raise ValueError(f"JWT signature verification error: {e}")
+
+            logger.info(
+                f"[_verify_user_authorization_jwt] JWT validation passed: "
+                f"iss={payload.get('iss')}, exp={payload.get('exp')}, "
+                f"cart_hash={transaction_data.get('cart_mandate_hash', 'N/A')[:16]}..., "
+                f"payment_hash={transaction_data.get('payment_mandate_hash', 'N/A')[:16]}..."
+            )
+
+            return payload
+
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON in JWT: {e}")
+        except Exception as e:
+            logger.error(f"[_verify_user_authorization_jwt] Verification failed: {e}", exc_info=True)
+            raise ValueError(f"user_authorization JWT verification failed: {e}")
+
+    def _verify_merchant_authorization_jwt(self, merchant_authorization_jwt: str) -> Dict[str, Any]:
+        """
+        merchant_authorization JWTを検証
+
+        JWT構造（AP2仕様準拠）:
+        - Header: { "alg": "ES256", "kid": "did:ap2:merchant:xxx#key-1", "typ": "JWT" }
+        - Payload: {
+            "iss": "did:ap2:merchant:xxx",
+            "sub": "did:ap2:merchant:xxx",
+            "aud": "did:ap2:agent:payment_processor",
+            "iat": <timestamp>,
+            "exp": <timestamp>,
+            "jti": <unique_id>,
+            "cart_hash": "<cart_contents_hash>"
+          }
+        - Signature: ECDSA署名
+
+        検証項目：
+        1. JWT形式の検証（header.payload.signature）
+        2. Base64url デコード
+        3. Header検証（alg, kid, typ）
+        4. Payload検証（iss, sub, aud, iat, exp, jti, cart_hash）
+        5. 署名検証（ES256: ECDSA with P-256 and SHA-256）
+
+        Args:
+            merchant_authorization_jwt: JWT文字列
+
+        Returns:
+            Dict[str, Any]: デコードされたペイロード
+
+        Raises:
+            ValueError: JWT検証失敗時
+        """
+        import base64
+        import json
+
+        try:
+            # 1. JWT形式の検証（header.payload.signature）
+            jwt_parts = merchant_authorization_jwt.split('.')
+            if len(jwt_parts) != 3:
+                raise ValueError(
+                    f"Invalid JWT format: expected 3 parts (header.payload.signature), "
+                    f"got {len(jwt_parts)} parts"
+                )
+
+            header_b64, payload_b64, signature_b64 = jwt_parts
+
+            # 2. Base64url デコード
+            def base64url_decode(data):
+                # パディング追加（base64url は = パディングを省略）
+                padding = '=' * (4 - len(data) % 4)
+                return base64.urlsafe_b64decode(data + padding)
+
+            header_json = base64url_decode(header_b64).decode('utf-8')
+            payload_json = base64url_decode(payload_b64).decode('utf-8')
+
+            header = json.loads(header_json)
+            payload = json.loads(payload_json)
+
+            # 3. Header検証
+            if header.get("alg") != "ES256":
+                logger.warning(
+                    f"[_verify_merchant_authorization_jwt] Unexpected algorithm: {header.get('alg')}, "
+                    f"expected ES256"
+                )
+
+            if not header.get("kid"):
+                raise ValueError("Missing 'kid' (key ID) in JWT header")
+
+            if header.get("typ") != "JWT":
+                logger.warning(
+                    f"[_verify_merchant_authorization_jwt] Unexpected type: {header.get('typ')}, "
+                    f"expected JWT"
+                )
+
+            # 4. Payload検証
+            required_claims = ["iss", "sub", "aud", "iat", "exp", "jti", "cart_hash"]
+            for claim in required_claims:
+                if claim not in payload:
+                    raise ValueError(f"Missing required claim in JWT payload: {claim}")
+
+            # iss と sub は同じであるべき（merchantが自分自身に署名）
+            if payload.get("iss") != payload.get("sub"):
+                logger.warning(
+                    f"[_verify_merchant_authorization_jwt] iss and sub differ: "
+                    f"iss={payload.get('iss')}, sub={payload.get('sub')}"
+                )
+
+            # aud検証（audienceはPayment Processorであるべき）
+            if payload.get("aud") != "did:ap2:agent:payment_processor":
+                logger.warning(
+                    f"[_verify_merchant_authorization_jwt] Unexpected audience: {payload.get('aud')}, "
+                    f"expected did:ap2:agent:payment_processor"
+                )
+
+            # exp検証（有効期限）
+            import time
+            current_timestamp = int(time.time())
+            if payload.get("exp", 0) < current_timestamp:
+                raise ValueError(
+                    f"JWT has expired: exp={payload.get('exp')}, "
+                    f"current={current_timestamp}"
+                )
+
+            # cart_hash検証（存在確認）
+            cart_hash = payload.get("cart_hash")
+            if not cart_hash or len(cart_hash) < 16:
+                raise ValueError(f"Invalid cart_hash in JWT payload: {cart_hash}")
+
+            # 5. 署名検証（ES256: ECDSA with P-256 and SHA-256）
+            # KID（Key ID）からDIDドキュメント経由で公開鍵を取得
+            kid = header.get("kid")
+
+            # DID Resolverで公開鍵を取得
+            from v2.common.did_resolver import DIDResolver
+            from cryptography.hazmat.primitives import serialization
+            from cryptography.hazmat.primitives.asymmetric import ec
+            from cryptography.hazmat.primitives import hashes
+            from cryptography.exceptions import InvalidSignature
+
+            did_resolver = DIDResolver(self.key_manager)
+            public_key_pem = did_resolver.resolve_public_key(kid)
+
+            if not public_key_pem:
+                logger.warning(
+                    f"[_verify_merchant_authorization_jwt] Public key not found for KID: {kid}. "
+                    f"Skipping signature verification (demo mode)."
+                )
+            else:
+                try:
+                    # PEM形式の公開鍵を読み込み
+                    public_key = serialization.load_pem_public_key(
+                        public_key_pem.encode('utf-8')
+                    )
+
+                    # 署名対象データ（header_b64.payload_b64）
+                    message_to_verify = f"{header_b64}.{payload_b64}".encode('utf-8')
+
+                    # 署名をデコード
+                    signature_bytes = base64url_decode(signature_b64)
+
+                    # ECDSA署名を検証
+                    public_key.verify(
+                        signature_bytes,
+                        message_to_verify,
+                        ec.ECDSA(hashes.SHA256())
+                    )
+
+                    logger.info(
+                        f"[_verify_merchant_authorization_jwt] ✓ JWT signature verified successfully"
+                    )
+
+                except InvalidSignature:
+                    raise ValueError(f"Invalid JWT signature: signature verification failed")
+                except Exception as e:
+                    raise ValueError(f"JWT signature verification error: {e}")
+
+            logger.info(
+                f"[_verify_merchant_authorization_jwt] JWT validation passed: "
+                f"iss={payload.get('iss')}, exp={payload.get('exp')}, "
+                f"jti={payload.get('jti')[:16]}..., "
+                f"cart_hash={cart_hash[:16]}..."
+            )
+
+            return payload
+
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON in JWT: {e}")
+        except Exception as e:
+            logger.error(f"[_verify_merchant_authorization_jwt] Verification failed: {e}", exc_info=True)
+            raise ValueError(f"merchant_authorization JWT verification failed: {e}")
+
+    def _validate_mandate_chain(
+        self,
+        payment_mandate: Dict[str, Any],
+        cart_mandate: Optional[Dict[str, Any]] = None
+    ) -> bool:
+        """
+        AP2仕様準拠のMandate連鎖検証
+
+        AP2仕様では、以下の連鎖が必須：
+        IntentMandate → CartMandate → PaymentMandate
+
+        検証項目：
+        1. PaymentMandateがCartMandateを正しく参照している
+        2. CartMandateがIntentMandateを正しく参照している（オプション）
+        3. 各Mandateのハッシュ整合性
+        4. 署名検証（merchant_authorization、user_authorization）
+
+        Args:
+            payment_mandate: PaymentMandate
+            cart_mandate: CartMandate（VDC交換で受け取る）
+
+        Returns:
+            bool: 検証成功時True
+
+        Raises:
+            ValueError: 検証失敗時
+        """
+        # 1. CartMandateは必須（AP2仕様）
+        if not cart_mandate:
+            raise ValueError(
+                "AP2 specification violation: CartMandate is required for PaymentMandate validation. "
+                "VDC exchange principle requires CartMandate to be provided by Shopping Agent."
+            )
+
+        # 2. PaymentMandateがCartMandateを正しく参照しているか
+        cart_mandate_id_in_payment = payment_mandate.get("cart_mandate_id")
+        cart_mandate_id = cart_mandate.get("id")
+
+        if cart_mandate_id_in_payment != cart_mandate_id:
+            raise ValueError(
+                f"AP2 specification violation: PaymentMandate references cart_mandate_id={cart_mandate_id_in_payment}, "
+                f"but received CartMandate has id={cart_mandate_id}"
+            )
+
+        logger.info(
+            f"[PaymentProcessor] Mandate chain validation: "
+            f"PaymentMandate({payment_mandate.get('id')}) → "
+            f"CartMandate({cart_mandate_id})"
+        )
+
+        # 3. user_authorization JWT検証
+        user_authorization = payment_mandate.get("user_authorization")
+        if user_authorization:
+            try:
+                user_payload = self._verify_user_authorization_jwt(user_authorization)
+                logger.info(
+                    f"[PaymentProcessor] user_authorization JWT verified: "
+                    f"iss={user_payload.get('iss')}"
+                )
+
+                # CartMandateハッシュの検証（JWTペイロード内のハッシュと実際のハッシュを比較）
+                transaction_data = user_payload.get("transaction_data", {})
+                cart_hash_in_jwt = transaction_data.get("cart_mandate_hash")
+                if cart_hash_in_jwt:
+                    logger.info(
+                        f"[PaymentProcessor] CartMandate hash in user_authorization: "
+                        f"{cart_hash_in_jwt[:16]}..."
+                    )
+
+                    # 実際のCartMandateハッシュを計算（SHA-256）
+                    from v2.common.crypto import compute_mandate_hash
+
+                    actual_cart_hash = compute_mandate_hash(cart_mandate, hash_format='hex')
+
+                    # ハッシュを比較
+                    if actual_cart_hash != cart_hash_in_jwt:
+                        raise ValueError(
+                            f"CartMandate hash mismatch: "
+                            f"JWT contains {cart_hash_in_jwt[:16]}..., "
+                            f"but actual hash is {actual_cart_hash[:16]}..."
+                        )
+
+                    logger.info(
+                        f"[PaymentProcessor] ✓ CartMandate hash verified: {actual_cart_hash[:16]}..."
+                    )
+
+            except ValueError as e:
+                logger.error(f"[PaymentProcessor] user_authorization JWT verification failed: {e}")
+                raise ValueError(f"user_authorization JWT verification failed: {e}")
+        else:
+            logger.warning(
+                "[PaymentProcessor] PaymentMandate does not have user_authorization. "
+                "This is a spec violation, but continuing for demo purposes."
+            )
+
+        # 4. CartMandateのMerchant署名検証（merchant_authorization JWT）
+        merchant_authorization = cart_mandate.get("merchant_authorization")
+        if merchant_authorization:
+            try:
+                merchant_payload = self._verify_merchant_authorization_jwt(merchant_authorization)
+                logger.info(
+                    f"[PaymentProcessor] merchant_authorization JWT verified: "
+                    f"iss={merchant_payload.get('iss')}"
+                )
+
+                # CartMandateハッシュの検証（JWTペイロード内のハッシュと実際のハッシュを比較）
+                cart_hash_in_jwt = merchant_payload.get("cart_hash")
+                if cart_hash_in_jwt:
+                    logger.info(
+                        f"[PaymentProcessor] CartMandate hash in merchant_authorization: "
+                        f"{cart_hash_in_jwt[:16]}..."
+                    )
+
+                    # 実際のCartMandateハッシュを計算（SHA-256）
+                    from v2.common.crypto import compute_mandate_hash
+
+                    actual_cart_hash = compute_mandate_hash(cart_mandate, hash_format='hex')
+
+                    # ハッシュを比較
+                    if actual_cart_hash != cart_hash_in_jwt:
+                        raise ValueError(
+                            f"CartMandate hash mismatch in merchant_authorization: "
+                            f"JWT contains {cart_hash_in_jwt[:16]}..., "
+                            f"but actual hash is {actual_cart_hash[:16]}..."
+                        )
+
+                    logger.info(
+                        f"[PaymentProcessor] ✓ CartMandate hash verified (merchant_authorization): "
+                        f"{actual_cart_hash[:16]}..."
+                    )
+
+            except ValueError as e:
+                logger.error(f"[PaymentProcessor] merchant_authorization JWT verification failed: {e}")
+                raise ValueError(f"merchant_authorization JWT verification failed: {e}")
+        else:
+            logger.warning(
+                "[PaymentProcessor] CartMandate does not have merchant_authorization. "
+                "This is acceptable for demo environments, but production requires merchant signature."
+            )
+
+        # 5. IntentMandateへの参照確認（オプション）
+        intent_mandate_id_in_payment = payment_mandate.get("intent_mandate_id")
+        intent_mandate_id_in_cart = cart_mandate.get("intent_mandate_id")
+
+        if intent_mandate_id_in_payment and intent_mandate_id_in_cart:
+            if intent_mandate_id_in_payment != intent_mandate_id_in_cart:
+                raise ValueError(
+                    f"AP2 specification violation: PaymentMandate references intent_mandate_id={intent_mandate_id_in_payment}, "
+                    f"but CartMandate references intent_mandate_id={intent_mandate_id_in_cart}"
+                )
+
+            logger.info(
+                f"[PaymentProcessor] Full mandate chain validated: "
+                f"IntentMandate({intent_mandate_id_in_cart}) → "
+                f"CartMandate({cart_mandate_id}) → "
+                f"PaymentMandate({payment_mandate.get('id')})"
+            )
+
+        logger.info("[PaymentProcessor] Mandate chain validation passed")
+        return True
 
     async def _process_payment_mock(
         self,
