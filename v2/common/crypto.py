@@ -151,9 +151,10 @@ def compute_mandate_hash(
         str: SHA-256ハッシュ（hex形式またはbase64形式）
     """
     # 署名フィールドを除外してCanonical JSONを生成
+    # merchant_authorizationも除外（内部にcart_hashを含むため循環参照防止）
     canonical_json = canonicalize_json(
         mandate,
-        exclude_keys=['user_signature', 'merchant_signature', 'mandate_metadata', 'proof']
+        exclude_keys=['user_signature', 'merchant_signature', 'merchant_authorization', 'mandate_metadata', 'proof']
     )
 
     # SHA-256ハッシュを計算
