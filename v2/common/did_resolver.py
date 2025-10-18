@@ -49,38 +49,89 @@ class DIDResolver:
         self._init_demo_registry()
 
     def _init_demo_registry(self):
-        """デモ環境用のDIDレジストリを初期化"""
+        """
+        デモ環境用のDIDレジストリを初期化
+
+        セキュリティ要件（専門家の指摘対応）：
+        1. 永続化されたDIDドキュメントJSONファイルを優先的に読み込む
+        2. DIDドキュメントが存在しない場合は、KeyManagerから公開鍵を取得して生成
+        3. これにより、init_keys.pyで生成したDIDドキュメントを使用し、一貫性を保つ
+        """
+        import json
+        import os
+
+        # 永続化ストレージのDIDドキュメントディレクトリ
+        did_docs_dir = Path(os.getenv("AP2_KEYS_DIRECTORY", "./keys")).parent / "data" / "did_documents"
+
         # AP2デモで使用する全エージェントのDIDを登録
         demo_agents = [
-            "shopping_agent",
-            "merchant_agent",
-            "merchant",
-            "credential_provider",
-            "payment_processor"
+            {"agent_key": "shopping_agent", "did": "did:ap2:agent:shopping_agent"},
+            {"agent_key": "merchant_agent", "did": "did:ap2:agent:merchant_agent"},
+            {"agent_key": "merchant", "did": "did:ap2:merchant:demo_merchant"},
+            {"agent_key": "credential_provider", "did": "did:ap2:cp:demo_cp"},
+            {"agent_key": "payment_processor", "did": "did:ap2:agent:payment_processor"}
         ]
 
-        for agent_key in demo_agents:
-            did = f"did:ap2:agent:{agent_key}"
+        for agent in demo_agents:
+            agent_key = agent["agent_key"]
+            did = agent["did"]
+            did_doc_file = did_docs_dir / f"{agent_key}_did.json"
 
             try:
-                # KeyManagerから公開鍵を読み込み（ECPublicKeyオブジェクト）
-                public_key_obj = self.key_manager.load_public_key(agent_key)
+                # 1. 永続化されたDIDドキュメントJSONを読み込み（推奨）
+                if did_doc_file.exists():
+                    logger.info(
+                        f"[DIDResolver] 永続化されたDIDドキュメントを読み込み中: {did_doc_file}"
+                    )
+                    did_doc_dict = json.loads(did_doc_file.read_text())
 
-                # PEM文字列に変換
-                public_key_pem = self.key_manager.public_key_to_pem(public_key_obj)
+                    # DIDDocumentモデルに変換
+                    # W3C準拠のDIDドキュメントからVerificationMethodを抽出
+                    verification_methods = []
+                    for vm in did_doc_dict.get("verificationMethod", []):
+                        verification_methods.append(VerificationMethod(
+                            id=vm["id"],
+                            type=vm["type"],
+                            controller=vm["controller"],
+                            publicKeyPem=vm["publicKeyPem"]
+                        ))
 
-                # DIDドキュメントを生成
-                did_doc = self._create_did_document(did, agent_key, public_key_pem)
+                    did_doc = DIDDocument(
+                        id=did_doc_dict["id"],
+                        verificationMethod=verification_methods,
+                        authentication=did_doc_dict.get("authentication", []),
+                        assertionMethod=did_doc_dict.get("assertionMethod", [])
+                    )
 
-                # レジストリに登録
-                self._did_registry[did] = did_doc
+                    # レジストリに登録
+                    self._did_registry[did] = did_doc
+                    logger.info(f"[DIDResolver] ✓ 永続化DIDドキュメントを登録: {did}")
 
-                logger.info(f"[DIDResolver] Registered DID: {did}")
+                # 2. DIDドキュメントが存在しない場合は、KeyManagerから生成（開発時）
+                else:
+                    logger.warning(
+                        f"[DIDResolver] ⚠️  永続化されたDIDドキュメントが見つかりません: {did_doc_file}\n"
+                        f"   KeyManagerから公開鍵を取得してDIDドキュメントを生成します。\n"
+                        f"   本番環境では v2/scripts/init_keys.py を実行してください。"
+                    )
+
+                    # KeyManagerから公開鍵を読み込み（ECPublicKeyオブジェクト）
+                    public_key_obj = self.key_manager.load_public_key(agent_key)
+
+                    # PEM文字列に変換
+                    public_key_pem = self.key_manager.public_key_to_pem(public_key_obj)
+
+                    # DIDドキュメントを生成
+                    did_doc = self._create_did_document(did, agent_key, public_key_pem)
+
+                    # レジストリに登録
+                    self._did_registry[did] = did_doc
+                    logger.info(f"[DIDResolver] ✓ KeyManagerからDIDドキュメントを生成・登録: {did}")
 
             except Exception as e:
                 logger.warning(
-                    f"[DIDResolver] Failed to register DID {did}: {e}. "
-                    f"Public key may not exist yet."
+                    f"[DIDResolver] DIDの初期化に失敗: {did}: {e}. "
+                    f"公開鍵がまだ存在しない可能性があります。"
                 )
 
     def _create_did_document(

@@ -418,6 +418,7 @@ class A2ADataPart(BaseModel):
         "ap2.mandates.CartMandate",
         "ap2.requests.CartRequest",
         "ap2.responses.CartMandatePending",
+        "ap2.responses.CartCandidates",
         "ap2.mandates.PaymentMandate",
         "ap2.responses.PaymentResult",
         "ap2.requests.ProductSearch",
@@ -592,8 +593,14 @@ class ProcessPaymentRequest(BaseModel):
     POST /process リクエスト
 
     支払い実行（モック）
+
+    AP2仕様準拠：
+    - payment_mandate: 支払い情報（最小限のペイロード）
+    - cart_mandate: カート詳細情報（領収書生成に必要）
+    - credential_token: 認証トークン（オプショナル）
     """
     payment_mandate: Dict[str, Any]
+    cart_mandate: Dict[str, Any]  # 領収書生成に必要
     credential_token: Optional[str] = None
 
 

@@ -1,6 +1,22 @@
 version: "3.8"
 
 services:
+  # Init Keys - キーペア初期化（起動時に1回実行）
+  init-keys:
+    build:
+      context: ..
+      dockerfile: v2/services/shopping_agent/Dockerfile
+    container_name: ap2_init_keys
+    working_dir: /app
+    volumes:
+      - keys:/app/v2/keys
+      - data:/app/v2/data
+    env_file:
+      - .env
+    command: python v2/scripts/init_keys.py
+    networks:
+      - ap2_network
+
   # Shopping Agent - ユーザー向けエージェント
   shopping_agent:
     build:
@@ -10,8 +26,10 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - ../keys:/app/keys
-      - ./data:/app/v2/data
+      - keys:/app/v2/keys
+      - data:/app/v2/data
+    env_file:
+      - .env
     environment:
       - PYTHONUNBUFFERED=1
       - AGENT_ID=did:ap2:agent:shopping_agent
@@ -19,9 +37,13 @@ services:
       - MERCHANT_URL=http://merchant:8002
       - CREDENTIAL_PROVIDER_URL=http://credential_provider:8003
       - PAYMENT_PROCESSOR_URL=http://payment_processor:8004
-      - AP2_KEYS_DIRECTORY=/app/keys
+      - AP2_KEYS_DIRECTORY=/app/v2/keys
+      - DATABASE_URL=sqlite+aiosqlite:////app/v2/data/shopping_agent.db
     networks:
       - ap2_network
+    depends_on:
+      init-keys:
+        condition: service_completed_successfully
     restart: unless-stopped
 
   # Merchant Agent - 商品検索・CartMandate作成
@@ -33,14 +55,20 @@ services:
     ports:
       - "8001:8001"
     volumes:
-      - ../keys:/app/keys
-      - ./data:/app/v2/data
+      - keys:/app/v2/keys
+      - data:/app/v2/data
+    env_file:
+      - .env
     environment:
       - PYTHONUNBUFFERED=1
       - AGENT_ID=did:ap2:agent:merchant_agent
-      - AP2_KEYS_DIRECTORY=/app/keys
+      - AP2_KEYS_DIRECTORY=/app/v2/keys
+      - DATABASE_URL=sqlite+aiosqlite:////app/v2/data/merchant_agent.db
     networks:
       - ap2_network
+    depends_on:
+      init-keys:
+        condition: service_completed_successfully
     restart: unless-stopped
 
   # Merchant - CartMandate署名
@@ -52,14 +80,20 @@ services:
     ports:
       - "8002:8002"
     volumes:
-      - ../keys:/app/keys
-      - ./data:/app/v2/data
+      - keys:/app/v2/keys
+      - data:/app/v2/data
+    env_file:
+      - .env
     environment:
       - PYTHONUNBUFFERED=1
       - AGENT_ID=did:ap2:agent:merchant
-      - AP2_KEYS_DIRECTORY=/app/keys
+      - AP2_KEYS_DIRECTORY=/app/v2/keys
+      - DATABASE_URL=sqlite+aiosqlite:////app/v2/data/merchant.db
     networks:
       - ap2_network
+    depends_on:
+      init-keys:
+        condition: service_completed_successfully
     restart: unless-stopped
 
   # Credential Provider - WebAuthn検証・トークン発行
@@ -71,14 +105,20 @@ services:
     ports:
       - "8003:8003"
     volumes:
-      - ../keys:/app/keys
-      - ./data:/app/v2/data
+      - keys:/app/v2/keys
+      - data:/app/v2/data
+    env_file:
+      - .env
     environment:
       - PYTHONUNBUFFERED=1
       - AGENT_ID=did:ap2:agent:credential_provider
-      - AP2_KEYS_DIRECTORY=/app/keys
+      - AP2_KEYS_DIRECTORY=/app/v2/keys
+      - DATABASE_URL=sqlite+aiosqlite:////app/v2/data/credential_provider.db
     networks:
       - ap2_network
+    depends_on:
+      init-keys:
+        condition: service_completed_successfully
     restart: unless-stopped
 
   # Payment Processor - 決済処理
@@ -90,14 +130,20 @@ services:
     ports:
       - "8004:8004"
     volumes:
-      - ../keys:/app/keys
-      - ./data:/app/v2/data
+      - keys:/app/v2/keys
+      - data:/app/v2/data
+    env_file:
+      - .env
     environment:
       - PYTHONUNBUFFERED=1
       - AGENT_ID=did:ap2:agent:payment_processor
-      - AP2_KEYS_DIRECTORY=/app/keys
+      - AP2_KEYS_DIRECTORY=/app/v2/keys
+      - DATABASE_URL=sqlite+aiosqlite:////app/v2/data/payment_processor.db
     networks:
       - ap2_network
+    depends_on:
+      init-keys:
+        condition: service_completed_successfully
     restart: unless-stopped
 
   # Frontend - Next.js

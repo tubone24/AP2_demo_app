@@ -16,6 +16,7 @@ RUN pip install uv
 COPY v2/pyproject.toml /app/v2/
 COPY v2/README.md /app/v2/
 COPY v2/common /app/v2/common
+COPY v2/scripts /app/v2/scripts
 COPY v2/services/shopping_agent /app/v2/services/shopping_agent
 
 # 既存のap2_crypto.pyとap2_types.pyをコピー

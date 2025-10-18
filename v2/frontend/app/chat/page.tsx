@@ -8,6 +8,8 @@ import { SignaturePromptModal } from "@/components/chat/SignaturePromptModal";
 import { PasskeyRegistration } from "@/components/auth/PasskeyRegistration";
 import { PasskeyAuthentication } from "@/components/auth/PasskeyAuthentication";
 import { ProductCarousel } from "@/components/product/ProductCarousel";
+import { CartCarousel } from "@/components/cart/CartCarousel";
+import { CartDetailsModal } from "@/components/cart/CartDetailsModal";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Card, CardContent } from "@/components/ui/card";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -20,6 +22,7 @@ export default function ChatPage() {
     isStreaming,
     currentAgentMessage,
     currentProducts,
+    currentCartCandidates,
     signatureRequest,
     credentialProviders,
     shippingFormRequest,
@@ -38,6 +41,7 @@ export default function ChatPage() {
   const [showPasskeyRegistration, setShowPasskeyRegistration] = useState(false);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [cart, setCart] = useState<Product[]>([]);
+  const [selectedCartForDetails, setSelectedCartForDetails] = useState<any | null>(null);
 
   // Passkey登録状態をチェック
   useEffect(() => {
@@ -86,6 +90,18 @@ export default function ChatPage() {
 
     // エージェントに商品IDを送信
     sendMessage(product.id);
+  };
+
+  // カート候補選択
+  const handleSelectCart = (cartCandidate: any) => {
+    console.log("Cart selected:", cartCandidate);
+    // カートIDをエージェントに送信
+    sendMessage(cartCandidate.cart_mandate.id);
+  };
+
+  // カート詳細表示
+  const handleViewCartDetails = (cartCandidate: any) => {
+    setSelectedCartForDetails(cartCandidate);
   };
 
   // 署名処理
@@ -249,16 +265,45 @@ export default function ChatPage() {
                       <p className="whitespace-pre-wrap">{currentAgentMessage}</p>
                       <span className="inline-block w-2 h-4 ml-1 bg-foreground animate-pulse" />
                     </div>
+                  </div>
+                </div>
+              )}
 
-                    {/* ストリーミング中の商品カルーセル */}
-                    {currentProducts.length > 0 && (
-                      <div className="mt-3 w-full max-w-[600px]">
-                        <ProductCarousel
-                          products={currentProducts}
-                          onAddToCart={handleAddToCart}
-                        />
-                      </div>
-                    )}
+              {/* 商品カルーセル（isStreamingの外） */}
+              {currentProducts.length > 0 && (
+                <div className="mb-4">
+                  <div className="flex gap-3">
+                    <Avatar className="w-8 h-8 flex-shrink-0">
+                      <AvatarFallback className="bg-green-500">
+                        <Bot className="w-4 h-4 text-white" />
+                      </AvatarFallback>
+                    </Avatar>
+                    <div className="w-full max-w-[600px]">
+                      <ProductCarousel
+                        products={currentProducts}
+                        onAddToCart={handleAddToCart}
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* カート候補カルーセル（isStreamingの外・AP2/A2A仕様準拠） */}
+              {currentCartCandidates.length > 0 && (
+                <div className="mb-4">
+                  <div className="flex gap-3">
+                    <Avatar className="w-8 h-8 flex-shrink-0">
+                      <AvatarFallback className="bg-green-500">
+                        <Bot className="w-4 h-4 text-white" />
+                      </AvatarFallback>
+                    </Avatar>
+                    <div className="w-full max-w-[680px]">
+                      <CartCarousel
+                        cartCandidates={currentCartCandidates}
+                        onSelectCart={handleSelectCart}
+                        onViewDetails={handleViewCartDetails}
+                      />
+                    </div>
                   </div>
                 </div>
               )}
@@ -439,6 +484,14 @@ export default function ChatPage() {
           onError={handleWebAuthnError}
         />
       )}
+
+      {/* カート詳細モーダル */}
+      <CartDetailsModal
+        open={!!selectedCartForDetails}
+        cartCandidate={selectedCartForDetails}
+        onClose={() => setSelectedCartForDetails(null)}
+        onSelectCart={handleSelectCart}
+      />
     </div>
   );
 }

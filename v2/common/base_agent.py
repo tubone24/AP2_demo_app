@@ -109,17 +109,31 @@ class BaseAgent(ABC):
         )
 
     def _init_keys(self):
-        """鍵の初期化（読み込みまたは生成）"""
+        """
+        鍵の初期化（永続化ストレージから読み込み）
+
+        セキュリティ要件（専門家の指摘対応）：
+        - キーペアはv2/scripts/init_keys.pyで事前に生成・暗号化されている
+        - 各エージェントは永続化ストレージ（Docker Volume）から既存の鍵を読み込む
+        - DIDドキュメントも永続化されているため、DIDは再起動後も一貫している
+        - 開発時の利便性のため、鍵が存在しない場合は自動生成（本番環境では非推奨）
+        """
         # agent_idから鍵IDを抽出（例: did:ap2:agent:shopping_agent -> shopping_agent）
         key_id = self.agent_id.split(":")[-1]
 
         try:
-            # 既存の鍵を読み込み
+            # 永続化ストレージから既存の鍵を読み込み（推奨）
             self.key_manager.load_private_key_encrypted(key_id, self.passphrase)
-            logger.info(f"[{self.agent_name}] Loaded existing key: {key_id}")
+            logger.info(
+                f"[{self.agent_name}] ✓ 永続化ストレージから鍵を読み込みました: {key_id}"
+            )
         except Exception as e:
-            # 鍵が存在しない場合は生成
-            logger.info(f"[{self.agent_name}] Generating new key pair: {key_id}")
+            # 鍵が存在しない場合は生成（開発時のみ、本番環境では非推奨）
+            logger.warning(
+                f"[{self.agent_name}] ⚠️  永続化された鍵が見つかりませんでした。新しく生成します。\n"
+                f"   本番環境では v2/scripts/init_keys.py を実行してください。\n"
+                f"   Error: {e}"
+            )
             private_key, public_key = self.key_manager.generate_key_pair(key_id)
             self.key_manager.save_private_key_encrypted(key_id, private_key, self.passphrase)
             self.key_manager.save_public_key(key_id, public_key)
@@ -129,7 +143,7 @@ class BaseAgent(ABC):
             from v2.common.did_resolver import DIDResolver
             did_resolver = DIDResolver(self.key_manager)
             did_resolver.update_public_key(self.agent_id, key_id)
-            logger.info(f"[{self.agent_name}] Updated DID document for: {self.agent_id}")
+            logger.info(f"[{self.agent_name}] ✓ DIDドキュメントを更新しました: {self.agent_id}")
 
     def _register_common_endpoints(self):
         """共通エンドポイントの登録"""
@@ -312,18 +326,11 @@ class AgentPassphraseManager:
     """
     エージェントのパスフレーズを管理
 
-    demo_app_v2.mdで複数のCredential Providerのパスフレーズが必要とされているため、
-    環境変数または設定ファイルから読み込む
+    セキュリティ要件（専門家の指摘対応）：
+    - ハードコードされたデフォルトパスフレーズは使用しない
+    - 環境変数からのみパスフレーズを取得
+    - fail-closed security: 環境変数が未設定の場合はエラー
     """
-
-    # デフォルトのパスフレーズ（開発環境用）
-    DEFAULT_PASSPHRASES = {
-        "shopping_agent": "shopping_agent_passphrase_secure_2024",
-        "merchant_agent": "merchant_agent_passphrase_secure_2024",
-        "merchant": "merchant_passphrase_secure_2024",
-        "credential_provider": "credential_provider_passphrase_secure_2024",
-        "payment_processor": "payment_processor_passphrase_secure_2024",
-    }
 
     @staticmethod
     def get_passphrase(agent_key: str) -> str:
@@ -335,18 +342,21 @@ class AgentPassphraseManager:
 
         Returns:
             str: パスフレーズ
+
+        Raises:
+            RuntimeError: 環境変数が設定されていない場合
         """
         import os
 
-        # 環境変数から取得を試みる（優先）
+        # 環境変数から取得（必須）
         env_key = f"AP2_{agent_key.upper()}_PASSPHRASE"
         passphrase = os.getenv(env_key)
 
-        if passphrase:
-            return passphrase
+        if not passphrase:
+            raise RuntimeError(
+                f"❌ セキュリティエラー: 環境変数 {env_key} が設定されていません。\n"
+                f"   セキュリティのため、パスフレーズは環境変数での設定が必須です。\n"
+                f"   .env.exampleを参照して、.envファイルに設定してください。"
+            )
 
-        # デフォルトを返す
-        return AgentPassphraseManager.DEFAULT_PASSPHRASES.get(
-            agent_key,
-            "default_passphrase_change_in_production"
-        )
+        return passphrase
