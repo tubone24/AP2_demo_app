@@ -28,13 +28,15 @@ import hashlib
 import uuid
 import base64
 from datetime import datetime, timezone, timedelta
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, TYPE_CHECKING
 
 import rfc8785
 from cryptography.hazmat.primitives.asymmetric import ec, ed25519
 from cryptography.hazmat.primitives import hashes
 
-from common.crypto import SignatureManager, KeyManager
+# 循環インポート回避のためTYPE_CHECKINGを使用
+if TYPE_CHECKING:
+    from common.crypto import SignatureManager, KeyManager
 
 
 def compute_canonical_hash(data: Dict[str, Any]) -> str:
@@ -75,8 +77,8 @@ class MerchantAuthorizationJWT:
 
     def __init__(
         self,
-        signature_manager: SignatureManager,
-        key_manager: KeyManager
+        signature_manager: "SignatureManager",
+        key_manager: "KeyManager"
     ):
         self.signature_manager = signature_manager
         self.key_manager = key_manager
@@ -230,8 +232,8 @@ class UserAuthorizationSDJWT:
 
     def __init__(
         self,
-        signature_manager: SignatureManager,
-        key_manager: KeyManager
+        signature_manager: "SignatureManager",
+        key_manager: "KeyManager"
     ):
         self.signature_manager = signature_manager
         self.key_manager = key_manager

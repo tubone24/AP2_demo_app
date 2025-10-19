@@ -37,11 +37,8 @@ from common.mandate_types import (
     PaymentMandate,
 )
 
-from common.jwt_utils import (
-    compute_canonical_hash,
-    MerchantAuthorizationJWT,
-    UserAuthorizationSDJWT,
-)
+# JWT Utilsは循環インポート回避のため、必要な箇所で直接インポートしてください
+# from common.jwt_utils import compute_canonical_hash, MerchantAuthorizationJWT, UserAuthorizationSDJWT
 
 
 # ========================================
@@ -742,8 +739,9 @@ __all__ = [
     "PaymentMandateContents",
     "PaymentMandate",
 
-    # JWT生成・検証ユーティリティ
-    "compute_canonical_hash",
-    "MerchantAuthorizationJWT",
-    "UserAuthorizationSDJWT",
+    # JWT生成・検証ユーティリティは循環インポート回避のため、
+    # 直接 common.jwt_utils からインポートしてください
+    # "compute_canonical_hash",
+    # "MerchantAuthorizationJWT",
+    # "UserAuthorizationSDJWT",
 ]
