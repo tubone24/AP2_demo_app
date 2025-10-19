@@ -244,6 +244,10 @@ class CredentialProviderService(BaseAgent):
 
                 logger.info(f"[register_passkey] Passkey registered: {credential_id[:16]}...")
 
+                # AP2仕様準拠：公開鍵はCredential Provider内で管理される
+                # ユーザーのDIDは不要（AP2仕様にはユーザーDIDの概念がない）
+                # user_authorizationはSD-JWT-VC形式で公開鍵を自己包含する
+
                 return {
                     "success": True,
                     "credential_id": credential_id,
@@ -1384,3 +1388,4 @@ class CredentialProviderService(BaseAgent):
             f"[CredentialProvider] Saved attestation: "
             f"user={user_id}, verified={verified}, agent_token={agent_token[:32] if agent_token else 'None'}..."
         )
+

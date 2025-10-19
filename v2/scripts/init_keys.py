@@ -42,6 +42,8 @@ from cryptography.hazmat.backends import default_backend
 
 
 # エージェント定義
+# 注意: ユーザーの鍵はWebAuthn/Passkeyでデバイス側で管理されるため、
+#      サーバー側では生成しない（AP2仕様準拠）
 AGENTS = [
     {
         "agent_id": "shopping_agent",
