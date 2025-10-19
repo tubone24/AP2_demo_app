@@ -62,8 +62,8 @@ class MerchantAgent(BaseAgent):
         self.payment_processor_url = "http://payment_processor:8004"
 
         # このMerchantの情報（固定）
-        self.merchant_id = "did:ap2:merchant:demo_merchant"
-        self.merchant_name = "AP2デモストア"
+        self.merchant_id = "did:ap2:merchant:mugibo_merchant"
+        self.merchant_name = "むぎぼーショップ"
 
         # 起動イベントハンドラー登録
         @self.app.on_event("startup")
@@ -245,31 +245,53 @@ class MerchantAgent(BaseAgent):
         - IntentMandateから複数のカート候補を生成
         - 各カートをArtifactとして返却
         - a2a-extension.md:144-229
+
+        AP2仕様準拠（v0.1）：
+        - ペイロードにはintent_mandateとshipping_addressが含まれる
+        - 配送先はCartMandate作成前に確定している必要がある
         """
         logger.info("[MerchantAgent] Received IntentMandate")
-        intent_mandate = message.dataPart.payload
+        payload = message.dataPart.payload
+
+        # AP2仕様準拠：ペイロードからintent_mandateとshipping_addressを抽出
+        if isinstance(payload, dict) and "intent_mandate" in payload:
+            # 新しい形式：{intent_mandate: {...}, shipping_address: {...}}
+            intent_mandate = payload["intent_mandate"]
+            shipping_address = payload.get("shipping_address")
+            logger.info("[MerchantAgent] Received IntentMandate with shipping_address (AP2 v0.1 compliant)")
+        else:
+            # 旧形式（後方互換性のため）：payload自体がintent_mandate
+            intent_mandate = payload
+            shipping_address = None
+            logger.info("[MerchantAgent] Received IntentMandate without shipping_address (legacy format)")
 
         # Intent内容から商品を検索
         intent_text = intent_mandate.get("intent", "")
         logger.info(f"[MerchantAgent] Searching products with intent: '{intent_text}'")
 
         try:
-            # デフォルト配送先住所（デモ用）
-            default_shipping_address = intent_mandate.get("shipping_address", {
-                "recipient": "デモユーザー",
-                "address_line1": "東京都渋谷区渋谷1-1-1",
-                "address_line2": "",
-                "city": "渋谷区",
-                "state": "東京都",
-                "postal_code": "150-0001",
-                "country": "JP"
-            })
+            # 配送先住所の決定（AP2仕様準拠）
+            if shipping_address:
+                # Shopping Agentから提供された配送先を使用
+                logger.info(f"[MerchantAgent] Using provided shipping address: {shipping_address.get('recipient', 'N/A')}")
+            else:
+                # デフォルト配送先住所（デモ用・後方互換性）
+                shipping_address = {
+                    "recipient": "デモユーザー",
+                    "address_line1": "東京都渋谷区渋谷1-1-1",
+                    "address_line2": "",
+                    "city": "渋谷区",
+                    "state": "東京都",
+                    "postal_code": "150-0001",
+                    "country": "JP"
+                }
+                logger.info("[MerchantAgent] Using default shipping address")
 
             # 複数のカート候補を生成
             cart_candidates = await self._create_multiple_cart_candidates(
                 intent_mandate_id=intent_mandate["id"],
                 intent_text=intent_text,
-                shipping_address=default_shipping_address
+                shipping_address=shipping_address
             )
 
             if not cart_candidates:

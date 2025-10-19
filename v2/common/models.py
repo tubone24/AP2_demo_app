@@ -380,7 +380,7 @@ class A2AArtifact(BaseModel):
                         "data": {
                             "ap2.mandates.CartMandate": {
                                 "id": "cart_abc123",
-                                "merchant_id": "did:ap2:merchant:demo_merchant",
+                                "merchant_id": "did:ap2:merchant:mugibo_merchant",
                                 "items": [],
                                 "total": {"value": "10000.00", "currency": "JPY"}
                             }

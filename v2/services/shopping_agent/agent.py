@@ -1191,55 +1191,74 @@ class ShoppingAgent(BaseAgent):
             )
             return
 
-        # ステップ6: 署名完了後、商品検索（Merchant AgentへA2A通信）
+        # ステップ6: 署名完了後、配送先入力（AP2仕様準拠）
         elif current_step == "intent_signature_requested":
             if "署名完了" in user_input or "signed" in user_input_lower or user_input_lower == "ok":
-                session["step"] = "intent_signed"
+                # AP2仕様：配送先はCartMandate作成「前」に確定する必要がある
+                # 配送先によって配送料が変わり、カート価格に影響するため
 
                 yield StreamEvent(
                     type="agent_text",
-                    content="署名ありがとうございます！Merchant Agentにカート候補を依頼中..."
+                    content="署名ありがとうございます！商品の配送先を入力してください。"
                 )
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(0.3)
 
-                # Merchant AgentにIntentMandateを送信してカート候補を取得（A2A通信）
-                try:
-                    cart_candidates = await self._search_products_via_merchant_agent(
-                        session["intent_mandate"],
-                        session  # intent_message_idを保存するためにsessionを渡す
-                    )
+                # 既存の配送先があればそれをデフォルト値として使用
+                existing_shipping = session.get("shipping_address", {})
 
-                    if not cart_candidates:
-                        yield StreamEvent(
-                            type="agent_text",
-                            content="申し訳ありません。条件に合うカート候補が見つかりませんでした。"
-                        )
-                        session["step"] = "error"
-                        return
+                yield StreamEvent(
+                    type="shipping_form_request",
+                    form_schema={
+                        "type": "shipping_address",
+                        "fields": [
+                            {
+                                "name": "recipient",
+                                "label": "受取人名",
+                                "type": "text",
+                                "placeholder": "山田太郎",
+                                "default": existing_shipping.get("recipient", ""),
+                                "required": True
+                            },
+                            {
+                                "name": "postal_code",
+                                "label": "郵便番号",
+                                "type": "text",
+                                "placeholder": "150-0001",
+                                "default": existing_shipping.get("postal_code", ""),
+                                "required": True
+                            },
+                            {
+                                "name": "address_line1",
+                                "label": "住所1（都道府県・市区町村・番地）",
+                                "type": "text",
+                                "placeholder": "東京都渋谷区神宮前1-1-1",
+                                "default": existing_shipping.get("address_line1", ""),
+                                "required": True
+                            },
+                            {
+                                "name": "address_line2",
+                                "label": "住所2（建物名・部屋番号など）",
+                                "type": "text",
+                                "placeholder": "サンプルマンション101",
+                                "default": existing_shipping.get("address_line2", ""),
+                                "required": False
+                            },
+                            {
+                                "name": "country",
+                                "label": "国",
+                                "type": "select",
+                                "options": [
+                                    {"value": "JP", "label": "日本"},
+                                    {"value": "US", "label": "アメリカ"}
+                                ],
+                                "default": existing_shipping.get("country", "JP") if existing_shipping else "JP",
+                                "required": True
+                            }
+                        ]
+                    }
+                )
 
-                    # カート候補をセッションに保存
-                    session["cart_candidates"] = cart_candidates
-
-                    # AP2/A2A仕様準拠：複数のカート候補をカルーセル表示
-                    yield StreamEvent(
-                        type="cart_options",
-                        items=cart_candidates
-                    )
-
-                    yield StreamEvent(
-                        type="agent_text",
-                        content=f"{len(cart_candidates)}つのカート候補が見つかりました。お好みのカートを選択してください。"
-                    )
-                except Exception as e:
-                    logger.error(f"[_generate_fixed_response] Cart candidates request via Merchant Agent failed: {e}")
-                    yield StreamEvent(
-                        type="agent_text",
-                        content=f"申し訳ありません。カート候補の取得に失敗しました: {str(e)}"
-                    )
-                    session["step"] = "error"
-                    return
-
-                session["step"] = "cart_selection"
+                session["step"] = "shipping_address_input"
                 return
             else:
                 yield StreamEvent(
@@ -1247,6 +1266,102 @@ class ShoppingAgent(BaseAgent):
                     content="署名を完了してから「署名完了」と入力してください。"
                 )
                 return
+
+        # ステップ6.1: 配送先入力完了後、商品検索（Merchant AgentへA2A通信）
+        elif current_step == "shipping_address_input":
+            # JSONとしてパース（フロントエンドからJSONで送信される想定）
+            shipping_address = None
+
+            try:
+                import json as json_lib
+
+                # デバッグ：受信したuser_inputをログ出力
+                logger.info(f"[shipping_address_input] Received user_input: {user_input[:200]}")
+
+                # JSONパースを試行
+                if user_input.strip().startswith("{"):
+                    shipping_address = json_lib.loads(user_input)
+                    logger.info(f"[shipping_address_input] Parsed JSON shipping address: {shipping_address}")
+                else:
+                    logger.warning(f"[shipping_address_input] user_input does not start with '{{', using demo address")
+
+            except json_lib.JSONDecodeError as e:
+                logger.error(f"[shipping_address_input] JSON parse error: {e}, input: {user_input[:200]}")
+            except Exception as e:
+                logger.error(f"[shipping_address_input] Unexpected error: {e}", exc_info=True)
+
+            # フォールバック：デモ用固定値を使用
+            if not shipping_address:
+                shipping_address = {
+                    "recipient": "デモユーザー",
+                    "postal_code": "150-0001",
+                    "address_line1": "東京都渋谷区渋谷1-1-1",
+                    "address_line2": "",
+                    "city": "渋谷区",
+                    "state": "東京都",
+                    "country": "JP"
+                }
+                logger.info("[shipping_address_input] Using demo default shipping address")
+
+                yield StreamEvent(
+                    type="agent_text",
+                    content="配送先を設定しました（デモ用固定値）。"
+                )
+            else:
+                yield StreamEvent(
+                    type="agent_text",
+                    content=f"配送先を設定しました：{shipping_address['recipient']} 様"
+                )
+
+            session["shipping_address"] = shipping_address
+            await asyncio.sleep(0.3)
+
+            # AP2仕様準拠：配送先が確定したので、Merchant Agentにカート候補を依頼
+            yield StreamEvent(
+                type="agent_text",
+                content="Merchant Agentにカート候補を依頼中..."
+            )
+            await asyncio.sleep(0.5)
+
+            # Merchant AgentにIntentMandateと配送先を送信してカート候補を取得（A2A通信）
+            try:
+                cart_candidates = await self._search_products_via_merchant_agent(
+                    session["intent_mandate"],
+                    session  # intent_message_idと shipping_addressを参照
+                )
+
+                if not cart_candidates:
+                    yield StreamEvent(
+                        type="agent_text",
+                        content="申し訳ありません。条件に合うカート候補が見つかりませんでした。"
+                    )
+                    session["step"] = "error"
+                    return
+
+                # カート候補をセッションに保存
+                session["cart_candidates"] = cart_candidates
+
+                # AP2/A2A仕様準拠：複数のカート候補をカルーセル表示
+                yield StreamEvent(
+                    type="cart_options",
+                    items=cart_candidates
+                )
+
+                yield StreamEvent(
+                    type="agent_text",
+                    content=f"{len(cart_candidates)}つのカート候補が見つかりました。お好みのカートを選択してください。"
+                )
+            except Exception as e:
+                logger.error(f"[_generate_fixed_response] Cart candidates request via Merchant Agent failed: {e}")
+                yield StreamEvent(
+                    type="agent_text",
+                    content=f"申し訳ありません。カート候補の取得に失敗しました: {str(e)}"
+                )
+                session["step"] = "error"
+                return
+
+            session["step"] = "cart_selection"
+            return
 
         # ステップ6.5: カート選択（AP2/A2A仕様準拠）
         elif current_step == "cart_selection":
@@ -1308,20 +1423,45 @@ class ShoppingAgent(BaseAgent):
             )
             await asyncio.sleep(0.3)
 
-            # AP2 Step 4: 配送先を確認・入力
-            # カートの最終価格を確定するために配送先が必要
-            existing_shipping = cart_mandate.get("shipping", {}).get("address")
+            # AP2仕様準拠：配送先は既に入力済み（CartMandate作成前に確定）
+            # このCartMandateには既に確定した配送先と配送料が含まれている
+            shipping_address = session.get("shipping_address", {})
+            if shipping_address:
+                yield StreamEvent(
+                    type="agent_text",
+                    content=f"配送先: {shipping_address.get('recipient', '')} 様"
+                )
+                await asyncio.sleep(0.2)
 
-            # AP2仕様準拠：必ず配送先確認ステップを表示
-            # CartMandateに配送先が含まれていても、ユーザーに確認・変更の機会を与える
+            # 次のステップ：Credential Provider選択
             yield StreamEvent(
                 type="agent_text",
-                content="配送先を入力してください。最終的な価格（送料込み）を確定するために必要です。"
+                content="決済に使用するCredential Providerを選択してください。"
             )
             await asyncio.sleep(0.2)
 
-            # 配送先フォームをリッチコンテンツで送信
-            # CartMandateに配送先がある場合は、それをデフォルト値として使用
+            # Credential Providerリストをリッチコンテンツで送信
+            yield StreamEvent(
+                type="credential_provider_selection",
+                providers=self.credential_providers
+            )
+
+            session["step"] = "select_credential_provider"
+            return
+
+        # ============ 以下の cart_selected_need_shipping ステップは削除 ============
+        # AP2仕様では、配送先はCartMandate作成「前」に確定済み
+
+        # 旧: cart_selected_need_shipping ステップ（削除予定）
+        # 新しいフローでは、配送先入力 → CartMandate作成 → カート選択 → Credential Provider選択
+
+        # ステップ6.6の旧コードを削除してジャンプ
+        elif current_step == "cart_selected_need_shipping_OLD_DEPRECATED":
+            # この分岐は使用されません
+            pass
+
+        # 以下、旧コードをスキップするためのダミー分岐
+        if False:  # 旧コードブロックの開始（削除予定）
             yield StreamEvent(
                 type="shipping_form_request",
                 form_schema={
@@ -1418,6 +1558,15 @@ class ShoppingAgent(BaseAgent):
                     content="配送先を設定しました（デモ用固定値）。"
                 )
                 await asyncio.sleep(0.3)
+
+            # AP2仕様準拠：配送先住所を保存
+            # 注意：配送先はCartMandate作成「前」に確定している必要がある
+            # この時点ではCartMandateはまだ作成されていないはず
+            logger.info(
+                f"[ShoppingAgent] Shipping address saved for CartMandate creation: "
+                f"recipient={shipping_address.get('recipient')}, "
+                f"postal_code={shipping_address.get('postal_code')}"
+            )
 
             # 次のステップ：Credential Provider選択
             session["step"] = "shipping_confirmed"
@@ -1654,6 +1803,13 @@ class ShoppingAgent(BaseAgent):
                     content="配送先を設定しました（デモ用固定値）。"
                 )
                 await asyncio.sleep(0.3)
+
+            # AP2仕様準拠：配送先住所を保存（旧フロー用）
+            logger.info(
+                f"[ShoppingAgent] Shipping address saved for CartMandate creation (old flow): "
+                f"recipient={shipping_address.get('recipient')}, "
+                f"postal_code={shipping_address.get('postal_code')}"
+            )
 
             # AP2 Step 6-7: Credential Providerから支払い方法を取得
             yield StreamEvent(
@@ -2055,7 +2211,7 @@ class ShoppingAgent(BaseAgent):
             "id": f"cart_{uuid.uuid4().hex[:8]}",
             "type": "CartMandate",
             "version": "0.2",
-            "merchant_id": "did:ap2:merchant:demo_merchant",
+            "merchant_id": "did:ap2:merchant:mugibo_merchant",
             "intent_mandate_id": session.get("intent_mandate", {}).get("id"),
             "items": [
                 {
@@ -2292,7 +2448,7 @@ class ShoppingAgent(BaseAgent):
                 "payment_details_id": payment_details_id,
                 "payment_details_total": payment_details_total,
                 "payment_response": payment_response,
-                "merchant_agent": cart_mandate.get("merchant_id", "did:ap2:merchant:demo_merchant"),
+                "merchant_agent": cart_mandate.get("merchant_id", "did:ap2:merchant:mugibo_merchant"),
                 "timestamp": now.isoformat().replace('+00:00', 'Z')
             },
 
@@ -2305,7 +2461,7 @@ class ShoppingAgent(BaseAgent):
             "cart_mandate_id": cart_mandate.get("id"),
             "intent_mandate_id": session.get("intent_mandate", {}).get("id"),
             "payer_id": "user_demo_001",
-            "payee_id": cart_mandate.get("merchant_id", "did:ap2:merchant:demo_merchant"),
+            "payee_id": cart_mandate.get("merchant_id", "did:ap2:merchant:mugibo_merchant"),
             "amount": {
                 "value": total_amount.get("value", "0.00"),
                 "currency": total_amount.get("currency", "JPY")
@@ -2483,12 +2639,22 @@ class ShoppingAgent(BaseAgent):
         logger.info(f"[ShoppingAgent] Requesting cart candidates from Merchant Agent for IntentMandate: {intent_mandate['id']}")
 
         try:
+            # AP2仕様準拠：配送先情報を含めてMerchant Agentに送信
+            # 配送先によって配送料が変わるため、CartMandate作成前に必要
+            shipping_address = session.get("shipping_address")
+
+            # ペイロードにIntentMandateと配送先を含める
+            payload = {
+                "intent_mandate": intent_mandate,
+                "shipping_address": shipping_address  # AP2仕様：CartMandate作成前に配送先を提供
+            }
+
             # A2Aメッセージを作成（署名付き）
             message = self.a2a_handler.create_response_message(
                 recipient="did:ap2:agent:merchant_agent",
                 data_type="ap2.mandates.IntentMandate",
                 data_id=intent_mandate["id"],
-                payload=intent_mandate,
+                payload=payload,
                 sign=True
             )
 

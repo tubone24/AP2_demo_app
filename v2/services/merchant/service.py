@@ -52,8 +52,8 @@ class MerchantService(BaseAgent):
         self.db_manager = DatabaseManager(database_url=database_url)
 
         # このMerchantの情報
-        self.merchant_id = "did:ap2:merchant:demo_merchant"
-        self.merchant_name = "AP2デモストア"
+        self.merchant_id = "did:ap2:merchant:mugibo_merchant"
+        self.merchant_name = "むぎぼーショップ"
 
         # 署名モード設定（メモリ内管理、本番環境ではDBに保存）
         self.auto_sign_mode = True  # デフォルトは自動署名

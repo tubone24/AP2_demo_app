@@ -565,7 +565,7 @@ class CredentialProviderService(BaseAgent):
               "payment_method_id": "pm_003",
               "transaction_context": {
                 "amount": {"value": "10000.00", "currency": "JPY"},
-                "merchant_id": "did:ap2:merchant:demo_merchant"
+                "merchant_id": "did:ap2:merchant:mugibo_merchant"
               },
               "return_url": "http://localhost:3000/payment/step-up-callback"
             }
