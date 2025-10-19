@@ -844,9 +844,45 @@ class MerchantAgent(BaseAgent):
             response.raise_for_status()
             result = response.json()
 
+            # AP2仕様準拠（specification.md:629-632, 675-678）：
+            # CartMandateは必ずMerchant署名済みでなければならない
+            # "The cart mandate is first signed by the merchant entity...
+            #  This ensures that the user sees a cart which the merchant has confirmed to fulfill."
+
+            # 手動署名モード：Merchantの承認を待機
+            if result.get("status") == "pending_merchant_signature":
+                cart_mandate_id = result.get("cart_mandate_id")
+                logger.info(f"[_create_cart_from_products] CartMandate pending manual approval: {cart_mandate_id}")
+                logger.info(f"[_create_cart_from_products] Waiting for merchant signature (max 300s)...")
+
+                # Merchantの承認を待機（ポーリング）
+                signed_cart_mandate = await self._wait_for_merchant_signature(cart_mandate_id, timeout=300)
+
+                if not signed_cart_mandate:
+                    logger.error(f"[_create_cart_from_products] Failed to get merchant signature for cart: {cart_mandate_id}")
+                    return None
+
+                logger.info(f"[_create_cart_from_products] Merchant signature completed: {cart_mandate_id}")
+
+                # Artifact形式でラップ（署名済み）
+                artifact = {
+                    "artifactId": f"artifact_{uuid.uuid4().hex[:8]}",
+                    "name": cart_name,
+                    "parts": [
+                        {
+                            "kind": "data",
+                            "data": {
+                                "ap2.mandates.CartMandate": signed_cart_mandate
+                            }
+                        }
+                    ]
+                }
+                return artifact
+
+            # 自動署名モード：signed_cart_mandateが即座に返される
             signed_cart_mandate = result.get("signed_cart_mandate")
             if not signed_cart_mandate:
-                logger.error(f"[_create_cart_from_products] Merchant signature failed for cart: {cart_mandate['id']}")
+                logger.error(f"[_create_cart_from_products] Unexpected response from Merchant: {result}")
                 return None
 
             logger.info(f"[_create_cart_from_products] CartMandate signed: {cart_mandate['id']}")
@@ -871,3 +907,82 @@ class MerchantAgent(BaseAgent):
         except httpx.HTTPError as e:
             logger.error(f"[_create_cart_from_products] Failed to get Merchant signature: {e}")
             return None
+
+    async def _wait_for_merchant_signature(
+        self,
+        cart_mandate_id: str,
+        timeout: int = 300,
+        poll_interval: float = 2.0
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Merchantの署名を待機（ポーリング）
+
+        AP2仕様準拠（specification.md:675-678）：
+        CartMandateは必ずMerchant署名済みでなければならない
+
+        Args:
+            cart_mandate_id: CartMandate ID
+            timeout: タイムアウト（秒）
+            poll_interval: ポーリング間隔（秒）
+
+        Returns:
+            署名済みCartMandate、または失敗時にNone
+        """
+        logger.info(f"[MerchantAgent] Waiting for merchant signature for CartMandate: {cart_mandate_id}, timeout={timeout}s")
+
+        import asyncio
+        start_time = asyncio.get_event_loop().time()
+        elapsed_time = 0
+
+        while elapsed_time < timeout:
+            try:
+                # MerchantからCartMandateのステータスを取得
+                response = await self.http_client.get(
+                    f"{self.merchant_url}/cart-mandates/{cart_mandate_id}",
+                    timeout=10.0
+                )
+                response.raise_for_status()
+                result = response.json()
+
+                status = result.get("status")
+                payload = result.get("payload")
+
+                logger.debug(f"[MerchantAgent] CartMandate {cart_mandate_id} status: {status}")
+
+                # 署名完了
+                if status == "signed":
+                    logger.info(f"[MerchantAgent] CartMandate {cart_mandate_id} has been signed by merchant")
+                    return payload
+
+                # 拒否された
+                elif status == "rejected":
+                    logger.warning(f"[MerchantAgent] CartMandate {cart_mandate_id} has been rejected by merchant")
+                    return None
+
+                # まだpending - 待機
+                elif status == "pending_merchant_signature":
+                    logger.debug(f"[MerchantAgent] CartMandate {cart_mandate_id} is still pending, waiting...")
+                    await asyncio.sleep(poll_interval)
+                    elapsed_time = asyncio.get_event_loop().time() - start_time
+                    continue
+
+                # 予期しないステータス
+                else:
+                    logger.warning(f"[MerchantAgent] Unexpected CartMandate status: {status}")
+                    await asyncio.sleep(poll_interval)
+                    elapsed_time = asyncio.get_event_loop().time() - start_time
+                    continue
+
+            except httpx.HTTPError as e:
+                logger.error(f"[_wait_for_merchant_signature] HTTP error while checking status: {e}")
+                await asyncio.sleep(poll_interval)
+                elapsed_time = asyncio.get_event_loop().time() - start_time
+                continue
+
+            except Exception as e:
+                logger.error(f"[_wait_for_merchant_signature] Error while checking status: {e}")
+                return None
+
+        # タイムアウト
+        logger.error(f"[MerchantAgent] Timeout waiting for merchant signature for CartMandate: {cart_mandate_id}")
+        return None

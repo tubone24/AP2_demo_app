@@ -1338,6 +1338,10 @@ class ShoppingAgent(BaseAgent):
                     session["step"] = "error"
                     return
 
+                # AP2仕様準拠：Merchant AgentがMerchantの署名を待機してから返すため、
+                # ここに到達した時点で全てのCartMandateは署名済みである
+                logger.info(f"[ShoppingAgent] Received {len(cart_candidates)} signed cart candidates from Merchant Agent")
+
                 # カート候補をセッションに保存
                 session["cart_candidates"] = cart_candidates
 
