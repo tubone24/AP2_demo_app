@@ -315,6 +315,12 @@ export function useSSEChat() {
     // currentAgentMessageとcurrentProductsはそのまま残す（次のメッセージ送信時にクリア）
   }, []);
 
+  // セッションIDを外部から設定できる関数（AP2 Step-up対応）
+  const setSessionId = useCallback((newSessionId: string) => {
+    sessionIdRef.current = newSessionId;
+    console.log("[useSSEChat] Session ID updated:", newSessionId);
+  }, []);
+
   return {
     messages,
     isStreaming,
@@ -332,5 +338,6 @@ export function useSSEChat() {
     clearSignatureRequest,
     clearWebauthnRequest,
     stopStreaming,
+    setSessionId,  // セッションID設定関数を公開
   };
 }

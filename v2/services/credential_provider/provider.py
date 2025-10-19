@@ -802,7 +802,11 @@ class CredentialProviderService(BaseAgent):
                                     
                                     if (result.status === 'completed') {{
                                         alert('認証が完了しました。元のページに戻ります。');
-                                        window.location.href = result.return_url + '?step_up_status=success&session_id={session_id}';
+                                        // AP2準拠：return_urlのクエリパラメータにstep_up_statusを追加
+                                        const returnUrl = new URL(result.return_url, window.location.origin);
+                                        returnUrl.searchParams.set('step_up_status', 'success');
+                                        returnUrl.searchParams.set('step_up_session_id', '{session_id}');
+                                        window.location.href = returnUrl.toString();
                                     }} else {{
                                         alert('認証に失敗しました: ' + result.message);
                                     }}
@@ -813,7 +817,11 @@ class CredentialProviderService(BaseAgent):
                             
                             function cancelStepUp() {{
                                 if (confirm('認証をキャンセルしますか？')) {{
-                                    window.location.href = '{session_data["return_url"]}?step_up_status=cancelled&session_id={session_id}';
+                                    // AP2準拠：return_urlのクエリパラメータにstep_up_statusを追加
+                                    const returnUrl = new URL('{session_data["return_url"]}', window.location.origin);
+                                    returnUrl.searchParams.set('step_up_status', 'cancelled');
+                                    returnUrl.searchParams.set('step_up_session_id', '{session_id}');
+                                    window.location.href = returnUrl.toString();
                                 }}
                             }}
                         </script>

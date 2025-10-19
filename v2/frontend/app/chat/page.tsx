@@ -34,6 +34,7 @@ export default function ChatPage() {
     clearSignatureRequest,
     clearWebauthnRequest,
     stopStreaming,
+    setSessionId,  // AP2 Step-up対応：セッションID設定関数
   } = useSSEChat();
 
   const scrollAreaRef = useRef<HTMLDivElement>(null);
@@ -60,10 +61,15 @@ export default function ChatPage() {
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
     const stepUpStatus = urlParams.get("step_up_status");
-    const stepUpSessionId = urlParams.get("session_id");
+    const stepUpSessionId = urlParams.get("step_up_session_id");
+    const sessionId = urlParams.get("session_id");
 
-    if (stepUpStatus && stepUpSessionId) {
-      console.log("[Step-up Callback] Detected:", { stepUpStatus, stepUpSessionId });
+    if (stepUpStatus && stepUpSessionId && sessionId) {
+      console.log("[Step-up Callback] Detected:", { stepUpStatus, stepUpSessionId, sessionId });
+
+      // AP2準拠：return_urlから取得したsession_idを使用
+      // これにより、Step-up前のセッションに戻れる
+      setSessionId(sessionId);
 
       // URLパラメータをクリーンアップ
       const cleanUrl = window.location.pathname;
@@ -71,7 +77,7 @@ export default function ChatPage() {
 
       if (stepUpStatus === "success") {
         // Step-up成功 - Shopping Agentに完了を通知
-        console.log("[Step-up] Success - sending completion message to agent");
+        console.log("[Step-up] Success - sending completion message to agent with session_id:", sessionId);
         setTimeout(() => {
           sendMessage(`step-up-completed:${stepUpSessionId}`);
         }, 500);
@@ -83,7 +89,7 @@ export default function ChatPage() {
         }, 500);
       }
     }
-  }, [sendMessage]);
+  }, [sendMessage, setSessionId]);
 
   // メッセージが追加されたら自動スクロール
   useEffect(() => {

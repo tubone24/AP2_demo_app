@@ -34,7 +34,7 @@ from v2.common.models import (
     StreamEvent,
     ProductSearchRequest,
 )
-from v2.common.database import DatabaseManager, MandateCRUD, TransactionCRUD
+from v2.common.database import DatabaseManager, MandateCRUD, TransactionCRUD, AgentSessionCRUD
 from v2.common.risk_assessment import RiskAssessmentEngine
 from v2.common.crypto import WebAuthnChallengeManager, CryptoError
 from v2.common.user_authorization import create_user_authorization_vp
@@ -429,26 +429,17 @@ class ShoppingAgent(BaseAgent):
 
             async def event_generator() -> AsyncGenerator[str, None]:
                 try:
-                    # セッション初期化
-                    if session_id not in self.sessions:
-                        self.sessions[session_id] = {
-                            "messages": [],
-                            "step": "initial",  # 対話フローのステップ
-                            "intent": None,
-                            "max_amount": None,
-                            "categories": [],
-                            "brands": [],
-                            "intent_mandate": None,
-                            "cart_mandate": None,
-                        }
-
-                    session = self.sessions[session_id]
+                    # データベースからセッション取得または作成
+                    session = await self._get_or_create_session(session_id)
                     session["messages"].append({"role": "user", "content": request.user_input})
 
                     # 固定応答フロー（LLM統合前）
-                    async for event in self._generate_fixed_response(request.user_input, session):
+                    async for event in self._generate_fixed_response(request.user_input, session, session_id):
                         yield f"data: {json.dumps(event.model_dump(exclude_none=True))}\n\n"
                         await asyncio.sleep(0.1)  # 少し遅延を入れて自然に
+
+                    # セッション保存（最終状態）
+                    await self._update_session(session_id, session)
 
                     # 完了イベント
                     yield f"data: {json.dumps({'type': 'done'})}\n\n"
@@ -878,7 +869,8 @@ class ShoppingAgent(BaseAgent):
     async def _generate_fixed_response(
         self,
         user_input: str,
-        session: Dict[str, Any]
+        session: Dict[str, Any],
+        session_id: str
     ) -> AsyncGenerator[StreamEvent, None]:
         """
         固定応答を生成（LLM統合前の簡易版）
@@ -891,6 +883,11 @@ class ShoppingAgent(BaseAgent):
         5. ブランド入力 → IntentMandate生成 → 署名リクエスト
         6. 署名完了 → 商品検索 → CartMandate提案
         7. カート承認 → PaymentMandate生成 → 決済
+
+        Args:
+            user_input: ユーザー入力
+            session: セッションデータ
+            session_id: セッションID（データベース保存用）
         """
         user_input_lower = user_input.lower()
         current_step = session.get("step", "initial")
@@ -953,6 +950,8 @@ class ShoppingAgent(BaseAgent):
                                 content="❌ カート情報が見つかりません。最初からやり直してください。"
                             )
                             session["step"] = "error"
+                            # セッション保存（エラー状態）
+                            await self._update_session(session_id, session)
                             return
 
                     # PaymentMandate作成
@@ -1272,6 +1271,9 @@ class ShoppingAgent(BaseAgent):
             cart_mandate = selected_cart.get("cart_mandate", {})
             session["selected_cart_mandate"] = cart_mandate
             session["selected_cart_artifact"] = selected_cart
+
+            # セッション保存（カート選択は重要な状態変更）
+            await self._update_session(session_id, session)
 
             cart_name = cart_mandate.get("cart_metadata", {}).get("name", "カート")
             total_amount = float(cart_mandate.get("total", {}).get("value", 0))
@@ -1737,6 +1739,9 @@ class ShoppingAgent(BaseAgent):
                         total_amount = {"value": "0", "currency": "JPY"}
                         merchant_id = None
 
+                    # AP2準拠：return_urlにセッションIDをクエリパラメータとして含める
+                    return_url = f"http://localhost:3000/chat?session_id={session_id}"
+
                     response = await self.http_client.post(
                         f"{selected_cp['url']}/payment-methods/initiate-step-up",
                         json={
@@ -1746,7 +1751,7 @@ class ShoppingAgent(BaseAgent):
                                 "amount": total_amount,
                                 "merchant_id": merchant_id
                             },
-                            "return_url": "http://localhost:3000/chat"
+                            "return_url": return_url
                         },
                         timeout=10.0
                     )
@@ -1754,28 +1759,32 @@ class ShoppingAgent(BaseAgent):
                     step_up_result = response.json()
                     
                     step_up_url = step_up_result.get("step_up_url")
-                    session_id = step_up_result.get("session_id")
-                    
+                    step_up_session_id = step_up_result.get("session_id")
+
                     # Step-up情報をセッションに保存
-                    session["step_up_session_id"] = session_id
+                    session["step_up_session_id"] = step_up_session_id
                     session["step"] = "step_up_redirect"
-                    
+
+                    # 重要：Step-upリダイレクト前にセッションをデータベースに保存
+                    # これにより、Step-up完了後のリクエストでcart_mandateを復元できる
+                    await self._update_session(session_id, session)
+
                     logger.info(
-                        f"[ShoppingAgent] Step-up session created: "
-                        f"session_id={session_id}, step_up_url={step_up_url}"
+                        f"[ShoppingAgent] Step-up session created and saved to DB: "
+                        f"step_up_session_id={step_up_session_id}, step_up_url={step_up_url}"
                     )
-                    
+
                     # フロントエンドにStep-upリダイレクト指示を送信
                     yield StreamEvent(
                         type="agent_text",
                         content=f"{selected_payment_method['brand'].upper()} ****{selected_payment_method['last4']}を選択しました。\n\n追加認証が必要です。認証画面にリダイレクトします..."
                     )
                     await asyncio.sleep(0.5)
-                    
+
                     yield StreamEvent(
                         type="step_up_redirect",
                         step_up_url=step_up_url,
-                        session_id=session_id,
+                        session_id=step_up_session_id,
                         content=selected_payment_method.get("step_up_reason", "Additional authentication required")
                     )
                     return
@@ -2091,6 +2100,60 @@ class ShoppingAgent(BaseAgent):
         # RFC 8785準拠のcompute_mandate_hash関数を使用（より堅牢なハッシュ計算）
         from v2.common.user_authorization import compute_mandate_hash
         return compute_mandate_hash(payment_mandate_copy)
+
+    async def _get_or_create_session(self, session_id: str, user_id: str = "user_demo_001") -> Dict[str, Any]:
+        """
+        セッションをデータベースから取得、または新規作成
+
+        Args:
+            session_id: セッションID
+            user_id: ユーザーID
+
+        Returns:
+            Dict[str, Any]: セッションデータ
+        """
+        async with self.db_manager.get_session() as db_session:
+            agent_session = await AgentSessionCRUD.get_by_session_id(db_session, session_id)
+
+            if agent_session:
+                # 既存セッションを取得
+                session_data = json.loads(agent_session.session_data)
+                logger.info(f"[ShoppingAgent] Loaded session from DB: {session_id}, step={session_data.get('step')}")
+                return session_data
+            else:
+                # 新規セッション作成
+                session_data = {
+                    "messages": [],
+                    "step": "initial",
+                    "intent": None,
+                    "max_amount": None,
+                    "categories": [],
+                    "brands": [],
+                    "intent_mandate": None,
+                    "cart_mandate": None,
+                    "user_id": user_id
+                }
+
+                await AgentSessionCRUD.create(db_session, {
+                    "session_id": session_id,
+                    "user_id": user_id,
+                    "session_data": session_data
+                })
+
+                logger.info(f"[ShoppingAgent] Created new session in DB: {session_id}")
+                return session_data
+
+    async def _update_session(self, session_id: str, session_data: Dict[str, Any]) -> None:
+        """
+        セッションデータをデータベースに保存
+
+        Args:
+            session_id: セッションID
+            session_data: セッションデータ
+        """
+        async with self.db_manager.get_session() as db_session:
+            await AgentSessionCRUD.update_session_data(db_session, session_id, session_data)
+            logger.debug(f"[ShoppingAgent] Updated session in DB: {session_id}, step={session_data.get('step')}")
 
     def _determine_transaction_type(self, session: Dict[str, Any]) -> str:
         """
