@@ -15,14 +15,17 @@ from typing import Tuple, Optional, Dict, Any
 from datetime import datetime, timezone
 from pathlib import Path
 
-from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.asymmetric import ec, ed25519
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.backends import default_backend
 from cryptography.exceptions import InvalidSignature
 
-from v2.common.models import Signature, DeviceAttestation, AttestationType
+try:
+    from v2.common.models import Signature, DeviceAttestation, AttestationType
+except ModuleNotFoundError:
+    from common.models import Signature, DeviceAttestation, AttestationType
 
 # RFC8785 JSON Canonicalization Scheme (Required for AP2 compliance)
 try:
@@ -223,8 +226,8 @@ class KeyManager:
         self.keys_directory.mkdir(parents=True, exist_ok=True)
         self.backend = default_backend()
 
-        # アクティブな鍵（メモリ上）
-        self._active_keys: Dict[str, ec.EllipticCurvePrivateKey] = {}
+        # アクティブな鍵（メモリ上）- ECDSA or Ed25519
+        self._active_keys: Dict[str, Any] = {}
 
     def generate_key_pair(
         self,
@@ -253,18 +256,43 @@ class KeyManager:
         print(f"  ✓ 鍵ペア生成完了（曲線: {curve.name}）")
         return private_key, public_key
 
-    def save_private_key_encrypted(
+    def generate_ed25519_key_pair(
         self,
-        key_id: str,
-        private_key: ec.EllipticCurvePrivateKey,
-        passphrase: str
-    ) -> str:
+        key_id: str
+    ) -> Tuple[ed25519.Ed25519PrivateKey, ed25519.Ed25519PublicKey]:
         """
-        秘密鍵をパスフレーズで暗号化して保存
+        新しいEd25519鍵ペアを生成
 
         Args:
             key_id: 鍵の識別子
-            private_key: 秘密鍵
+
+        Returns:
+            Tuple[秘密鍵, 公開鍵]
+        """
+        print(f"[KeyManager] 新しいEd25519鍵ペアを生成: {key_id}")
+
+        # Ed25519秘密鍵を生成
+        private_key = ed25519.Ed25519PrivateKey.generate()
+        public_key = private_key.public_key()
+
+        # メモリに保存
+        self._active_keys[key_id] = private_key
+
+        print(f"  ✓ Ed25519鍵ペア生成完了")
+        return private_key, public_key
+
+    def save_private_key_encrypted(
+        self,
+        key_id: str,
+        private_key: Any,  # ECDSA or Ed25519
+        passphrase: str
+    ) -> str:
+        """
+        秘密鍵をパスフレーズで暗号化して保存（ECDSA/Ed25519両対応）
+
+        Args:
+            key_id: 鍵の識別子
+            private_key: 秘密鍵（EllipticCurvePrivateKey or Ed25519PrivateKey）
             passphrase: パスフレーズ
 
         Returns:
@@ -414,16 +442,16 @@ class KeyManager:
         public_key = self.load_public_key(key_id)
         return self.public_key_to_pem(public_key)
 
-    def public_key_to_base64(self, public_key: ec.EllipticCurvePublicKey) -> str:
-        """公開鍵をBase64文字列に変換"""
+    def public_key_to_base64(self, public_key: Any) -> str:
+        """公開鍵をBase64文字列に変換（ECDSA/Ed25519両対応）"""
         pem = public_key.public_bytes(
             encoding=serialization.Encoding.PEM,
             format=serialization.PublicFormat.SubjectPublicKeyInfo
         )
         return base64.b64encode(pem).decode('utf-8')
 
-    def public_key_from_base64(self, base64_str: str) -> ec.EllipticCurvePublicKey:
-        """Base64文字列から公開鍵を復元"""
+    def public_key_from_base64(self, base64_str: str) -> Any:
+        """Base64文字列から公開鍵を復元（ECDSA/Ed25519両対応）"""
         pem = base64.b64decode(base64_str.encode('utf-8'))
         return serialization.load_pem_public_key(pem, backend=self.backend)
 
@@ -539,31 +567,47 @@ class SignatureManager:
         algorithm: str = 'ECDSA'
     ) -> Signature:
         """
-        データに署名
+        データに署名（ECDSA/Ed25519両対応）
 
         Args:
             data: 署名するデータ
             key_id: 使用する秘密鍵のID
-            algorithm: 署名アルゴリズム（現在はECDSAのみサポート）
+            algorithm: 署名アルゴリズム（'ECDSA' or 'ED25519'）
 
         Returns:
             Signature: 署名オブジェクト
         """
-        print(f"[SignatureManager] データに署名中（鍵ID: {key_id}）")
+        print(f"[SignatureManager] データに署名中（鍵ID: {key_id}, アルゴリズム: {algorithm}）")
 
         # 秘密鍵を取得
         private_key = self.key_manager.get_private_key(key_id)
         if private_key is None:
             raise CryptoError(f"秘密鍵が見つかりません: {key_id}")
 
-        # データをハッシュ化
-        data_hash = self._hash_data(data)
+        algorithm_upper = algorithm.upper()
 
-        # ECDSA署名
-        signature_bytes = private_key.sign(
-            data_hash,
-            ec.ECDSA(hashes.SHA256())
-        )
+        if algorithm_upper in ["ECDSA", "ES256"]:
+            # データをハッシュ化
+            data_hash = self._hash_data(data)
+
+            # ECDSA署名
+            signature_bytes = private_key.sign(
+                data_hash,
+                ec.ECDSA(hashes.SHA256())
+            )
+        elif algorithm_upper == "ED25519":
+            # Ed25519署名（メッセージを直接署名、ハッシュ不要）
+            if isinstance(data, str):
+                message = data.encode('utf-8')
+            elif isinstance(data, bytes):
+                message = data
+            else:
+                # 辞書などの場合はJSON文字列化
+                message = json.dumps(data, ensure_ascii=False).encode('utf-8')
+
+            signature_bytes = private_key.sign(message)
+        else:
+            raise CryptoError(f"サポートされていないアルゴリズム: {algorithm}")
 
         # 公開鍵を取得
         public_key = private_key.public_key()
@@ -586,7 +630,7 @@ class SignatureManager:
         signature: Signature
     ) -> bool:
         """
-        署名を検証
+        署名を検証（ECDSA/Ed25519両対応）
 
         Args:
             data: 検証するデータ
@@ -595,24 +639,40 @@ class SignatureManager:
         Returns:
             bool: 検証結果（True=有効、False=無効）
         """
-        print(f"[SignatureManager] 署名を検証中...")
+        print(f"[SignatureManager] 署名を検証中（アルゴリズム: {signature.algorithm}）...")
 
         try:
             # 公開鍵を復元
             public_key = self.key_manager.public_key_from_base64(signature.public_key)
 
-            # データをハッシュ化
-            data_hash = self._hash_data(data)
-
             # 署名をデコード
             signature_bytes = base64.b64decode(signature.value.encode('utf-8'))
 
-            # ECDSA検証
-            public_key.verify(
-                signature_bytes,
-                data_hash,
-                ec.ECDSA(hashes.SHA256())
-            )
+            # アルゴリズムに応じて検証方法を切り替え
+            algorithm = signature.algorithm.upper()
+
+            if algorithm in ["ECDSA", "ES256"]:
+                # ECDSA検証
+                data_hash = self._hash_data(data)
+                public_key.verify(
+                    signature_bytes,
+                    data_hash,
+                    ec.ECDSA(hashes.SHA256())
+                )
+            elif algorithm == "ED25519":
+                # Ed25519検証（メッセージを直接検証、ハッシュ不要）
+                if isinstance(data, str):
+                    message = data.encode('utf-8')
+                elif isinstance(data, bytes):
+                    message = data
+                else:
+                    # 辞書などの場合はJSON文字列化
+                    message = json.dumps(data, ensure_ascii=False).encode('utf-8')
+
+                public_key.verify(signature_bytes, message)
+            else:
+                print(f"  ✗ サポートされていないアルゴリズム: {algorithm}")
+                return False
 
             print(f"  ✓ 署名は有効です")
             return True
@@ -775,7 +835,7 @@ class SecureStorage:
             algorithm=hashes.SHA256(),
             length=32,
             salt=salt,
-            iterations=100000,
+            iterations=600000,  # OWASP 2023推奨値
             backend=self.backend
         )
         return kdf.derive(passphrase.encode('utf-8'))
@@ -803,30 +863,29 @@ class SecureStorage:
         json_data = json.dumps(data, ensure_ascii=False, indent=2)
         plaintext = json_data.encode('utf-8')
 
-        # ランダムなソルトとIVを生成
+        # ランダムなソルトとNonce（GCM用）を生成
         salt = os.urandom(16)
-        iv = os.urandom(16)
+        nonce = os.urandom(12)  # GCMでは12バイトのnonceを推奨
 
         # 鍵を導出
         key = self._derive_key(passphrase, salt)
 
-        # AES-256-CBCで暗号化
+        # AES-256-GCMで暗号化（認証付き暗号化）
         cipher = Cipher(
             algorithms.AES(key),
-            modes.CBC(iv),
+            modes.GCM(nonce),
             backend=self.backend
         )
         encryptor = cipher.encryptor()
 
-        # パディング
-        padding_length = 16 - (len(plaintext) % 16)
-        padded_plaintext = plaintext + bytes([padding_length] * padding_length)
+        # 暗号化（GCMではパディング不要）
+        ciphertext = encryptor.update(plaintext) + encryptor.finalize()
 
-        # 暗号化
-        ciphertext = encryptor.update(padded_plaintext) + encryptor.finalize()
+        # 認証タグを取得
+        tag = encryptor.tag
 
-        # ソルト + IV + 暗号文を結合
-        encrypted_data = salt + iv + ciphertext
+        # ソルト + Nonce + Tag + 暗号文を結合
+        encrypted_data = salt + nonce + tag + ciphertext
 
         # ファイルに保存
         file_path = self.storage_directory / filename
@@ -864,29 +923,26 @@ class SecureStorage:
         # ファイルから読み込み
         encrypted_data = file_path.read_bytes()
 
-        # ソルト、IV、暗号文を分離
+        # ソルト、Nonce、Tag、暗号文を分離
         salt = encrypted_data[:16]
-        iv = encrypted_data[16:32]
-        ciphertext = encrypted_data[32:]
+        nonce = encrypted_data[16:28]  # 12バイトのnonce
+        tag = encrypted_data[28:44]    # 16バイトの認証タグ
+        ciphertext = encrypted_data[44:]
 
         # 鍵を導出
         key = self._derive_key(passphrase, salt)
 
-        # AES-256-CBCで復号化
+        # AES-256-GCMで復号化（認証付き暗号化）
         cipher = Cipher(
             algorithms.AES(key),
-            modes.CBC(iv),
+            modes.GCM(nonce, tag),
             backend=self.backend
         )
         decryptor = cipher.decryptor()
 
         try:
-            # 復号化
-            padded_plaintext = decryptor.update(ciphertext) + decryptor.finalize()
-
-            # パディングを除去
-            padding_length = padded_plaintext[-1]
-            plaintext = padded_plaintext[:-padding_length]
+            # 復号化（GCMではパディング除去不要）
+            plaintext = decryptor.update(ciphertext) + decryptor.finalize()
 
             # JSONとしてパース
             json_data = plaintext.decode('utf-8')
@@ -896,7 +952,7 @@ class SecureStorage:
             return data
 
         except Exception as e:
-            raise CryptoError(f"復号化に失敗しました（パスフレーズが正しくない可能性があります）: {e}")
+            raise CryptoError(f"復号化に失敗しました（パスフレーズが正しくない、または改ざんされている可能性があります）: {e}")
 
 
 class WebAuthnChallengeManager:
@@ -1197,8 +1253,9 @@ class DeviceAttestationManager:
 
             # 8. COSE公開鍵のパースとECDSA署名検証
             if not CBOR2_AVAILABLE:
-                print(f"  ⚠️  cbor2ライブラリが利用不可のため、署名検証をスキップ")
-                return (True, new_counter)
+                raise ImportError(
+                    "cbor2ライブラリが必須です。インストールしてください: pip install cbor2"
+                )
 
             # COSE公開鍵をデコード
             public_key_cose = base64.b64decode(public_key_cose_b64)

@@ -343,6 +343,52 @@ def create_user_authorization_vp(
         raise ValueError(f"Failed to create user_authorization VP: {e}")
 
 
+def convert_vp_to_standard_format(vp_json: Dict[str, Any]) -> str:
+    """
+    JSON形式のVPを標準SD-JWT-VC形式（~区切り）に変換
+
+    標準形式: <issuer-jwt>~<kb-jwt>~
+
+    Args:
+        vp_json: JSON形式のVP（issuer_jwt, kb_jwt含む）
+
+    Returns:
+        str: 標準SD-JWT-VC形式の文字列
+    """
+    issuer_jwt = vp_json.get("issuer_jwt", "")
+    kb_jwt = vp_json.get("kb_jwt", "")
+
+    # 標準形式: <issuer-jwt>~<kb-jwt>~
+    # 最後の~はSD-JWT-VCの標準に従う（Disclosuresが空の場合）
+    standard_format = f"{issuer_jwt}~{kb_jwt}~"
+
+    return standard_format
+
+
+def convert_standard_format_to_vp(standard_format: str) -> Dict[str, Any]:
+    """
+    標準SD-JWT-VC形式（~区切り）をJSON形式のVPに変換
+
+    Args:
+        standard_format: 標準SD-JWT-VC形式の文字列（~区切り）
+
+    Returns:
+        Dict[str, Any]: JSON形式のVP
+    """
+    parts = standard_format.split('~')
+
+    if len(parts) < 2:
+        raise ValueError(f"Invalid SD-JWT-VC format: expected at least 2 parts, got {len(parts)}")
+
+    vp = {
+        "issuer_jwt": parts[0],
+        "kb_jwt": parts[1] if len(parts) > 1 else "",
+        # parts[2]以降はDisclosures（現在は未使用）
+    }
+
+    return vp
+
+
 def verify_user_authorization_vp(
     user_authorization: str,
     expected_cart_hash: Optional[str] = None,
