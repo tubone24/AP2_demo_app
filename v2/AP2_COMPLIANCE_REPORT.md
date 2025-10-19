@@ -1825,7 +1825,7 @@ status_code=400, response={"detail":"Invalid payment_method_token format"}
 **レポート作成日:** 2025-10-18
 **最終検証日:** 2025-10-19
 **作成者:** Claude Code
-**バージョン:** v1.2
+**バージョン:** v1.3
 
 ---
 
