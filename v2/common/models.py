@@ -477,6 +477,7 @@ class StreamEvent(BaseModel):
     { "type": "payment_method_selection", "payment_methods": [...] }
     { "type": "credential_provider_selection", "providers": [...] }
     { "type": "webauthn_request", "challenge": "...", "rp_id": "...", "timeout": 60000 }
+    { "type": "step_up_redirect", "step_up_url": "...", "session_id": "...", "content": "追加認証が必要です" }
     """
     type: Literal[
         "agent_text",
@@ -486,6 +487,7 @@ class StreamEvent(BaseModel):
         "payment_method_selection",
         "credential_provider_selection",
         "webauthn_request",
+        "step_up_redirect",
         "error",
         "done"
     ]
@@ -503,6 +505,10 @@ class StreamEvent(BaseModel):
     challenge: Optional[str] = None
     rp_id: Optional[str] = None
     timeout: Optional[int] = None
+
+    # Step-up認証用フィールド
+    step_up_url: Optional[str] = None
+    session_id: Optional[str] = None
 
     error: Optional[str] = None
 

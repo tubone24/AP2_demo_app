@@ -692,6 +692,32 @@ class ShoppingAgent(BaseAgent):
                 user_id = session.get("user_id", "user_demo_001")
 
                 try:
+                    # credential_idを取得してCredential Providerから公開鍵を取得
+                    credential_id = attestation.get("id")
+                    public_key_cose = None
+
+                    if credential_id:
+                        try:
+                            # Credential Providerから公開鍵を取得
+                            selected_cp = session.get("selected_credential_provider", self.credential_providers[0])
+                            public_key_response = await self.http_client.post(
+                                f"{selected_cp['url']}/passkey/get-public-key",
+                                json={"credential_id": credential_id, "user_id": user_id},
+                                timeout=10.0
+                            )
+                            public_key_response.raise_for_status()
+                            public_key_data = public_key_response.json()
+                            public_key_cose = public_key_data.get("public_key_cose")
+
+                            logger.info(
+                                f"[submit_payment_attestation] Public key retrieved from Credential Provider: "
+                                f"credential_id={credential_id[:16]}..."
+                            )
+                        except Exception as pk_error:
+                            logger.warning(
+                                f"[submit_payment_attestation] Failed to retrieve public key from CP: {pk_error}"
+                            )
+
                     # VP生成時、PaymentMandateからuser_authorizationフィールドを除外
                     # （ハッシュ計算の一貫性を保つため）
                     payment_mandate_for_vp = {k: v for k, v in payment_mandate.items() if k != "user_authorization"}
@@ -701,7 +727,8 @@ class ShoppingAgent(BaseAgent):
                         cart_mandate=cart_mandate,
                         payment_mandate_contents=payment_mandate_for_vp,
                         user_id=user_id,
-                        payment_processor_id="did:ap2:agent:payment_processor"
+                        payment_processor_id="did:ap2:agent:payment_processor",
+                        public_key_cose=public_key_cose
                     )
 
                     payment_mandate["user_authorization"] = user_authorization
@@ -867,6 +894,141 @@ class ShoppingAgent(BaseAgent):
         """
         user_input_lower = user_input.lower()
         current_step = session.get("step", "initial")
+
+        # Step-up認証完了の処理
+        if user_input.startswith("step-up-completed:"):
+            step_up_session_id = user_input.split(":", 1)[1].strip()
+            logger.info(f"[ShoppingAgent] Step-up completed: session_id={step_up_session_id}")
+
+            # Credential Providerにstep-up完了を確認
+            selected_cp = session.get("selected_credential_provider", self.credential_providers[0])
+
+            try:
+                # Step-upセッション情報を取得
+                verify_response = await self.http_client.post(
+                    f"{selected_cp['url']}/payment-methods/verify-step-up",
+                    json={"session_id": step_up_session_id},
+                    timeout=10.0
+                )
+                verify_response.raise_for_status()
+                step_up_result = verify_response.json()
+
+                if step_up_result.get("verified"):
+                    # 認証成功 - 決済フローを続行
+                    payment_method = step_up_result.get("payment_method")
+                    session["selected_payment_method"] = payment_method
+
+                    # トークン化された支払い方法をセッションに保存
+                    # Step-up完了により、既に認証済みとみなす
+                    session["tokenized_payment_method"] = {
+                        **payment_method,
+                        "step_up_completed": True,
+                        "step_up_session_id": step_up_session_id
+                    }
+
+                    yield StreamEvent(
+                        type="agent_text",
+                        content=f"✅ 追加認証が完了しました。\n\n{payment_method['brand'].upper()} ****{payment_method['last4']}で決済を続行します。"
+                    )
+                    await asyncio.sleep(0.5)
+
+                    # PaymentMandateを作成
+                    yield StreamEvent(
+                        type="agent_text",
+                        content="決済情報を準備中..."
+                    )
+                    await asyncio.sleep(0.3)
+
+                    # CartMandateの存在確認
+                    if not session.get("cart_mandate"):
+                        selected_cart_mandate = session.get("selected_cart_mandate")
+                        if selected_cart_mandate:
+                            session["cart_mandate"] = selected_cart_mandate
+                            logger.info("[ShoppingAgent] Set cart_mandate from selected_cart_mandate after step-up")
+                        else:
+                            # CartMandateが見つからない場合のエラー
+                            logger.error("[ShoppingAgent] No cart mandate found in session after step-up")
+                            yield StreamEvent(
+                                type="agent_text",
+                                content="❌ カート情報が見つかりません。最初からやり直してください。"
+                            )
+                            session["step"] = "error"
+                            return
+
+                    # PaymentMandate作成
+                    payment_mandate = self._create_payment_mandate(session)
+                    session["payment_mandate"] = payment_mandate
+                    session["step"] = "webauthn_attestation_requested"
+                    session["will_use_passkey"] = True
+
+                    yield StreamEvent(
+                        type="agent_text",
+                        content="決済準備が完了しました。セキュリティのため、デバイス認証（WebAuthn/Passkey）を実施します。"
+                    )
+                    await asyncio.sleep(0.5)
+
+                    # WebAuthn challengeを生成
+                    import secrets
+                    challenge = secrets.token_urlsafe(32)
+                    session["webauthn_challenge"] = challenge
+
+                    yield StreamEvent(
+                        type="webauthn_request",
+                        challenge=challenge,
+                        rp_id="localhost",
+                        timeout=60000
+                    )
+
+                    yield StreamEvent(
+                        type="agent_text",
+                        content="デバイス認証を完了してください。\n\n認証後、自動的に決済処理が開始されます。"
+                    )
+                    return
+                else:
+                    # 認証失敗
+                    yield StreamEvent(
+                        type="agent_text",
+                        content="❌ 追加認証に失敗しました。別の支払い方法を選択してください。"
+                    )
+                    session["step"] = "select_payment_method"
+
+                    # 支払い方法選択に戻る
+                    payment_methods = session.get("available_payment_methods", [])
+                    if payment_methods:
+                        await asyncio.sleep(0.3)
+                        yield StreamEvent(
+                            type="agent_text",
+                            content="以下の支払い方法から選択してください。"
+                        )
+                        await asyncio.sleep(0.2)
+                        yield StreamEvent(
+                            type="payment_method_selection",
+                            payment_methods=payment_methods
+                        )
+                    return
+
+            except Exception as e:
+                logger.error(f"[ShoppingAgent] Failed to verify step-up: {e}", exc_info=True)
+                yield StreamEvent(
+                    type="agent_text",
+                    content=f"認証確認中にエラーが発生しました: {e}\n\n別の支払い方法を選択してください。"
+                )
+                session["step"] = "select_payment_method"
+
+                # 支払い方法選択に戻る
+                payment_methods = session.get("available_payment_methods", [])
+                if payment_methods:
+                    await asyncio.sleep(0.3)
+                    yield StreamEvent(
+                        type="agent_text",
+                        content="以下の支払い方法から選択してください。"
+                    )
+                    await asyncio.sleep(0.2)
+                    yield StreamEvent(
+                        type="payment_method_selection",
+                        payment_methods=payment_methods
+                    )
+                return
 
         # ステップ1: 初回挨拶
         if current_step == "initial":
@@ -1547,13 +1709,34 @@ class ShoppingAgent(BaseAgent):
                     f"[ShoppingAgent] Payment method requires step-up: "
                     f"{selected_payment_method['id']}, brand={selected_payment_method['brand']}"
                 )
-                
+
                 try:
                     # Credential ProviderにStep-upセッション作成を依頼
                     selected_cp = session.get("selected_credential_provider", self.credential_providers[0])
-                    cart_mandate = session.get("cart_mandate", {})
-                    total_amount = cart_mandate.get("total", {})
-                    
+
+                    # CartMandateまたはIntentMandateから金額情報を取得
+                    # selected_cart_mandateがあればcart_mandateに設定（step-up後の処理で必要）
+                    selected_cart_mandate = session.get("selected_cart_mandate")
+                    if selected_cart_mandate and not session.get("cart_mandate"):
+                        session["cart_mandate"] = selected_cart_mandate
+                        logger.info("[ShoppingAgent] Set cart_mandate from selected_cart_mandate for step-up flow")
+
+                    cart_mandate = session.get("cart_mandate")
+                    intent_mandate = session.get("intent_mandate")
+
+                    if cart_mandate:
+                        total_amount = cart_mandate.get("total", {})
+                        merchant_id = cart_mandate.get("merchant_id")
+                    elif intent_mandate:
+                        # CartMandateがない場合、IntentMandateの最大金額を使用
+                        max_amount = intent_mandate.get("max_amount", {})
+                        total_amount = max_amount
+                        merchant_id = None  # この時点では未確定
+                    else:
+                        # フォールバック：空の金額情報
+                        total_amount = {"value": "0", "currency": "JPY"}
+                        merchant_id = None
+
                     response = await self.http_client.post(
                         f"{selected_cp['url']}/payment-methods/initiate-step-up",
                         json={
@@ -1561,7 +1744,7 @@ class ShoppingAgent(BaseAgent):
                             "payment_method_id": selected_payment_method["id"],
                             "transaction_context": {
                                 "amount": total_amount,
-                                "merchant_id": cart_mandate.get("merchant_id")
+                                "merchant_id": merchant_id
                             },
                             "return_url": "http://localhost:3000/chat"
                         },
@@ -1593,7 +1776,7 @@ class ShoppingAgent(BaseAgent):
                         type="step_up_redirect",
                         step_up_url=step_up_url,
                         session_id=session_id,
-                        reason=selected_payment_method.get("step_up_reason", "Additional authentication required")
+                        content=selected_payment_method.get("step_up_reason", "Additional authentication required")
                     )
                     return
                     

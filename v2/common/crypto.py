@@ -1172,7 +1172,7 @@ class DeviceAttestationManager:
             new_counter = auth_data['sign_count']
 
             if new_counter == 0 and stored_counter == 0:
-                print(f"  ⚠️  Signature counter: 0（authenticatorがcounterをサポートしていない可能性）")
+                print(f"  ℹ️  Signature counter: 0 (AP2準拠: user_authorizationのnonceによりリプレイ攻撃は防止されます)")
             elif new_counter <= stored_counter:
                 print(f"  ✗ Signature counter異常（リプレイ攻撃の可能性）")
                 return (False, stored_counter)

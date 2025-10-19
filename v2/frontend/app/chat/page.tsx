@@ -56,6 +56,35 @@ export default function ChatPage() {
     }
   }, []);
 
+  // Step-up認証完了のコールバックをチェック
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const stepUpStatus = urlParams.get("step_up_status");
+    const stepUpSessionId = urlParams.get("session_id");
+
+    if (stepUpStatus && stepUpSessionId) {
+      console.log("[Step-up Callback] Detected:", { stepUpStatus, stepUpSessionId });
+
+      // URLパラメータをクリーンアップ
+      const cleanUrl = window.location.pathname;
+      window.history.replaceState({}, document.title, cleanUrl);
+
+      if (stepUpStatus === "success") {
+        // Step-up成功 - Shopping Agentに完了を通知
+        console.log("[Step-up] Success - sending completion message to agent");
+        setTimeout(() => {
+          sendMessage(`step-up-completed:${stepUpSessionId}`);
+        }, 500);
+      } else if (stepUpStatus === "cancelled") {
+        // キャンセル - ユーザーに通知
+        console.log("[Step-up] Cancelled");
+        setTimeout(() => {
+          sendMessage("認証をキャンセルしました。別の支払い方法を選択してください。");
+        }, 500);
+      }
+    }
+  }, [sendMessage]);
+
   // メッセージが追加されたら自動スクロール
   useEffect(() => {
     if (scrollAreaRef.current) {
