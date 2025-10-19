@@ -3,12 +3,45 @@ v2/common/models.py
 
 FastAPI用のPydanticモデル
 demo_app_v2.mdの要件に基づくA2AメッセージとAPIリクエスト/レスポンス型
+
+AP2型定義統合:
+- W3C Payment Request API型（11型）: common/payment_types.py
+- AP2 Mandate型（5型）: common/mandate_types.py
+- JWT生成・検証: common/jwt_utils.py
 """
 
 from typing import Any, Dict, List, Optional, Literal
 from pydantic import BaseModel, Field
 from datetime import datetime
 from enum import Enum
+
+# AP2公式型定義をインポート（AP2プロトコル完全準拠）
+from common.payment_types import (
+    ContactAddress,
+    PaymentCurrencyAmount,
+    PaymentItem,
+    PaymentShippingOption,
+    PaymentOptions,
+    PaymentMethodData,
+    PaymentDetailsModifier,
+    PaymentDetailsInit,
+    PaymentRequest,
+    PaymentResponse,
+)
+
+from common.mandate_types import (
+    IntentMandate,
+    CartContents,
+    CartMandate,
+    PaymentMandateContents,
+    PaymentMandate,
+)
+
+from common.jwt_utils import (
+    compute_canonical_hash,
+    MerchantAuthorizationJWT,
+    UserAuthorizationSDJWT,
+)
 
 
 # ========================================
@@ -675,3 +708,42 @@ class AttestationDB(BaseModel):
     verified: bool
     verification_details: Optional[Dict[str, Any]]
     created_at: datetime
+
+
+# ========================================
+# エクスポート（AP2型定義を含む）
+# ========================================
+
+__all__ = [
+    # A2A Message Models
+    "A2ASignature",
+    "A2AProof",
+
+    # Cryptographic Models
+    "Signature",
+    "AttestationType",
+
+    # W3C Payment Request API型（11型）
+    "ContactAddress",
+    "PaymentCurrencyAmount",
+    "PaymentItem",
+    "PaymentShippingOption",
+    "PaymentOptions",
+    "PaymentMethodData",
+    "PaymentDetailsModifier",
+    "PaymentDetailsInit",
+    "PaymentRequest",
+    "PaymentResponse",
+
+    # AP2 Mandate型（5型）
+    "IntentMandate",
+    "CartContents",
+    "CartMandate",
+    "PaymentMandateContents",
+    "PaymentMandate",
+
+    # JWT生成・検証ユーティリティ
+    "compute_canonical_hash",
+    "MerchantAuthorizationJWT",
+    "UserAuthorizationSDJWT",
+]
