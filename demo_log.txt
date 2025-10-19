@@ -1,0 +1,2373 @@
+(anaconda3-2023.09-0) kagadminmac% docker compose up                                                                                                       [~/project/ap2/v2][v2]
+WARN[0000] /Users/kagadminmac/project/ap2/v2/docker-compose.yml: the attribute `version` is obsolete, it will be ignored, please remove it to avoid potential confusion
+Attaching to ap2_credential_provider, ap2_frontend, ap2_init_keys, ap2_merchant, ap2_merchant_agent, ap2_payment_network, ap2_payment_processor, ap2_shopping_agent
+ap2_init_keys  | ================================================================================
+ap2_init_keys  | AP2 エージェント キーペア初期化
+ap2_init_keys  | ================================================================================
+ap2_init_keys  |
+ap2_init_keys  | キー保存先: /app/v2/keys
+ap2_init_keys  | DID Document保存先: /app/v2/data/did_documents
+ap2_init_keys  |
+ap2_init_keys  | [Shopping Agent]
+ap2_init_keys  |   ℹ️  既存の鍵とDID Documentが見つかりました（スキップ）
+ap2_init_keys  |      DID: did:ap2:agent:shopping_agent
+ap2_init_keys  |
+ap2_init_keys  | [Merchant Agent]
+ap2_init_keys  |   ℹ️  既存の鍵とDID Documentが見つかりました（スキップ）
+ap2_init_keys  |      DID: did:ap2:agent:merchant_agent
+ap2_init_keys  |
+ap2_init_keys  | [Merchant]
+ap2_init_keys  |   ℹ️  既存の鍵とDID Documentが見つかりました（スキップ）
+ap2_init_keys  |      DID: did:ap2:merchant:mugibo_merchant
+ap2_init_keys  |
+ap2_init_keys  | [Credential Provider]
+ap2_init_keys  |   ℹ️  既存の鍵とDID Documentが見つかりました（スキップ）
+ap2_init_keys  |      DID: did:ap2:cp:demo_cp
+ap2_init_keys  |
+ap2_init_keys  | [Payment Processor]
+ap2_init_keys  |   ℹ️  既存の鍵とDID Documentが見つかりました（スキップ）
+ap2_init_keys  |      DID: did:ap2:agent:payment_processor
+ap2_init_keys  |
+ap2_init_keys  | ================================================================================
+ap2_init_keys  | ✅ 全エージェントの初期化が完了しました
+ap2_init_keys  | ================================================================================
+ap2_init_keys  |
+ap2_init_keys  | 次のステップ:
+ap2_init_keys  |   1. docker-compose up -d でサービスを起動
+ap2_init_keys  |   2. 各エージェントはキーを永続化ストレージから読み込みます
+ap2_init_keys  |   3. DIDは再起動後も一貫して維持されます
+ap2_init_keys  |
+ap2_init_keys exited with code 0
+ap2_payment_network  | [2025-10-19 23:03:04,055] INFO in network: [DemoPaymentNetwork] Payment Network Service initialized
+ap2_payment_network  | [2025-10-19 23:03:04,071] INFO in network: [DemoPaymentNetwork] Payment Network Service initialized
+ap2_payment_network  | INFO:     Started server process [1]
+ap2_payment_network  | INFO:     Waiting for application startup.
+ap2_payment_network  | INFO:     Application startup complete.
+ap2_payment_network  | INFO:     Uvicorn running on http://0.0.0.0:8005 (Press CTRL+C to quit)
+ap2_credential_provider  | [2025-10-19 23:03:05,076] INFO in v2.common.base_agent: [Credential Provider] ✓ 永続化ストレージから鍵を読み込みました: credential_provider
+ap2_credential_provider  | [2025-10-19 23:03:05,076] INFO in v2.common.did_resolver: [DIDResolver] 永続化されたDIDドキュメントを読み込み中: /app/v2/data/did_documents/shopping_agent_did.json
+ap2_credential_provider  | [2025-10-19 23:03:05,076] INFO in v2.common.did_resolver: [DIDResolver] ✓ 永続化DIDドキュメントを登録: did:ap2:agent:shopping_agent
+ap2_credential_provider  | [2025-10-19 23:03:05,076] INFO in v2.common.did_resolver: [DIDResolver] 永続化されたDIDドキュメントを読み込み中: /app/v2/data/did_documents/merchant_agent_did.json
+ap2_credential_provider  | [2025-10-19 23:03:05,076] INFO in v2.common.did_resolver: [DIDResolver] ✓ 永続化DIDドキュメントを登録: did:ap2:agent:merchant_agent
+ap2_credential_provider  | [2025-10-19 23:03:05,076] INFO in v2.common.did_resolver: [DIDResolver] 永続化されたDIDドキュメントを読み込み中: /app/v2/data/did_documents/merchant_did.json
+ap2_credential_provider  | [2025-10-19 23:03:05,076] INFO in v2.common.did_resolver: [DIDResolver] ✓ 永続化DIDドキュメントを登録: did:ap2:merchant:mugibo_merchant
+ap2_credential_provider  | [2025-10-19 23:03:05,076] INFO in v2.common.did_resolver: [DIDResolver] 永続化されたDIDドキュメントを読み込み中: /app/v2/data/did_documents/credential_provider_did.json
+ap2_credential_provider  | [2025-10-19 23:03:05,076] INFO in v2.common.did_resolver: [DIDResolver] ✓ 永続化DIDドキュメントを登録: did:ap2:cp:demo_cp
+ap2_credential_provider  | [2025-10-19 23:03:05,076] INFO in v2.common.did_resolver: [DIDResolver] 永続化されたDIDドキュメントを読み込み中: /app/v2/data/did_documents/payment_processor_did.json
+ap2_credential_provider  | [2025-10-19 23:03:05,077] INFO in v2.common.did_resolver: [DIDResolver] ✓ 永続化DIDドキュメントを登録: did:ap2:agent:payment_processor
+ap2_credential_provider  | [2025-10-19 23:03:05,077] INFO in v2.common.a2a_handler: [A2AHandler] Registered handler for @type: ap2.mandates.PaymentMandate
+ap2_credential_provider  | [2025-10-19 23:03:05,077] INFO in v2.common.a2a_handler: [A2AHandler] Registered handler for @type: ap2.requests.AttestationRequest
+ap2_credential_provider  | [KeyManager] 秘密鍵を読み込み: credential_provider
+ap2_credential_provider  |   ✓ 秘密鍵の読み込み成功
+ap2_credential_provider  | [2025-10-19 23:03:05,081] INFO in v2.common.base_agent: [Credential Provider] Initialized: did:ap2:agent:credential_provider
+ap2_credential_provider  | [2025-10-19 23:03:05,112] INFO in provider: [Credential Provider] Initialized
+ap2_merchant_agent       | [KeyManager] 秘密鍵を読み込み: merchant_agent
+ap2_merchant_agent       |   ✓ 秘密鍵の読み込み成功
+ap2_merchant_agent       | [2025-10-19 23:03:05,134] INFO in v2.common.base_agent: [Merchant Agent] ✓ 永続化ストレージから鍵を読み込みました: merchant_agent
+ap2_merchant_agent       | [2025-10-19 23:03:05,134] INFO in v2.common.did_resolver: [DIDResolver] 永続化されたDIDドキュメントを読み込み中: /app/v2/data/did_documents/shopping_agent_did.json
+ap2_merchant_agent       | [2025-10-19 23:03:05,134] INFO in v2.common.did_resolver: [DIDResolver] ✓ 永続化DIDドキュメントを登録: did:ap2:agent:shopping_agent
+ap2_merchant_agent       | [2025-10-19 23:03:05,134] INFO in v2.common.did_resolver: [DIDResolver] 永続化されたDIDドキュメントを読み込み中: /app/v2/data/did_documents/merchant_agent_did.json
+ap2_merchant_agent       | [2025-10-19 23:03:05,134] INFO in v2.common.did_resolver: [DIDResolver] ✓ 永続化DIDドキュメントを登録: did:ap2:agent:merchant_agent
+ap2_merchant_agent       | [2025-10-19 23:03:05,134] INFO in v2.common.did_resolver: [DIDResolver] 永続化されたDIDドキュメントを読み込み中: /app/v2/data/did_documents/merchant_did.json
+ap2_merchant_agent       | [2025-10-19 23:03:05,134] INFO in v2.common.did_resolver: [DIDResolver] ✓ 永続化DIDドキュメントを登録: did:ap2:merchant:mugibo_merchant
+ap2_merchant_agent       | [2025-10-19 23:03:05,134] INFO in v2.common.did_resolver: [DIDResolver] 永続化されたDIDドキュメントを読み込み中: /app/v2/data/did_documents/credential_provider_did.json
+ap2_frontend             |    ▲ Next.js 15.5.5
+ap2_frontend             |    - Local:        http://localhost:3000
+ap2_frontend             |    - Network:      http://0.0.0.0:3000
+ap2_frontend             |
+ap2_frontend             |  ✓ Starting...
+ap2_merchant_agent       | [2025-10-19 23:03:05,135] INFO in v2.common.did_resolver: [DIDResolver] ✓ 永続化DIDドキュメントを登録: did:ap2:cp:demo_cp
+ap2_merchant_agent       | [2025-10-19 23:03:05,135] INFO in v2.common.did_resolver: [DIDResolver] 永続化されたDIDドキュメントを読み込み中: /app/v2/data/did_documents/payment_processor_did.json
+ap2_merchant_agent       | [2025-10-19 23:03:05,135] INFO in v2.common.did_resolver: [DIDResolver] ✓ 永続化DIDドキュメントを登録: did:ap2:agent:payment_processor
+ap2_merchant_agent       | [2025-10-19 23:03:05,135] INFO in v2.common.a2a_handler: [A2AHandler] Registered handler for @type: ap2.mandates.IntentMandate
+ap2_merchant_agent       | [2025-10-19 23:03:05,135] INFO in v2.common.a2a_handler: [A2AHandler] Registered handler for @type: ap2.requests.ProductSearch
+ap2_merchant_agent       | [2025-10-19 23:03:05,135] INFO in v2.common.a2a_handler: [A2AHandler] Registered handler for @type: ap2.requests.CartRequest
+ap2_merchant_agent       | [2025-10-19 23:03:05,135] INFO in v2.common.a2a_handler: [A2AHandler] Registered handler for @type: ap2.mandates.PaymentMandate
+ap2_merchant_agent       | [2025-10-19 23:03:05,137] INFO in v2.common.base_agent: [Merchant Agent] Initialized: did:ap2:agent:merchant_agent
+
+
+ap2_credential_provider  | [KeyManager] 秘密鍵を読み込み: credential_provider
+ap2_payment_processor    | [KeyManager] 秘密鍵を読み込み: payment_processor
+ap2_credential_provider  |   ✓ 秘密鍵の読み込み成功
+ap2_shopping_agent       | [KeyManager] 秘密鍵を読み込み: shopping_agent
+
+
+
+ap2_payment_processor    | [2025-10-19 23:03:05,149] INFO in v2.common.base_agent: [Payment Processor] ✓ 永続化ストレージから鍵を読み込みました: payment_processor
+
+
+ap2_credential_provider  | [2025-10-19 23:03:05,145] INFO in v2.common.base_agent: [Credential Provider] ✓ 永続化ストレージから鍵を読み込みました: credential_provider
+ap2_payment_processor    | [2025-10-19 23:03:05,150] INFO in v2.common.did_resolver: [DIDResolver] 永続化されたDIDドキュメントを読み込み中: /app/v2/data/did_documents/shopping_agent_did.json
+
+
+
+
+ap2_credential_provider  | [2025-10-19 23:03:05,145] INFO in v2.common.did_resolver: [DIDResolver] 永続化されたDIDドキュメントを読み込み中: /app/v2/data/did_documents/shopping_agent_did.json
+ap2_payment_processor    | [2025-10-19 23:03:05,151] INFO in v2.common.did_resolver: [DIDResolver] ✓ 永続化DIDドキュメントを登録: did:ap2:agent:shopping_agent
+
+
+ap2_payment_processor    | [2025-10-19 23:03:05,151] INFO in v2.common.did_resolver: [DIDResolver] 永続化されたDIDドキュメントを読み込み中: /app/v2/data/did_documents/merchant_agent_did.json
+ap2_credential_provider  | [2025-10-19 23:03:05,145] INFO in v2.common.did_resolver: [DIDResolver] ✓ 永続化DIDドキュメントを登録: did:ap2:agent:shopping_agent
+ap2_shopping_agent       |   ✓ 秘密鍵の読み込み成功
+ap2_payment_processor    | [2025-10-19 23:03:05,151] INFO in v2.common.did_resolver: [DIDResolver] ✓ 永続化DIDドキュメントを登録: did:ap2:agent:merchant_agent
+
+ap2_shopping_agent       | [2025-10-19 23:03:05,156] INFO in v2.common.base_agent: [Shopping Agent] ✓ 永続化ストレージから鍵を読み込みました: shopping_agent
+
+
+ap2_payment_processor    | [2025-10-19 23:03:05,151] INFO in v2.common.did_resolver: [DIDResolver] 永続化されたDIDドキュメントを読み込み中: /app/v2/data/did_documents/merchant_did.json
+
+
+ap2_credential_provider  | [2025-10-19 23:03:05,145] INFO in v2.common.did_resolver: [DIDResolver] 永続化されたDIDドキュメントを読み込み中: /app/v2/data/did_documents/merchant_agent_did.json
+ap2_shopping_agent       | [2025-10-19 23:03:05,158] INFO in v2.common.did_resolver: [DIDResolver] ✓ 永続化DIDドキュメントを登録: did:ap2:agent:shopping_agent
+
+
+
+
+ap2_payment_processor    |   ✓ 秘密鍵の読み込み成功
+ap2_shopping_agent       | [2025-10-19 23:03:05,158] INFO in v2.common.did_resolver: [DIDResolver] 永続化されたDIDドキュメントを読み込み中: /app/v2/data/did_documents/merchant_agent_did.json
+ap2_credential_provider  | [2025-10-19 23:03:05,145] INFO in v2.common.did_resolver: [DIDResolver] ✓ 永続化DIDドキュメントを登録: did:ap2:agent:merchant_agent
+ap2_shopping_agent       | [2025-10-19 23:03:05,158] INFO in v2.common.did_resolver: [DIDResolver] ✓ 永続化DIDドキュメントを登録: did:ap2:agent:merchant_agent
+
+ap2_credential_provider  | [2025-10-19 23:03:05,145] INFO in v2.common.did_resolver: [DIDResolver] 永続化されたDIDドキュメントを読み込み中: /app/v2/data/did_documents/merchant_did.json
+
+
+
+
+ap2_credential_provider  | [2025-10-19 23:03:05,146] INFO in v2.common.did_resolver: [DIDResolver] ✓ 永続化DIDドキュメントを登録: did:ap2:merchant:mugibo_merchant
+
+
+ap2_credential_provider  | [2025-10-19 23:03:05,146] INFO in v2.common.did_resolver: [DIDResolver] 永続化されたDIDドキュメントを読み込み中: /app/v2/data/did_documents/credential_provider_did.json
+ap2_payment_processor    | [2025-10-19 23:03:05,151] INFO in v2.common.did_resolver: [DIDResolver] ✓ 永続化DIDドキュメントを登録: did:ap2:merchant:mugibo_merchant
+
+
+
+ap2_shopping_agent       | [2025-10-19 23:03:05,158] INFO in v2.common.did_resolver: [DIDResolver] ✓ 永続化DIDドキュメントを登録: did:ap2:merchant:mugibo_merchant
+
+ap2_payment_processor    | [2025-10-19 23:03:05,151] INFO in v2.common.did_resolver: [DIDResolver] 永続化されたDIDドキュメントを読み込み中: /app/v2/data/did_documents/credential_provider_did.json
+
+ap2_shopping_agent       | [2025-10-19 23:03:05,158] INFO in v2.common.did_resolver: [DIDResolver] ✓ 永続化DIDドキュメントを登録: did:ap2:cp:demo_cpdata/did_documents/payment_pro
+ap2_payment_processor    | [2025-10-19 23:03:05,151] INFO in v2.common.did_resolver: [DIDResolver] ✓ 永続化DIDドキュメントを登録: did:ap2:cp:demo_cp
+ap2_shopping_agent       | [2025-10-19 23:03:05,158] INFO in v2.common.did_resolver: [DIDResolver] 永続化されたDIDドキュメントを読み込み中: /app/v2/data/did_documents/payment_processor_did.json
+ap2_credential_provider  | [2025-10-19 23:03:05,146] INFO in v2.common.did_resolver: [DIDResolver] ✓ 永続化DIDドキュメントを登録: did:ap2:agent:payment_processor
+ap2_credential_provider  | [2025-10-19 23:03:05,146] INFO in v2.common.a2a_handler: [A2AHandler] Registered handler for @type: ap2.mandates.PaymentMandate
+ap2_credential_provider  | [2025-10-19 23:03:05,146] INFO in v2.common.a2a_handler: [A2AHandler] Registered handler for @type: ap2.requests.AttestationRequest
+ap2_credential_provider  | [2025-10-19 23:03:05,149] INFO in v2.common.base_agent: [Credential Provider] Initialized: did:ap2:agent:credential_provider
+
+ap2_credential_provider  | [2025-10-19 23:03:05,150] INFO in provider: [Credential Provider] Initialized
+ap2_shopping_agent       | [2025-10-19 23:03:05,159] INFO in v2.common.did_resolver: [DIDResolver] ✓ 永続化DIDドキュメントを登録: did:ap2:agent:payment_processor
+ap2_payment_processor    | [2025-10-19 23:03:05,151] INFO in v2.common.did_resolver: [DIDResolver] 永続化されたDIDドキュメントを読み込み中: /app/v2/data/did_documents/payment_processor_did.json
+ap2_credential_provider  | INFO:     Started server process [1]
+ap2_payment_processor    | [2025-10-19 23:03:05,151] INFO in v2.common.did_resolver: [DIDResolver] ✓ 永続化DIDドキュメントを登録: did:ap2:agent:payment_processor
+ap2_shopping_agent       | [2025-10-19 23:03:05,159] INFO in v2.common.a2a_handler: [A2AHandler] Registered handler for @type: ap2.mandates.CartMandate
+ap2_credential_provider  | INFO:     Waiting for application startup.
+ap2_payment_processor    | [2025-10-19 23:03:05,151] INFO in v2.common.a2a_handler: [A2AHandler] Registered handler for @type: ap2.mandates.PaymentMandate
+ap2_payment_processor    | [2025-10-19 23:03:05,153] INFO in v2.common.base_agent: [Payment Processor] Initialized: did:ap2:agent:payment_processor
+ap2_credential_provider  | [2025-10-19 23:03:05,150] INFO in provider: [Credential Provider] Running startup tasks...
+ap2_shopping_agent       | [2025-10-19 23:03:05,159] INFO in v2.common.a2a_handler: [A2AHandler] Registered handler for @type: ap2.responses.ProductList
+ap2_shopping_agent       | [2025-10-19 23:03:05,159] INFO in v2.common.a2a_handler: [A2AHandler] Registered handler for @type: ap2.responses.SignatureResponse
+ap2_shopping_agent       | [2025-10-19 23:03:05,163] INFO in v2.common.base_agent: [Shopping Agent] Initialized: did:ap2:agent:shopping_agent
+ap2_credential_provider  | [2025-10-19 23:03:05,184] INFO in provider: [Credential Provider] Database initialized
+ap2_credential_provider  | INFO:     Application startup complete.
+ap2_credential_provider  | INFO:     Uvicorn running on http://0.0.0.0:8003 (Press CTRL+C to quit)
+ap2_payment_processor    | [2025-10-19 23:03:05,197] INFO in processor: [Payment Processor] Initialized
+ap2_shopping_agent       | [2025-10-19 23:03:05,200] INFO in v2.common.risk_assessment: [RiskAssessmentEngine] Initialized (database_mode=enabled)
+ap2_shopping_agent       | [2025-10-19 23:03:05,201] INFO in agent: [Shopping Agent] Initialized with database-backed risk assessment
+ap2_payment_processor    | [KeyManager] 秘密鍵を読み込み: payment_processor
+ap2_payment_processor    |   ✓ 秘密鍵の読み込み成功
+ap2_payment_processor    | [2025-10-19 23:03:05,218] INFO in v2.common.base_agent: [Payment Processor] ✓ 永続化ストレージから鍵を読み込みました: payment_processor
+ap2_payment_processor    | [2025-10-19 23:03:05,218] INFO in v2.common.did_resolver: [DIDResolver] 永続化されたDIDドキュメントを読み込み中: /app/v2/data/did_documents/shopping_agent_did.json
+ap2_payment_processor    | [2025-10-19 23:03:05,218] INFO in v2.common.did_resolver: [DIDResolver] ✓ 永続化DIDドキュメントを登録: did:ap2:agent:shopping_agent
+ap2_payment_processor    | [2025-10-19 23:03:05,218] INFO in v2.common.did_resolver: [DIDResolver] 永続化されたDIDドキュメントを読み込み中: /app/v2/data/did_documents/merchant_agent_did.json
+ap2_payment_processor    | [2025-10-19 23:03:05,218] INFO in v2.common.did_resolver: [DIDResolver] ✓ 永続化DIDドキュメントを登録: did:ap2:agent:merchant_agent
+ap2_payment_processor    | [2025-10-19 23:03:05,218] INFO in v2.common.did_resolver: [DIDResolver] 永続化されたDIDドキュメントを読み込み中: /app/v2/data/did_documents/merchant_did.json
+ap2_payment_processor    | [2025-10-19 23:03:05,218] INFO in v2.common.did_resolver: [DIDResolver] ✓ 永続化DIDドキュメントを登録: did:ap2:merchant:mugibo_merchant
+ap2_shopping_agent       | [KeyManager] 秘密鍵を読み込み: shopping_agent
+ap2_merchant             | [KeyManager] 秘密鍵を読み込み: merchant
+
+ap2_payment_processor    | [2025-10-19 23:03:05,218] INFO in v2.common.did_resolver: [DIDResolver] 永続化されたDIDドキュメントを読み込み中: /app/v2/data/did_documents/credential_provider_did.json
+ap2_payment_processor    | [2025-10-19 23:03:05,218] INFO in v2.common.did_resolver: [DIDResolver] ✓ 永続化DIDドキュメントを登録: did:ap2:cp:demo_cp
+ap2_payment_processor    | [2025-10-19 23:03:05,218] INFO in v2.common.did_resolver: [DIDResolver] 永続化されたDIDドキュメントを読み込み中: /app/v2/data/did_documents/payment_processor_did.json
+ap2_payment_processor    | [2025-10-19 23:03:05,218] INFO in v2.common.did_resolver: [DIDResolver] ✓ 永続化DIDドキュメントを登録: did:ap2:agent:payment_processor
+ap2_payment_processor    | [2025-10-19 23:03:05,218] INFO in v2.common.a2a_handler: [A2AHandler] Registered handler for @type: ap2.mandates.PaymentMandate
+ap2_payment_processor    | [2025-10-19 23:03:05,222] INFO in v2.common.base_agent: [Payment Processor] Initialized: did:ap2:agent:payment_processor
+ap2_shopping_agent       | [2025-10-19 23:03:05,224] INFO in v2.common.base_agent: [Shopping Agent] ✓ 永続化ストレージから鍵を読み込みました: shopping_agent
+ap2_shopping_agent       | [2025-10-19 23:03:05,225] INFO in v2.common.did_resolver: [DIDResolver] 永続化されたDIDドキュメントを読み込み中: /app/v2/data/did_documents/shopping_agent_did.json
+ap2_shopping_agent       | [2025-10-19 23:03:05,225] INFO in v2.common.did_resolver: [DIDResolver] ✓ 永続化DIDドキュメントを登録: did:ap2:agent:shopping_agent
+ap2_shopping_agent       | [2025-10-19 23:03:05,225] INFO in v2.common.did_resolver: [DIDResolver] 永続化されたDIDドキュメントを読み込み中: /app/v2/data/did_documents/merchant_agent_did.json
+ap2_shopping_agent       | [2025-10-19 23:03:05,225] INFO in v2.common.did_resolver: [DIDResolver] ✓ 永続化DIDドキュメントを登録: did:ap2:agent:merchant_agent
+ap2_shopping_agent       | [2025-10-19 23:03:05,225] INFO in v2.common.did_resolver: [DIDResolver] 永続化されたDIDドキュメントを読み込み中: /app/v2/data/did_documents/merchant_did.json
+ap2_shopping_agent       | [2025-10-19 23:03:05,225] INFO in v2.common.did_resolver: [DIDResolver] ✓ 永続化DIDドキュメントを登録: did:ap2:merchant:mugibo_merchant
+ap2_shopping_agent       | [2025-10-19 23:03:05,225] INFO in v2.common.did_resolver: [DIDResolver] 永続化されたDIDドキュメントを読み込み中: /app/v2/data/did_documents/credential_provider_did.json
+ap2_shopping_agent       | [2025-10-19 23:03:05,225] INFO in v2.common.did_resolver: [DIDResolver] ✓ 永続化DIDドキュメントを登録: did:ap2:cp:demo_cp
+ap2_shopping_agent       | [2025-10-19 23:03:05,225] INFO in v2.common.did_resolver: [DIDResolver] 永続化されたDIDドキュメントを読み込み中: /app/v2/data/did_documents/payment_processor_did.json
+ap2_shopping_agent       | [2025-10-19 23:03:05,225] INFO in v2.common.did_resolver: [DIDResolver] ✓ 永続化DIDドキュメントを登録: did:ap2:agent:payment_processor
+ap2_shopping_agent       | [2025-10-19 23:03:05,225] INFO in v2.common.a2a_handler: [A2AHandler] Registered handler for @type: ap2.mandates.CartMandate
+ap2_shopping_agent       | [2025-10-19 23:03:05,225] INFO in v2.common.a2a_handler: [A2AHandler] Registered handler for @type: ap2.responses.ProductList
+ap2_shopping_agent       | [2025-10-19 23:03:05,225] INFO in v2.common.a2a_handler: [A2AHandler] Registered handler for @type: ap2.responses.SignatureResponse
+ap2_shopping_agent       |   ✓ 秘密鍵の読み込み成功
+ap2_shopping_agent       | [2025-10-19 23:03:05,229] INFO in v2.common.base_agent: [Shopping Agent] Initialized: did:ap2:agent:shopping_agent
+ap2_payment_processor    | [2025-10-19 23:03:05,227] INFO in processor: [Payment Processor] Initialized
+ap2_payment_processor    | INFO:     Started server process [1]
+ap2_payment_processor    | INFO:     Waiting for application startup.
+ap2_payment_processor    | [2025-10-19 23:03:05,228] INFO in processor: [Payment Processor] Running startup tasks...
+ap2_merchant             | [2025-10-19 23:03:05,232] INFO in v2.common.base_agent: [Merchant] ✓ 永続化ストレージから鍵を読み込みました: merchant
+ap2_merchant             | [2025-10-19 23:03:05,232] INFO in v2.common.did_resolver: [DIDResolver] 永続化されたDIDドキュメントを読み込み中: /app/v2/data/did_documents/shopping_agent_did.json
+ap2_merchant             | [2025-10-19 23:03:05,232] INFO in v2.common.did_resolver: [DIDResolver] ✓ 永続化DIDドキュメントを登録: did:ap2:agent:shopping_agent
+ap2_merchant             | [2025-10-19 23:03:05,232] INFO in v2.common.did_resolver: [DIDResolver] 永続化されたDIDドキュメントを読み込み中: /app/v2/data/did_documents/merchant_agent_did.json
+ap2_merchant             | [2025-10-19 23:03:05,232] INFO in v2.common.did_resolver: [DIDResolver] ✓ 永続化DIDドキュメントを登録: did:ap2:agent:merchant_agent
+ap2_merchant             | [2025-10-19 23:03:05,232] INFO in v2.common.did_resolver: [DIDResolver] 永続化されたDIDドキュメントを読み込み中: /app/v2/data/did_documents/merchant_did.json
+ap2_merchant             | [2025-10-19 23:03:05,232] INFO in v2.common.did_resolver: [DIDResolver] ✓ 永続化DIDドキュメントを登録: did:ap2:merchant:mugibo_merchant
+ap2_merchant             | [2025-10-19 23:03:05,232] INFO in v2.common.did_resolver: [DIDResolver] 永続化されたDIDドキュメントを読み込み中: /app/v2/data/did_documents/credential_provider_did.json
+ap2_merchant             | [2025-10-19 23:03:05,232] INFO in v2.common.did_resolver: [DIDResolver] ✓ 永続化DIDドキュメントを登録: did:ap2:cp:demo_cp
+ap2_merchant             | [2025-10-19 23:03:05,232] INFO in v2.common.did_resolver: [DIDResolver] 永続化されたDIDドキュメントを読み込み中: /app/v2/data/did_documents/payment_processor_did.json
+ap2_merchant             | [2025-10-19 23:03:05,232] INFO in v2.common.did_resolver: [DIDResolver] ✓ 永続化DIDドキュメントを登録: did:ap2:agent:payment_processor
+ap2_merchant             | [2025-10-19 23:03:05,232] INFO in v2.common.a2a_handler: [A2AHandler] Registered handler for @type: ap2.mandates.CartMandate
+ap2_merchant             |   ✓ 秘密鍵の読み込み成功
+ap2_merchant_agent       | [2025-10-19 23:03:05,233] INFO in agent: [Merchant Agent] Initialized
+ap2_shopping_agent       | [2025-10-19 23:03:05,234] INFO in v2.common.risk_assessment: [RiskAssessmentEngine] Initialized (database_mode=enabled)
+ap2_shopping_agent       | [2025-10-19 23:03:05,234] INFO in agent: [Shopping Agent] Initialized with database-backed risk assessment
+ap2_shopping_agent       | INFO:     Started server process [1]
+ap2_shopping_agent       | INFO:     Waiting for application startup.
+ap2_shopping_agent       | [2025-10-19 23:03:05,238] INFO in agent: [Shopping Agent] Running startup tasks...
+ap2_frontend             |  ✓ Ready in 115ms
+ap2_payment_processor    | [2025-10-19 23:03:05,249] INFO in processor: [Payment Processor] Database initialized
+ap2_payment_processor    | INFO:     Application startup complete.
+ap2_shopping_agent       | [2025-10-19 23:03:05,250] INFO in agent: [Shopping Agent] Database initialized
+ap2_shopping_agent       | INFO:     Application startup complete.
+ap2_merchant             | [2025-10-19 23:03:05,250] INFO in v2.common.base_agent: [Merchant] Initialized: did:ap2:merchant
+ap2_payment_processor    | INFO:     Uvicorn running on http://0.0.0.0:8004 (Press CTRL+C to quit)
+ap2_shopping_agent       | INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+ap2_merchant             | [2025-10-19 23:03:05,259] INFO in service: [Merchant] Initialized
+ap2_merchant_agent       | [KeyManager] 秘密鍵を読み込み: merchant_agent
+ap2_merchant_agent       |   ✓ 秘密鍵の読み込み成功
+ap2_merchant_agent       | [2025-10-19 23:03:05,262] INFO in v2.common.base_agent: [Merchant Agent] ✓ 永続化ストレージから鍵を読み込みました: merchant_agent
+ap2_merchant_agent       | [2025-10-19 23:03:05,262] INFO in v2.common.did_resolver: [DIDResolver] 永続化されたDIDドキュメントを読み込み中: /app/v2/data/did_documents/shopping_agent_did.json
+ap2_merchant_agent       | [2025-10-19 23:03:05,262] INFO in v2.common.did_resolver: [DIDResolver] ✓ 永続化DIDドキュメントを登録: did:ap2:agent:shopping_agent
+ap2_merchant_agent       | [2025-10-19 23:03:05,262] INFO in v2.common.did_resolver: [DIDResolver] 永続化されたDIDドキュメントを読み込み中: /app/v2/data/did_documents/merchant_agent_did.json
+ap2_merchant_agent       | [2025-10-19 23:03:05,263] INFO in v2.common.did_resolver: [DIDResolver] ✓ 永続化DIDドキュメントを登録: did:ap2:agent:merchant_agent
+ap2_merchant_agent       | [2025-10-19 23:03:05,263] INFO in v2.common.did_resolver: [DIDResolver] 永続化されたDIDドキュメントを読み込み中: /app/v2/data/did_documents/merchant_did.json
+ap2_merchant_agent       | [2025-10-19 23:03:05,263] INFO in v2.common.did_resolver: [DIDResolver] ✓ 永続化DIDドキュメントを登録: did:ap2:merchant:mugibo_merchant
+ap2_merchant_agent       | [2025-10-19 23:03:05,263] INFO in v2.common.did_resolver: [DIDResolver] 永続化されたDIDドキュメントを読み込み中: /app/v2/data/did_documents/credential_provider_did.json
+ap2_merchant_agent       | [2025-10-19 23:03:05,263] INFO in v2.common.did_resolver: [DIDResolver] ✓ 永続化DIDドキュメントを登録: did:ap2:cp:demo_cp
+ap2_merchant_agent       | [2025-10-19 23:03:05,263] INFO in v2.common.did_resolver: [DIDResolver] 永続化されたDIDドキュメントを読み込み中: /app/v2/data/did_documents/payment_processor_did.json
+ap2_merchant_agent       | [2025-10-19 23:03:05,263] INFO in v2.common.did_resolver: [DIDResolver] ✓ 永続化DIDドキュメントを登録: did:ap2:agent:payment_processor
+ap2_merchant_agent       | [2025-10-19 23:03:05,263] INFO in v2.common.a2a_handler: [A2AHandler] Registered handler for @type: ap2.mandates.IntentMandate
+ap2_merchant_agent       | [2025-10-19 23:03:05,263] INFO in v2.common.a2a_handler: [A2AHandler] Registered handler for @type: ap2.requests.ProductSearch
+ap2_merchant_agent       | [2025-10-19 23:03:05,263] INFO in v2.common.a2a_handler: [A2AHandler] Registered handler for @type: ap2.requests.CartRequest
+ap2_merchant_agent       | [2025-10-19 23:03:05,263] INFO in v2.common.a2a_handler: [A2AHandler] Registered handler for @type: ap2.mandates.PaymentMandate
+ap2_merchant_agent       | [2025-10-19 23:03:05,265] INFO in v2.common.base_agent: [Merchant Agent] Initialized: did:ap2:agent:merchant_agent
+ap2_merchant_agent       | [2025-10-19 23:03:05,270] INFO in agent: [Merchant Agent] Initialized
+ap2_merchant_agent       | INFO:     Started server process [1]
+ap2_merchant_agent       | INFO:     Waiting for application startup.
+ap2_merchant_agent       | [2025-10-19 23:03:05,271] INFO in agent: [Merchant Agent] Running startup tasks...
+ap2_merchant             | [KeyManager] 秘密鍵を読み込み: merchant
+ap2_merchant             | [2025-10-19 23:03:05,274] INFO in v2.common.base_agent: [Merchant] ✓ 永続化ストレージから鍵を読み込みました: merchant
+ap2_merchant             |   ✓ 秘密鍵の読み込み成功
+ap2_merchant             | [2025-10-19 23:03:05,275] INFO in v2.common.did_resolver: [DIDResolver] 永続化されたDIDドキュメントを読み込み中: /app/v2/data/did_documents/shopping_agent_did.json
+ap2_merchant             | [2025-10-19 23:03:05,276] INFO in v2.common.did_resolver: [DIDResolver] ✓ 永続化DIDドキュメントを登録: did:ap2:agent:shopping_agent
+ap2_merchant             | [2025-10-19 23:03:05,276] INFO in v2.common.did_resolver: [DIDResolver] 永続化されたDIDドキュメントを読み込み中: /app/v2/data/did_documents/merchant_agent_did.json
+ap2_merchant             | [2025-10-19 23:03:05,276] INFO in v2.common.did_resolver: [DIDResolver] ✓ 永続化DIDドキュメントを登録: did:ap2:agent:merchant_agent
+ap2_merchant             | [2025-10-19 23:03:05,276] INFO in v2.common.did_resolver: [DIDResolver] 永続化されたDIDドキュメントを読み込み中: /app/v2/data/did_documents/merchant_did.json
+ap2_merchant             | [2025-10-19 23:03:05,276] INFO in v2.common.did_resolver: [DIDResolver] ✓ 永続化DIDドキュメントを登録: did:ap2:merchant:mugibo_merchant
+ap2_merchant             | [2025-10-19 23:03:05,276] INFO in v2.common.did_resolver: [DIDResolver] 永続化されたDIDドキュメントを読み込み中: /app/v2/data/did_documents/credential_provider_did.json
+ap2_merchant             | [2025-10-19 23:03:05,276] INFO in v2.common.did_resolver: [DIDResolver] ✓ 永続化DIDドキュメントを登録: did:ap2:cp:demo_cp
+ap2_merchant             | [2025-10-19 23:03:05,276] INFO in v2.common.did_resolver: [DIDResolver] 永続化されたDIDドキュメントを読み込み中: /app/v2/data/did_documents/payment_processor_did.json
+ap2_merchant             | [2025-10-19 23:03:05,276] INFO in v2.common.did_resolver: [DIDResolver] ✓ 永続化DIDドキュメントを登録: did:ap2:agent:payment_processor
+ap2_merchant             | [2025-10-19 23:03:05,276] INFO in v2.common.a2a_handler: [A2AHandler] Registered handler for @type: ap2.mandates.CartMandate
+ap2_merchant             | [2025-10-19 23:03:05,281] INFO in v2.common.base_agent: [Merchant] Initialized: did:ap2:merchant
+ap2_merchant             | [2025-10-19 23:03:05,281] INFO in service: [Merchant] Initialized
+ap2_merchant             | INFO:     Started server process [1]
+ap2_merchant             | INFO:     Waiting for application startup.
+ap2_merchant             | [2025-10-19 23:03:05,281] INFO in service: [Merchant] Running startup tasks...
+ap2_merchant_agent       | [2025-10-19 23:03:05,283] INFO in agent: [Merchant Agent] Database initialized
+ap2_merchant_agent       |
+ap2_merchant_agent       | ============================================================
+ap2_merchant_agent       | 商品データ投入中...
+ap2_merchant_agent       | ============================================================
+ap2_merchant_agent       |   ⏭️  スキップ: むぎぼーアクリルキーホルダー (既存)
+ap2_merchant_agent       |   ⏭️  スキップ: むぎぼー時計 (既存)
+ap2_merchant             | [2025-10-19 23:03:05,291] INFO in service: [Merchant] Database initialized
+ap2_merchant             |
+ap2_merchant             | ============================================================
+ap2_merchant             | 商品データ投入中...
+ap2_merchant             | ============================================================
+ap2_merchant_agent       |   ⏭️  スキップ: むぎぼーカレンダー (既存)
+ap2_merchant_agent       |   ⏭️  スキップ: むぎぼーマグカップ (既存)
+ap2_merchant_agent       |   ⏭️  スキップ: むぎぼーステッカー (既存)
+ap2_merchant_agent       |   ⏭️  スキップ: むぎぼーTシャツ (既存)
+ap2_merchant_agent       |   ⏭️  スキップ: むぎぼートートバッグ (既存)
+ap2_merchant             |   ⏭️  スキップ: むぎぼーアクリルキーホルダー (既存)
+ap2_merchant_agent       |   ⏭️  スキップ: むぎぼーポーチ (既存)
+ap2_merchant_agent       |
+ap2_merchant_agent       | ✅ 商品データ投入完了 (8件)
+ap2_merchant_agent       |
+ap2_merchant_agent       | ============================================================
+ap2_merchant_agent       | ユーザーデータ投入中...
+ap2_merchant_agent       | ============================================================
+ap2_merchant             |   ⏭️  スキップ: むぎぼー時計 (既存)
+ap2_merchant             |   ⏭️  スキップ: むぎぼーカレンダー (既存)
+ap2_merchant_agent       |   ⏭️  スキップ: 山田太郎 (既存)
+ap2_merchant             |   ⏭️  スキップ: むぎぼーマグカップ (既存)
+ap2_merchant_agent       |   ⏭️  スキップ: 佐藤花子 (既存)
+ap2_merchant             |   ⏭️  スキップ: むぎぼーステッカー (既存)
+ap2_merchant_agent       | [2025-10-19 23:03:05,305] INFO in agent: [Merchant Agent] Sample data seeded successfully
+ap2_merchant_agent       | INFO:     Application startup complete.
+ap2_merchant_agent       |
+ap2_merchant_agent       | ✅ ユーザーデータ投入完了 (2件)
+ap2_merchant             |   ⏭️  スキップ: むぎぼーTシャツ (既存)
+ap2_merchant_agent       | INFO:     Uvicorn running on http://0.0.0.0:8001 (Press CTRL+C to quit)
+ap2_merchant             |   ⏭️  スキップ: むぎぼートートバッグ (既存)
+ap2_merchant             |   ⏭️  スキップ: むぎぼーポーチ (既存)
+ap2_merchant             |
+ap2_merchant             | ✅ 商品データ投入完了 (8件)
+ap2_merchant             |
+ap2_merchant             | ============================================================
+ap2_merchant             | ユーザーデータ投入中...
+ap2_merchant             | ============================================================
+ap2_merchant             |   ⏭️  スキップ: 山田太郎 (既存)
+ap2_merchant             |   ⏭️  スキップ: 佐藤花子 (既存)
+ap2_merchant             |
+ap2_merchant             | ✅ ユーザーデータ投入完了 (2件)
+ap2_merchant             | [2025-10-19 23:03:05,313] INFO in service: [Merchant] Sample data seeded successfully
+ap2_merchant             | INFO:     Application startup complete.
+ap2_merchant             | INFO:     Uvicorn running on http://0.0.0.0:8002 (Press CTRL+C to quit)
+ap2_shopping_agent       | INFO:     151.101.64.223:57561 - "OPTIONS /chat/stream HTTP/1.1" 200 OK
+ap2_shopping_agent       | INFO:     151.101.64.223:57561 - "POST /chat/stream HTTP/1.1" 200 OK
+ap2_shopping_agent       | [2025-10-19 23:03:22,784] INFO in agent: [ShoppingAgent] Created new session in DB: session_1760914996823_q66mmo
+ap2_shopping_agent       | INFO:     151.101.64.223:54443 - "POST /chat/stream HTTP/1.1" 200 OK
+ap2_shopping_agent       | [2025-10-19 23:03:28,474] INFO in agent: [ShoppingAgent] Loaded session from DB: session_1760914996823_q66mmo, step=ask_max_amount
+ap2_shopping_agent       | INFO:     151.101.64.223:43548 - "POST /chat/stream HTTP/1.1" 200 OK
+ap2_shopping_agent       | [2025-10-19 23:03:33,815] INFO in agent: [ShoppingAgent] Loaded session from DB: session_1760914996823_q66mmo, step=ask_categories
+ap2_shopping_agent       | INFO:     151.101.64.223:43548 - "POST /chat/stream HTTP/1.1" 200 OK
+ap2_shopping_agent       | [2025-10-19 23:03:35,797] INFO in agent: [ShoppingAgent] Loaded session from DB: session_1760914996823_q66mmo, step=ask_brands
+ap2_shopping_agent       | [2025-10-19 23:03:36,404] INFO in agent: [ShoppingAgent] User public key not available yet (will be provided by frontend): 公開鍵ファイルが見つかりません: /app/v2/keys/user_demo_001_public.pem
+ap2_shopping_agent       | [2025-10-19 23:03:36,404] INFO in agent: [ShoppingAgent] IntentMandate created (unsigned, awaiting Passkey signature): id=intent_f9f9d44d, max_amount=50000, categories=[], brands=[]
+ap2_credential_provider  | INFO:     151.101.64.223:47259 - "OPTIONS /verify/attestation HTTP/1.1" 200 OK
+ap2_credential_provider  | [2025-10-19 23:03:39,140] INFO in provider: [verify_attestation] Found passkey: 1IQmlP1Ht6SGVXl1...
+ap2_credential_provider  | [2025-10-19 23:03:39,140] INFO in provider:   User: user_demo_001
+ap2_credential_provider  | [2025-10-19 23:03:39,140] INFO in provider:   Counter: 0
+ap2_credential_provider  | [DeviceAttestationManager] WebAuthn認証結果を検証中...
+ap2_credential_provider  |   - Client Data Type: webauthn.get
+ap2_credential_provider  |   - Origin: http://localhost:3000
+ap2_credential_provider  |   ✓ Challenge一致
+ap2_credential_provider  |   ✓ 認証タイプ: webauthn.get
+ap2_credential_provider  |   ✓ AuthenticatorData parsed: counter=0
+ap2_credential_provider  |   ℹ️  Signature counter: 0 (AP2準拠: user_authorizationのnonceによりリプレイ攻撃は防止されます)
+ap2_credential_provider  |   ✓ RP ID Hash一致
+ap2_credential_provider  |   ✓ WebAuthn署名検証成功
+ap2_credential_provider  | [2025-10-19 23:03:39,154] INFO in provider: [verify_attestation] Signature counter: 0 → 0 (AP2準拠: Authenticatorがcounterを実装していない場合でも、user_authorizationのnonceによりリプレイ攻撃は防止されます)
+ap2_credential_provider  | [2025-10-19 23:03:39,155] INFO in provider: [CredentialProvider] Generated attestation token for user: None
+ap2_credential_provider  | [2025-10-19 23:03:39,155] INFO in provider: [verify_attestation] No payment_method.token in mandate (likely IntentMandate signature), skipping Payment Network call
+ap2_credential_provider  | [2025-10-19 23:03:39,164] INFO in provider: [CredentialProvider] Saved attestation: user=unknown, verified=True, agent_token=None...
+ap2_credential_provider  | INFO:     151.101.64.223:47259 - "POST /verify/attestation HTTP/1.1" 200 OK
+ap2_shopping_agent       | INFO:     151.101.64.223:32796 - "POST /chat/stream HTTP/1.1" 200 OK
+ap2_shopping_agent       | [2025-10-19 23:03:39,172] INFO in agent: [ShoppingAgent] Loaded session from DB: session_1760914996823_q66mmo, step=intent_signature_requested
+ap2_shopping_agent       | INFO:     151.101.64.223:50418 - "POST /chat/stream HTTP/1.1" 200 OK
+ap2_shopping_agent       | [2025-10-19 23:03:50,499] INFO in agent: [ShoppingAgent] Loaded session from DB: session_1760914996823_q66mmo, step=shipping_address_input
+ap2_shopping_agent       | [2025-10-19 23:03:50,500] INFO in agent: [shipping_address_input] Received user_input: {"recipient":"あ","postal_code":"１１１１１１１","address_line1":"っっｊ","country":"JP"}
+ap2_shopping_agent       | [2025-10-19 23:03:50,500] INFO in agent: [shipping_address_input] Parsed JSON shipping address: {'recipient': 'あ', 'postal_code': '１１１１１１１', 'address_line1': 'っっｊ', 'country': 'JP'}
+ap2_shopping_agent       | [2025-10-19 23:03:51,512] INFO in agent: [ShoppingAgent] Requesting cart candidates from Merchant Agent for IntentMandate: intent_f9f9d44d
+ap2_shopping_agent       | [SignatureManager] A2Aメッセージに署名中（送信者: shopping_agent）
+ap2_shopping_agent       | [SignatureManager] データに署名中（鍵ID: shopping_agent, アルゴリズム: ECDSA）
+ap2_shopping_agent       |   ✓ 署名完了
+ap2_shopping_agent       | [2025-10-19 23:03:51,521] INFO in v2.common.a2a_handler:
+ap2_shopping_agent       | ================================================================================
+ap2_shopping_agent       | [A2A送信] レスポンス作成
+ap2_shopping_agent       |   送信元: did:ap2:agent:shopping_agent
+ap2_shopping_agent       |   送信先: did:ap2:agent:merchant_agent
+ap2_shopping_agent       |   タイプ: ap2.mandates.IntentMandate
+ap2_shopping_agent       |   データID: intent_f9f9d44d
+ap2_shopping_agent       |   署名: あり
+ap2_shopping_agent       |   タイムスタンプ: 2025-10-19T23:03:51.512336Z
+ap2_shopping_agent       |   ペイロード: {
+ap2_shopping_agent       |   "intent_mandate": {
+ap2_shopping_agent       |     "id": "intent_f9f9d44d",
+ap2_shopping_agent       |     "type": "IntentMandate",
+ap2_shopping_agent       |     "version": "0.2",
+ap2_shopping_agent       |     "user_id": "user_demo_001",
+ap2_shopping_agent       |     "intent": "むぎぼーのグッズが欲しい",
+ap2_shopping_agent       |     "constraints": {
+ap2_shopping_agent       |       "valid_until": "2025-10-20T00:03:36.403086Z",
+ap2_shopping_agent       |       "max_amount": {
+ap2_shopping_agent       |         "value": "50000.00",
+ap2_shopping_agent       |         "currency": "JPY"
+ap2_shopping_agent       |       },
+ap2_shopping_agent       |       "categories": [],
+ap2_shopping_agent       |       "merchants": [],
+ap2_shopping_agent       |       "brands": []
+ap2_shopping_agent       |     },
+ap2_shopping_agent       |     "created_at": "2025-10-19T23:03:36.403086Z",
+ap2_shopping_agent       |     "expires_at": "2025-10-20T00:03:36.403086Z",
+ap2_shopping_agent       |     "user_public_key": null
+ap2_shopping_agent       |   },
+ap2_shopping_agent       |   "shipping_address": {
+ap2_shopping_agent       |     "recipient": "あ",
+ap2_shopping_agent       |     "postal_code": "１１１１１１１",
+ap2_shopping_agent       |     "address_line1": "っっｊ",
+ap2_shopping_agent       |     "country": "JP"
+ap2_shopping_agent       |   }
+ap2_shopping_agent       | }
+ap2_shopping_agent       | ================================================================================
+ap2_shopping_agent       | [2025-10-19 23:03:51,521] INFO in agent: [ShoppingAgent] Intent A2A message created: message_id=a87b693b-d1cd-4046-9fe3-c39369c4b304, intent_mandate_id=intent_f9f9d44d
+ap2_shopping_agent       | [2025-10-19 23:03:51,521] INFO in agent:
+ap2_shopping_agent       | ================================================================================
+ap2_shopping_agent       | [ShoppingAgent → MerchantAgent] A2Aメッセージ送信
+ap2_shopping_agent       |   URL: http://merchant_agent:8001/a2a/message
+ap2_shopping_agent       |   メッセージID: a87b693b-d1cd-4046-9fe3-c39369c4b304
+ap2_shopping_agent       |   タイプ: ap2.mandates.IntentMandate
+ap2_shopping_agent       |   ペイロード: {
+ap2_shopping_agent       |   "id": "intent_f9f9d44d",
+ap2_shopping_agent       |   "type": "IntentMandate",
+ap2_shopping_agent       |   "version": "0.2",
+ap2_shopping_agent       |   "user_id": "user_demo_001",
+ap2_shopping_agent       |   "intent": "むぎぼーのグッズが欲しい",
+ap2_shopping_agent       |   "constraints": {
+ap2_shopping_agent       |     "valid_until": "2025-10-20T00:03:36.403086Z",
+ap2_shopping_agent       |     "max_amount": {
+ap2_shopping_agent       |       "value": "50000.00",
+ap2_shopping_agent       |       "currency": "JPY"
+ap2_shopping_agent       |     },
+ap2_shopping_agent       |     "categories": [],
+ap2_shopping_agent       |     "merchants": [],
+ap2_shopping_agent       |     "brands": []
+ap2_shopping_agent       |   },
+ap2_shopping_agent       |   "created_at": "2025-10-19T23:03:36.403086Z",
+ap2_shopping_agent       |   "expires_at": "2025-10-20T00:03:36.403086Z",
+ap2_shopping_agent       |   "user_public_key": null
+ap2_shopping_agent       | }
+ap2_shopping_agent       | ================================================================================
+ap2_merchant_agent       | [2025-10-19 23:03:51,547] INFO in v2.common.base_agent:
+ap2_merchant_agent       | ================================================================================
+ap2_merchant_agent       | [Merchant Agent] A2Aエンドポイント: POST /a2a/message
+ap2_merchant_agent       |   受信メッセージ: ID=a87b693b-d1cd-4046-9fe3-c39369c4b304
+ap2_merchant_agent       |   送信元: did:ap2:agent:shopping_agent
+ap2_merchant_agent       |   タイプ: ap2.mandates.IntentMandate
+ap2_merchant_agent       | ================================================================================
+ap2_merchant_agent       | [2025-10-19 23:03:51,548] INFO in v2.common.a2a_handler:
+ap2_merchant_agent       | ================================================================================
+ap2_merchant_agent       | [A2A受信] メッセージID: a87b693b-d1cd-4046-9fe3-c39369c4b304
+ap2_merchant_agent       |   送信元: did:ap2:agent:shopping_agent
+ap2_merchant_agent       |   送信先: did:ap2:agent:merchant_agent
+ap2_merchant_agent       |   タイプ: ap2.mandates.IntentMandate
+ap2_merchant_agent       |   データID: intent_f9f9d44d
+ap2_merchant_agent       |   タイムスタンプ: 2025-10-19T23:03:51.512336Z
+ap2_merchant_agent       |   ペイロード: {
+ap2_merchant_agent       |   "intent_mandate": {
+ap2_merchant_agent       |     "id": "intent_f9f9d44d",
+ap2_merchant_agent       |     "type": "IntentMandate",
+ap2_merchant_agent       |     "version": "0.2",
+ap2_merchant_agent       |     "user_id": "user_demo_001",
+ap2_merchant_agent       |     "intent": "むぎぼーのグッズが欲しい",
+ap2_merchant_agent       |     "constraints": {
+ap2_merchant_agent       |       "valid_until": "2025-10-20T00:03:36.403086Z",
+ap2_merchant_agent       |       "max_amount": {
+ap2_merchant_agent       |         "value": "50000.00",
+ap2_merchant_agent       |         "currency": "JPY"
+ap2_merchant_agent       |       },
+ap2_merchant_agent       |       "categories": [],
+ap2_merchant_agent       |       "merchants": [],
+ap2_merchant_agent       |       "brands": []
+ap2_merchant_agent       |     },
+ap2_merchant_agent       |     "created_at": "2025-10-19T23:03:36.403086Z",
+ap2_merchant_agent       |     "expires_at": "2025-10-20T00:03:36.403086Z",
+ap2_merchant_agent       |     "user_public_key": null
+ap2_merchant_agent       |   },
+ap2_merchant_agent       |   "shipping_address": {
+ap2_merchant_agent       |     "recipient": "あ",
+ap2_merchant_agent       |     "postal_code": "１１１１１１１",
+ap2_merchant_agent       |     "address_line1": "っっｊ",
+ap2_merchant_agent       |     "country": "JP"
+ap2_merchant_agent       |   }
+ap2_merchant_agent       | }
+ap2_merchant_agent       | ================================================================================
+ap2_merchant_agent       | [SignatureManager] A2Aメッセージ署名を検証中...
+ap2_merchant_agent       | [SignatureManager] 署名を検証中（アルゴリズム: ECDSA）...
+ap2_merchant_agent       |   ✓ 署名は有効です
+ap2_merchant_agent       | [2025-10-19 23:03:51,556] INFO in v2.common.a2a_handler: [A2AHandler] proof署名検証成功: sender=did:ap2:agent:shopping_agent, alg=ecdsa, kid=did:ap2:agent:shopping_agent#key-1, public_key_source=DID-resolved
+ap2_merchant_agent       | [2025-10-19 23:03:51,556] INFO in v2.common.a2a_handler: [A2A処理] ハンドラー実行中: type=ap2.mandates.IntentMandate, from=did:ap2:agent:shopping_agent
+ap2_merchant_agent       | [2025-10-19 23:03:51,556] INFO in agent: [MerchantAgent] Received IntentMandate
+ap2_merchant_agent       | [2025-10-19 23:03:51,556] INFO in agent: [MerchantAgent] Received IntentMandate with shipping_address (AP2 v0.1 compliant)
+ap2_merchant_agent       | [2025-10-19 23:03:51,556] INFO in agent: [MerchantAgent] Searching products with intent: 'むぎぼーのグッズが欲しい'
+ap2_merchant_agent       | [2025-10-19 23:03:51,556] INFO in agent: [MerchantAgent] Using provided shipping address: あ
+ap2_merchant_agent       | [2025-10-19 23:03:51,557] INFO in v2.common.database: [ProductCRUD.search] Original query: 'むぎぼーのグッズが欲しい' -> Cleaned: 'むぎぼー グッズ  '
+ap2_merchant_agent       | [2025-10-19 23:03:51,558] INFO in v2.common.database: [ProductCRUD.search] Extracted keywords: ['むぎぼー', 'グッズ', 'むぎぼーのグッズが欲しい']
+ap2_merchant_agent       | [2025-10-19 23:03:51,573] INFO in agent: [_create_multiple_cart_candidates] Found 8 products
+ap2_merchant_agent       | [2025-10-19 23:03:51,574] INFO in agent: [_create_multiple_cart_candidates] Creating 3 cart candidates
+ap2_merchant             | [2025-10-19 23:03:51,593] INFO in service: [Merchant] CartMandate validation passed: cart_bbfd1914
+ap2_merchant             | [2025-10-19 23:03:51,615] INFO in service: [Merchant] CartMandate validation passed: cart_648e6453
+ap2_merchant             | [2025-10-19 23:03:51,617] INFO in service: [Merchant] CartMandate validation passed: cart_f0498db4
+ap2_merchant             | [2025-10-19 23:03:51,622] INFO in service: [Merchant] Inventory check passed for CartMandate: cart_f0498db4
+ap2_merchant             | [SignatureManager] データに署名中（鍵ID: merchant, アルゴリズム: ECDSA）
+ap2_merchant             |   ✓ 署名完了
+ap2_merchant             | [2025-10-19 23:03:51,647] INFO in service: [_generate_merchant_authorization_jwt] Generated signed JWT for CartMandate: cart_id=cart_f0498db4, cart_hash=e6c1ddcfe9aa16df..., alg=ES256, kid=did:ap2:merchant:mugibo_merchant#key-1
+ap2_merchant             | [SignatureManager] データに署名中（鍵ID: merchant, アルゴリズム: ECDSA）
+ap2_merchant             | [2025-10-19 23:03:51,651] INFO in service: [Merchant] Inventory check passed for CartMandate: cart_bbfd1914
+ap2_merchant             |   ✓ 署名完了
+ap2_merchant             | [2025-10-19 23:03:51,651] INFO in service: [_generate_merchant_authorization_jwt] Generated signed JWT for CartMandate: cart_id=cart_bbfd1914, cart_hash=b7d7d11d7cf6ef50..., alg=ES256, kid=did:ap2:merchant:mugibo_merchant#key-1
+ap2_merchant             | [2025-10-19 23:03:51,653] INFO in service: [Merchant] Inventory check passed for CartMandate: cart_648e6453
+ap2_merchant             | [SignatureManager] データに署名中（鍵ID: merchant, アルゴリズム: ECDSA）
+ap2_merchant             |   ✓ 署名完了
+ap2_merchant             | [2025-10-19 23:03:51,654] INFO in service: [_generate_merchant_authorization_jwt] Generated signed JWT for CartMandate: cart_id=cart_648e6453, cart_hash=d714b99173b88d1a..., alg=ES256, kid=did:ap2:merchant:mugibo_merchant#key-1
+ap2_merchant             | [2025-10-19 23:03:51,661] INFO in service: [Merchant] Auto-signed CartMandate: cart_f0498db4 (with merchant_authorization JWT)
+ap2_merchant             | INFO:     172.18.0.4:48952 - "POST /sign/cart HTTP/1.1" 200 OK
+ap2_merchant             | [2025-10-19 23:03:51,662] INFO in service: [Merchant] Auto-signed CartMandate: cart_bbfd1914 (with merchant_authorization JWT)
+ap2_merchant             | INFO:     172.18.0.4:48938 - "POST /sign/cart HTTP/1.1" 200 OK
+ap2_merchant_agent       | [2025-10-19 23:03:51,663] INFO in httpx: HTTP Request: POST http://merchant:8002/sign/cart "HTTP/1.1 200 OK"
+ap2_merchant_agent       | [2025-10-19 23:03:51,664] INFO in agent: [_create_cart_from_products] CartMandate signed: cart_f0498db4
+ap2_merchant_agent       | [2025-10-19 23:03:51,664] INFO in httpx: HTTP Request: POST http://merchant:8002/sign/cart "HTTP/1.1 200 OK"
+ap2_merchant_agent       | [2025-10-19 23:03:51,664] INFO in agent: [_create_cart_from_products] CartMandate signed: cart_bbfd1914
+ap2_merchant             | [2025-10-19 23:03:51,669] INFO in service: [Merchant] Auto-signed CartMandate: cart_648e6453 (with merchant_authorization JWT)
+ap2_merchant             | INFO:     172.18.0.4:48940 - "POST /sign/cart HTTP/1.1" 200 OK
+ap2_merchant_agent       | [2025-10-19 23:03:51,669] INFO in httpx: HTTP Request: POST http://merchant:8002/sign/cart "HTTP/1.1 200 OK"
+ap2_merchant_agent       | [2025-10-19 23:03:51,669] INFO in agent: [_create_cart_from_products] CartMandate signed: cart_648e6453
+ap2_merchant_agent       | [2025-10-19 23:03:51,669] INFO in agent: [_create_multiple_cart_candidates] Created 3 cart candidates
+ap2_merchant_agent       | [2025-10-19 23:03:51,670] INFO in agent: [MerchantAgent] Generated 3 cart candidates
+ap2_merchant_agent       | [2025-10-19 23:03:51,670] INFO in v2.common.a2a_handler: [A2A処理] ハンドラー完了: type=ap2.mandates.IntentMandate, result_type=ap2.responses.CartCandidates
+ap2_merchant_agent       | [SignatureManager] A2Aメッセージに署名中（送信者: merchant_agent）
+ap2_merchant_agent       | [SignatureManager] データに署名中（鍵ID: merchant_agent, アルゴリズム: ECDSA）
+ap2_merchant_agent       |   ✓ 署名完了
+ap2_merchant_agent       | [2025-10-19 23:03:51,671] INFO in v2.common.a2a_handler:
+ap2_merchant_agent       | ================================================================================
+ap2_merchant_agent       | [A2A送信] レスポンス作成
+ap2_merchant_agent       |   送信元: did:ap2:agent:merchant_agent
+ap2_merchant_agent       |   送信先: did:ap2:agent:shopping_agent
+ap2_merchant_agent       |   タイプ: ap2.responses.CartCandidates
+ap2_merchant_agent       |   データID: 0606bce0-cb48-4bd4-ac22-4c55065c57c8
+ap2_merchant_agent       |   署名: あり
+ap2_merchant_agent       |   タイムスタンプ: 2025-10-19T23:03:51.670162Z
+ap2_merchant_agent       |   ペイロード: {
+ap2_merchant_agent       |   "intent_mandate_id": "intent_f9f9d44d",
+
+
+ap2_shopping_agent       | [2025-10-19 23:03:51,678] INFO in httpx: HTTP Request: POST http://merchant_agent:8001/a2a/message "HTTP/1.1 200 OK"
+ap2_merchant_agent       |   "cart_candidates": [
+ap2_merchant_agent       |     {
+ap2_merchant_agent       |       "artifactId": "artifact_81471393",
+ap2_shopping_agent       | [2025-10-19 23:03:51,680] INFO in agent:
+ap2_shopping_agent       | ================================================================================
+ap2_shopping_agent       | [ShoppingAgent ← MerchantAgent] A2Aレスポンス受信
+
+ap2_merchant_agent       |       "name": "人気商品セット",
+ap2_merchant_agent       |       "parts": [
+
+
+ap2_shopping_agent       |   Status: 200
+ap2_shopping_agent       |   Response Body: {
+ap2_shopping_agent       |   "header": {
+ap2_shopping_agent       |     "message_id": "2165ec3e-4313-42a8-a03c-987c86a4ebb8",
+ap2_shopping_agent       |     "sender": "did:ap2:agent:merchant_agent",
+ap2_shopping_agent       |     "recipient": "did:ap2:agent:shopping_agent",
+ap2_shopping_agent       |     "timestamp": "2025-10-19T23:03:51.670162Z",
+ap2_shopping_agent       |     "nonce": "24d5e02074b25bc8ad9e8a5902ee56316116c8f6a84e5a59208c41534f6116ea",
+ap2_shopping_agent       |     "schema_version": "0.2",
+ap2_shopping_agent       |     "proof": {
+ap2_shopping_agent       |       "algorithm": "ecdsa",
+ap2_shopping_agent       |       "signatureValue": "MEUCIQDig1ViR3DvUKUVaTt8ggiSBobI8gPZosgJ0F5cq6VE1AIgYVAEpksz9JCvzioWV06p7lAHSXEEm4do2e2PgEPYB7Y=",
+ap2_shopping_agent       |       "publicKey": "LS0tLS1CRUdJTiBQVUJMSUMgS0VZLS0tLS0KTUZrd0V3WUhLb1pJemowQ0FRWUlLb1pJemowREFRY0RRZ0FFZE53N3BTNGRTVy8wWkwrcTBJanVYL3RCY21sbgpUSGkvdndrOE1CL3Z2cW5QTVoreUhtSmhOSmp4TUthZHlTRnA0Q2JYNkRETWpyemt1ajVXamRyQjVBPT0KLS0tLS1FTkQgUFVCTElDIEtFWS0tLS0tCg==",
+ap2_shopping_agent       |       "kid": "did:ap2:agent:merchant_agent#key-1",
+ap2_merchant_agent       |         {
+
+
+ap2_shopping_agent       |       "created": "2025-10-19T23:03:51.670162Z",
+ap2_shopping_agent       |       "proofPurpose": "authentication"
+ap2_shopping_agent       |     },
+ap2_shopping_agent       |     "signature": null
+
+
+ap2_merchant_agent       |           "kind": "data",
+ap2_merchant_agent       |           "data": {
+ap2_merchant_agent       |             "ap2.mandates.CartMandate": {
+ap2_merchant_agent       |               "id": "cart_648e6453",
+ap2_merchant_agent       |               "type": "CartMandate",
+ap2_merchant_agent       |               "version": "0.2",
+ap2_shopping_agent       |   "dataPart": {
+
+
+ap2_merchant_agent       |               "intent_mandate_id": "intent_f9f9d44d",
+ap2_merchant_agent       |               "items": [
+ap2_merchant_agent       |                 {
+
+ap2_shopping_agent       |     "@type": "ap2.responses.CartCandidates",
+ap2_merchant_agent       |                   "id": "item_8bd6a898",
+ap2_shopping_agent       |     "id": ...
+ap2_merchant_agent       |                   "name": "むぎぼーアクリルキーホルダー",
+ap2_merchant_agent       |                   "description": "かわいいむぎぼーのアクリルキーホルダー。バッグやポーチに付けて持ち歩けます。",
+ap2_shopping_agent       | ================================================================================
+
+ap2_shopping_agent       | [2025-10-19 23:03:51,680] INFO in agent: [ShoppingAgent] Received 3 cart candidates from Merchant Agent
+ap2_merchant_agent       |                     "value": "800.0",
+ap2_shopping_agent       | [2025-10-19 23:03:51,680] INFO in agent: [ShoppingAgent] Expanded 3 cart mandates from artifacts
+ap2_shopping_agent       | [2025-10-19 23:03:51,680] INFO in agent: [ShoppingAgent] Received 3 signed cart candidates from Merchant Agent
+ap2_merchant_agent       |                     "currency": "JPY"
+
+
+ap2_merchant_agent       |                   },
+ap2_merchant_agent       |                   "total_price": {
+ap2_merchant_agent       |                     "value": "800.0",
+ap2_merchant_agent       |                     "currency": "JPY"
+ap2_merchant_agent       |                   },
+ap2_merchant_agent       |                   "image_url": "/assets/むぎぼーアクリルキーホルダー.png",
+ap2_merchant_agent       |                   "sku": "MUGI-KEYCHAIN-001",
+ap2_merchant_agent       |                   "category": "Keychains",
+ap2_merchant_agent       |                   "brand": "Mugibow Official"
+ap2_merchant_agent       |                 },
+ap2_merchant_agent       |                 {
+ap2_merchant_agent       |                   "id": "item_745dfd12",
+ap2_merchant_agent       |                   "name": "むぎぼー時計",
+ap2_merchant_agent       |                   "description": "むぎぼーデザインのかわいい壁掛け時計。お部屋を明るく彩ります。",
+ap2_merchant_agent       |                   "quantity": 1,
+ap2_merchant_agent       |                   "unit_price": {
+ap2_merchant_agent       |                     "value": "3500.0",
+ap2_merchant_agent       |                     "currency": "JPY"
+ap2_merchant_agent       |                   },
+ap2_merchant_agent       |                   "total_price": {
+ap2_merchant_agent       |                     "value": "3500.0",
+ap2_merchant_agent       |                     "currency": "JPY"
+ap2_merchant_agent       |                   },
+ap2_merchant_agent       |                   "image_url": "/assets/むぎぼー時計.png",
+ap2_merchant_agent       |                   "sku": "MUGI-CLOCK-001",
+ap2_merchant_agent       |                   "category": "Clocks",
+ap2_merchant_agent       |                   "brand": "Mugibow Official"
+ap2_merchant_agent       |                 },
+ap2_merchant_agent       |                 {
+ap2_merchant_agent       |                   "id": "item_ac1923a4",
+ap2_merchant_agent       |                   "name": "むぎぼーカレンダー",
+ap2_merchant_agent       |                   "description": "むぎぼーの1年カレンダー。毎月違うむぎぼーのイラストが楽しめます。",
+ap2_merchant_agent       |                   "quantity": 1,
+ap2_merchant_agent       |                   "unit_price": {
+ap2_merchant_agent       |                     "value": "1500.0",
+ap2_merchant_agent       |                     "currency": "JPY"
+ap2_merchant_agent       |                   },
+ap2_merchant_agent       |                   "total_price": {
+ap2_merchant_agent       |                     "value": "1500.0",
+ap2_merchant_agent       |                     "currency": "JPY"
+ap2_merchant_agent       |                   },
+ap2_merchant_agent       |                   "image_url": "/assets/むぎぼーカレンダー.png",
+ap2_merchant_agent       |                   "sku": "MUGI-CALENDAR-001",
+ap2_merchant_agent       |                   "category": "Calendars",
+ap2_merchant_agent       |                   "brand": "Mugibow Official"
+ap2_merchant_agent       |                 }
+ap2_merchant_agent       |               ],
+ap2_merchant_agent       |               "subtotal": {
+ap2_merchant_agent       |                 "value": "5800.0",
+ap2_merchant_agent       |                 "currency": "JPY"
+ap2_merchant_agent       |               },
+ap2_merchant_agent       |               "tax": {
+ap2_merchant_agent       |                 "value": "580.0",
+ap2_merchant_agent       |                 "currency": "JPY"
+ap2_merchant_agent       |               },
+ap2_merchant_agent       |               "shipping": {
+ap2_merchant_agent       |                 "address": {
+ap2_merchant_agent       |                   "recipient": "あ",
+ap2_merchant_agent       |                   "postal_code": "１１１１１１１",
+ap2_merchant_agent       |                   "address_line1": "っっｊ",
+ap2_merchant_agent       |                   "country": "JP"
+ap2_merchant_agent       |                 },
+ap2_merchant_agent       |                 "method": "standard",
+ap2_merchant_agent       |                 "cost": {
+ap2_merchant_agent       |                   "value": "500.0",
+ap2_merchant_agent       |                   "currency": "JPY"
+ap2_merchant_agent       |                 },
+ap2_merchant_agent       |                 "estimated_delivery": "2025-10-22T23:03:51.574423Z"
+ap2_merchant_agent       |               },
+ap2_merchant_agent       |               "total": {
+ap2_merchant_agent       |                 "value": "6880.0",
+ap2_merchant_agent       |                 "currency": "JPY"
+ap2_merchant_agent       |               },
+ap2_merchant_agent       |               "merchant_id": "did:ap2:merchant:mugibo_merchant",
+ap2_merchant_agent       |               "merchant_name": "むぎぼーショップ",
+ap2_merchant_agent       |               "created_at": "2025-10-19T23:03:51.574423Z",
+ap2_merchant_agent       |               "expires_at": "2025-10-19T23:33:51.574423Z",
+ap2_merchant_agent       |               "merchant_signature": {
+ap2_merchant_agent       |                 "algorithm": "ECDSA",
+ap2_merchant_agent       |                 "value": "MEUCIQCaJlnDeU4tuZIWidocfMIDbHHUkNjptXS6YnsaEFuptwIgQq0BnxVIctNeQ+Kucw5yE6AIhKNsQ06gR9uM/2CeiRI=",
+ap2_merchant_agent       |                 "public_key": "LS0tLS1CRUdJTiBQVUJMSUMgS0VZLS0tLS0KTUZrd0V3WUhLb1pJemowQ0FRWUlLb1pJemowREFRY0RRZ0FFMDJ6M2c1UkdrQ2lCUkVOTm95ejdUVWpNOEkxWApNM1BndGluOUZFZ1lNaFV3U0tFcEU5QjhDWng1eUtZVmJrRGxLZXc2aEtEc3Y3RFMzbXJGRXhFRUNnPT0KLS0tLS1FTkQgUFVCTElDIEtFWS0tLS0tCg==",
+ap2_merchant_agent       |                 "signed_at": "2025-10-19T23:03:51.653900Z"
+ap2_merchant_agent       |               },
+ap2_merchant_agent       |               "cart_metadata": {
+ap2_merchant_agent       |                 "name": "人気商品セット",
+ap2_merchant_agent       |                 "description": "検索結果で人気の商品を組み合わせたカートです"
+ap2_merchant_agent       |               },
+ap2_merchant_agent       |               "merchant_authorization": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImRpZDphcDI6bWVyY2hhbnQ6bXVnaWJvX21lcmNoYW50I2tleS0xIiwidHlwIjoiSldUIn0.eyJpc3MiOiJkaWQ6YXAyOm1lcmNoYW50Om11Z2lib19tZXJjaGFudCIsInN1YiI6ImRpZDphcDI6bWVyY2hhbnQ6bXVnaWJvX21lcmNoYW50IiwiYXVkIjoiZGlkOmFwMjphZ2VudDpwYXltZW50X3Byb2Nlc3NvciIsImlhdCI6MTc2MDkxNTAzMSwiZXhwIjoxNzYwOTE1OTMxLCJqdGkiOiJkZDFjOTkyMi05NmZhLTQ4ODktOGE4Yi1iN2EwZDFjOWRjZjciLCJjYXJ0X2hhc2giOiJkNzE0Yjk5MTczYjg4ZDFhM2M2ZGZhNjMzMTUxYTZiMTc2NTcwMzNjNTkxOTM1OGU5MDk2ZDQ2ZDgzMWEzOTdhIn0.MEUCIQDEe3iNShfHz5D7PQDUrfstxK2mCoe-cawypUaEut_DPgIgfmw0KHD3RiWDXAFGFvJHtf9J_gUCxz7gcL6mKODa3DA"
+ap2_merchant_agent       |             }
+ap2_merchant_agent       |           }
+ap2_merchant_agent       |         }
+ap2_merchant_agent       |       ]
+ap2_merchant_agent       |     },
+ap2_merchant_agent       |     {
+ap2_merchant_agent       |       "artifactId": "artifact_47125805",
+ap2_merchant_agent       |       "name": "お得なセット",
+ap2_merchant_agent       |       "parts": [
+ap2_merchant_agent       |         {
+ap2_merchant_agent       |           "kind": "data",
+ap2_merchant_agent       |           "data": {
+ap2_merchant_agent       |             "ap2.mandates.CartMandate": {
+ap2_merchant_agent       |               "id": "cart_bbfd1914",
+ap2_merchant_agent       |               "type": "CartMandate",
+ap2_merchant_agent       |               "version": "0.2",
+ap2_merchant_agent       |               "intent_mandate_id": "intent_f9f9d44d",
+ap2_merchant_agent       |               "items": [
+ap2_merchant_agent       |                 {
+ap2_merchant_agent       |                   "id": "item_791b6fb8",
+ap2_merchant_agent       |                   "name": "むぎぼーステッカー",
+ap2_merchant_agent       |                   "description": "むぎぼーのステッカーセット（5枚入り）。ノートやスマホケースに貼れます。",
+ap2_merchant_agent       |                   "quantity": 1,
+ap2_merchant_agent       |                   "unit_price": {
+ap2_merchant_agent       |                     "value": "500.0",
+ap2_merchant_agent       |                     "currency": "JPY"
+ap2_merchant_agent       |                   },
+ap2_merchant_agent       |                   "total_price": {
+ap2_merchant_agent       |                     "value": "500.0",
+ap2_merchant_agent       |                     "currency": "JPY"
+ap2_merchant_agent       |                   },
+ap2_merchant_agent       |                   "image_url": "/assets/むぎぼーステッカー.png",
+ap2_merchant_agent       |                   "sku": "MUGI-STICKER-001",
+ap2_merchant_agent       |                   "category": "Stickers",
+ap2_merchant_agent       |                   "brand": "Mugibow Official"
+ap2_merchant_agent       |                 },
+ap2_merchant_agent       |                 {
+ap2_merchant_agent       |                   "id": "item_e769325c",
+ap2_merchant_agent       |                   "name": "むぎぼーアクリルキーホルダー",
+ap2_merchant_agent       |                   "description": "かわいいむぎぼーのアクリルキーホルダー。バッグやポーチに付けて持ち歩けます。",
+ap2_merchant_agent       |                   "quantity": 1,
+ap2_merchant_agent       |                   "unit_price": {
+ap2_merchant_agent       |                     "value": "800.0",
+ap2_merchant_agent       |                     "currency": "JPY"
+ap2_merchant_agent       |                   },
+ap2_merchant_agent       |                   "total_price": {
+ap2_merchant_agent       |                     "value": "800.0",
+ap2_merchant_agent       |                     "currency": "JPY"
+ap2_merchant_agent       |                   },
+ap2_merchant_agent       |                   "image_url": "/assets/むぎぼーアクリルキーホルダー.png",
+ap2_merchant_agent       |                   "sku": "MUGI-KEYCHAIN-001",
+ap2_merchant_agent       |                   "category": "Keychains",
+ap2_merchant_agent       |                   "brand": "Mugibow Official"
+ap2_merchant_agent       |                 },
+ap2_merchant_agent       |                 {
+ap2_merchant_agent       |                   "id": "item_f8a71641",
+ap2_merchant_agent       |                   "name": "むぎぼーポーチ",
+ap2_merchant_agent       |                   "description": "むぎぼー柄のかわいいポーチ。小物入れやペンケースとして使えます。",
+ap2_merchant_agent       |                   "quantity": 1,
+ap2_merchant_agent       |                   "unit_price": {
+ap2_merchant_agent       |                     "value": "950.0",
+ap2_merchant_agent       |                     "currency": "JPY"
+ap2_merchant_agent       |                   },
+ap2_merchant_agent       |                   "total_price": {
+ap2_merchant_agent       |                     "value": "950.0",
+ap2_merchant_agent       |                     "currency": "JPY"
+ap2_merchant_agent       |                   },
+ap2_merchant_agent       |                   "image_url": "/assets/むぎぼーポーチ.png",
+ap2_merchant_agent       |                   "sku": "MUGI-POUCH-001",
+ap2_merchant_agent       |                   "category": "Mugibow Pouches",
+ap2_merchant_agent       |                   "brand": "Mugibow Official"
+ap2_merchant_agent       |                 }
+ap2_merchant_agent       |               ],
+ap2_merchant_agent       |               "subtotal": {
+ap2_merchant_agent       |                 "value": "2250.0",
+ap2_merchant_agent       |                 "currency": "JPY"
+ap2_merchant_agent       |               },
+ap2_merchant_agent       |               "tax": {
+ap2_merchant_agent       |                 "value": "225.0",
+ap2_merchant_agent       |                 "currency": "JPY"
+ap2_merchant_agent       |               },
+ap2_merchant_agent       |               "shipping": {
+ap2_merchant_agent       |                 "address": {
+ap2_merchant_agent       |                   "recipient": "あ",
+ap2_merchant_agent       |                   "postal_code": "１１１１１１１",
+ap2_merchant_agent       |                   "address_line1": "っっｊ",
+ap2_merchant_agent       |                   "country": "JP"
+ap2_merchant_agent       |                 },
+ap2_merchant_agent       |                 "method": "standard",
+ap2_merchant_agent       |                 "cost": {
+ap2_merchant_agent       |                   "value": "500.0",
+ap2_merchant_agent       |                   "currency": "JPY"
+ap2_merchant_agent       |                 },
+ap2_merchant_agent       |                 "estimated_delivery": "2025-10-22T23:03:51.583855Z"
+ap2_merchant_agent       |               },
+ap2_merchant_agent       |               "total": {
+ap2_merchant_agent       |                 "value": "2975.0",
+ap2_merchant_agent       |                 "currency": "JPY"
+ap2_merchant_agent       |               },
+ap2_merchant_agent       |               "merchant_id": "did:ap2:merchant:mugibo_merchant",
+ap2_merchant_agent       |               "merchant_name": "むぎぼーショップ",
+ap2_merchant_agent       |               "created_at": "2025-10-19T23:03:51.583855Z",
+ap2_merchant_agent       |               "expires_at": "2025-10-19T23:33:51.583855Z",
+ap2_merchant_agent       |               "merchant_signature": {
+ap2_merchant_agent       |                 "algorithm": "ECDSA",
+ap2_merchant_agent       |                 "value": "MEUCIHzE76IZbeC+PML7nuz7ds8clZ7wiMi5zjLhMU7cxtpiAiEA+Be8TOkdfn9H1B1VU0SfXrB3Mf1banhzD2Kec9nRbIk=",
+ap2_merchant_agent       |                 "public_key": "LS0tLS1CRUdJTiBQVUJMSUMgS0VZLS0tLS0KTUZrd0V3WUhLb1pJemowQ0FRWUlLb1pJemowREFRY0RRZ0FFMDJ6M2c1UkdrQ2lCUkVOTm95ejdUVWpNOEkxWApNM1BndGluOUZFZ1lNaFV3U0tFcEU5QjhDWng1eUtZVmJrRGxLZXc2aEtEc3Y3RFMzbXJGRXhFRUNnPT0KLS0tLS1FTkQgUFVCTElDIEtFWS0tLS0tCg==",
+ap2_merchant_agent       |                 "signed_at": "2025-10-19T23:03:51.651651Z"
+ap2_merchant_agent       |               },
+ap2_merchant_agent       |               "cart_metadata": {
+ap2_merchant_agent       |                 "name": "お得なセット",
+ap2_merchant_agent       |                 "description": "価格を抑えた組み合わせのカートです"
+ap2_merchant_agent       |               },
+ap2_merchant_agent       |               "merchant_authorization": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImRpZDphcDI6bWVyY2hhbnQ6bXVnaWJvX21lcmNoYW50I2tleS0xIiwidHlwIjoiSldUIn0.eyJpc3MiOiJkaWQ6YXAyOm1lcmNoYW50Om11Z2lib19tZXJjaGFudCIsInN1YiI6ImRpZDphcDI6bWVyY2hhbnQ6bXVnaWJvX21lcmNoYW50IiwiYXVkIjoiZGlkOmFwMjphZ2VudDpwYXltZW50X3Byb2Nlc3NvciIsImlhdCI6MTc2MDkxNTAzMSwiZXhwIjoxNzYwOTE1OTMxLCJqdGkiOiJjOGMwZTI4My02YWNkLTRjNzktOTc3Ny05YjljMTQyNzAwOGIiLCJjYXJ0X2hhc2giOiJiN2Q3ZDExZDdjZjZlZjUwZDE3MmFmNzhmODcyY2NjNTc2MGNhMTk2MjhiODliZDIzNzgxMjBmMjdhMDdjODlmIn0.MEYCIQC0SMiZJZcMt0_24RHVpeS7aKpzLFS_mAZA1WcbhK_iiQIhAMMP1JZ1ncvp9nticvKkQkUyR_4Qhkrs4ScELrE-rbYL"
+ap2_merchant_agent       |             }
+ap2_merchant_agent       |           }
+ap2_merchant_agent       |         }
+ap2_merchant_agent       |       ]
+ap2_merchant_agent       |     },
+ap2_merchant_agent       |     {
+ap2_merchant_agent       |       "artifactId": "artifact_6324a86b",
+ap2_merchant_agent       |       "name": "プレミアムセット",
+ap2_merchant_agent       |       "parts": [
+ap2_merchant_agent       |         {
+ap2_merchant_agent       |           "kind": "data",
+ap2_merchant_agent       |           "data": {
+ap2_merchant_agent       |             "ap2.mandates.CartMandate": {
+ap2_merchant_agent       |               "id": "cart_f0498db4",
+ap2_merchant_agent       |               "type": "CartMandate",
+ap2_merchant_agent       |               "version": "0.2",
+ap2_merchant_agent       |               "intent_mandate_id": "intent_f9f9d44d",
+ap2_merchant_agent       |               "items": [
+ap2_merchant_agent       |                 {
+ap2_merchant_agent       |                   "id": "item_e1de93af",
+ap2_merchant_agent       |                   "name": "むぎぼー時計",
+ap2_merchant_agent       |                   "description": "むぎぼーデザインのかわいい壁掛け時計。お部屋を明るく彩ります。",
+ap2_merchant_agent       |                   "quantity": 1,
+ap2_merchant_agent       |                   "unit_price": {
+ap2_merchant_agent       |                     "value": "3500.0",
+ap2_merchant_agent       |                     "currency": "JPY"
+ap2_merchant_agent       |                   },
+ap2_merchant_agent       |                   "total_price": {
+ap2_merchant_agent       |                     "value": "3500.0",
+ap2_merchant_agent       |                     "currency": "JPY"
+ap2_merchant_agent       |                   },
+ap2_merchant_agent       |                   "image_url": "/assets/むぎぼー時計.png",
+ap2_merchant_agent       |                   "sku": "MUGI-CLOCK-001",
+ap2_merchant_agent       |                   "category": "Clocks",
+ap2_merchant_agent       |                   "brand": "Mugibow Official"
+ap2_merchant_agent       |                 },
+ap2_merchant_agent       |                 {
+ap2_merchant_agent       |                   "id": "item_23f7f6e6",
+ap2_merchant_agent       |                   "name": "むぎぼーTシャツ",
+ap2_merchant_agent       |                   "description": "むぎぼーがプリントされたコットンTシャツ。普段着にぴったり。",
+ap2_merchant_agent       |                   "quantity": 1,
+ap2_merchant_agent       |                   "unit_price": {
+ap2_merchant_agent       |                     "value": "2800.0",
+ap2_merchant_agent       |                     "currency": "JPY"
+ap2_merchant_agent       |                   },
+ap2_merchant_agent       |                   "total_price": {
+ap2_merchant_agent       |                     "value": "2800.0",
+ap2_merchant_agent       |                     "currency": "JPY"
+ap2_merchant_agent       |                   },
+ap2_merchant_agent       |                   "image_url": "/assets/むぎぼーTシャツ.png",
+ap2_merchant_agent       |                   "sku": "MUGI-TSHIRT-001",
+ap2_merchant_agent       |                   "category": "Mugibow Apparel",
+ap2_merchant_agent       |                   "brand": "Mugibow Official"
+ap2_merchant_agent       |                 }
+ap2_merchant_agent       |               ],
+ap2_merchant_agent       |               "subtotal": {
+ap2_merchant_agent       |                 "value": "6300.0",
+ap2_merchant_agent       |                 "currency": "JPY"
+ap2_merchant_agent       |               },
+ap2_merchant_agent       |               "tax": {
+ap2_merchant_agent       |                 "value": "630.0",
+ap2_merchant_agent       |                 "currency": "JPY"
+ap2_merchant_agent       |               },
+ap2_merchant_agent       |               "shipping": {
+ap2_merchant_agent       |                 "address": {
+ap2_merchant_agent       |                   "recipient": "あ",
+ap2_merchant_agent       |                   "postal_code": "１１１１１１１",
+ap2_merchant_agent       |                   "address_line1": "っっｊ",
+ap2_merchant_agent       |                   "country": "JP"
+ap2_merchant_agent       |                 },
+ap2_merchant_agent       |                 "method": "standard",
+ap2_merchant_agent       |                 "cost": {
+ap2_merchant_agent       |                   "value": "500.0",
+ap2_merchant_agent       |                   "currency": "JPY"
+ap2_merchant_agent       |                 },
+ap2_merchant_agent       |                 "estimated_delivery": "2025-10-22T23:03:51.584181Z"
+ap2_merchant_agent       |               },
+ap2_merchant_agent       |               "total": {
+ap2_merchant_agent       |                 "value": "7430.0",
+ap2_merchant_agent       |                 "currency": "JPY"
+ap2_merchant_agent       |               },
+ap2_merchant_agent       |               "merchant_id": "did:ap2:merchant:mugibo_merchant",
+ap2_merchant_agent       |               "merchant_name": "むぎぼーショップ",
+ap2_merchant_agent       |               "created_at": "2025-10-19T23:03:51.584181Z",
+ap2_merchant_agent       |               "expires_at": "2025-10-19T23:33:51.584181Z",
+ap2_merchant_agent       |               "merchant_signature": {
+ap2_merchant_agent       |                 "algorithm": "ECDSA",
+ap2_merchant_agent       |                 "value": "MEUCIQCTrngr+PETu9FXXaLEGqXHm2yATnvdyDxEeZair2rBRQIgG3mgrLOitp17lkdSWonDk03fTcMZwyxkUduJmBGpwEc=",
+ap2_merchant_agent       |                 "public_key": "LS0tLS1CRUdJTiBQVUJMSUMgS0VZLS0tLS0KTUZrd0V3WUhLb1pJemowQ0FRWUlLb1pJemowREFRY0RRZ0FFMDJ6M2c1UkdrQ2lCUkVOTm95ejdUVWpNOEkxWApNM1BndGluOUZFZ1lNaFV3U0tFcEU5QjhDWng1eUtZVmJrRGxLZXc2aEtEc3Y3RFMzbXJGRXhFRUNnPT0KLS0tLS1FTkQgUFVCTElDIEtFWS0tLS0tCg==",
+ap2_merchant_agent       |                 "signed_at": "2025-10-19T23:03:51.626395Z"
+ap2_merchant_agent       |               },
+ap2_merchant_agent       |               "cart_metadata": {
+ap2_merchant_agent       |                 "name": "プレミアムセット",
+ap2_merchant_agent       |                 "description": "高品質な商品を厳選したカートです"
+ap2_merchant_agent       |               },
+ap2_merchant_agent       |               "merchant_authorization": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImRpZDphcDI6bWVyY2hhbnQ6bXVnaWJvX21lcmNoYW50I2tleS0xIiwidHlwIjoiSldUIn0.eyJpc3MiOiJkaWQ6YXAyOm1lcmNoYW50Om11Z2lib19tZXJjaGFudCIsInN1YiI6ImRpZDphcDI6bWVyY2hhbnQ6bXVnaWJvX21lcmNoYW50IiwiYXVkIjoiZGlkOmFwMjphZ2VudDpwYXltZW50X3Byb2Nlc3NvciIsImlhdCI6MTc2MDkxNTAzMSwiZXhwIjoxNzYwOTE1OTMxLCJqdGkiOiIyZjFmOWI0ZS02ZTg5LTRiZjQtOTQ3Yy03MThkMTExNDU1M2MiLCJjYXJ0X2hhc2giOiJlNmMxZGRjZmU5YWExNmRmZDMxMTVmYzMzMjQ1YjgxMTIxZDgyMzU2YjQ1MDM3NDVkYTliN2MzYzYwYWM0ODVlIn0.MEUCIQCY5pBt6plR8OJ407GYE1Zex_u1fJtWiEtCTiScE1aK7wIgP7f1KHCIy2nqp6dlAmNIrJIYFOJUPkLCHTRUDxiuo8M"
+ap2_merchant_agent       |             }
+ap2_merchant_agent       |           }
+ap2_merchant_agent       |         }
+ap2_merchant_agent       |       ]
+ap2_merchant_agent       |     }
+ap2_merchant_agent       |   ],
+ap2_merchant_agent       |   "merchant_id": "did:ap2:merchant:mugibo_merchant",
+ap2_merchant_agent       |   "merchant_name": "むぎぼーショップ"
+ap2_merchant_agent       | }
+ap2_merchant_agent       | ================================================================================
+ap2_merchant_agent       | [2025-10-19 23:03:51,672] INFO in v2.common.base_agent: [Merchant Agent] A2Aレスポンス返却: type=ap2.responses.CartCandidates, to=did:ap2:agent:shopping_agent
+ap2_merchant_agent       | INFO:     172.18.0.6:47636 - "POST /a2a/message HTTP/1.1" 200 OK
+ap2_merchant             | INFO:     151.101.64.223:64057 - "GET /cart-mandates/pending HTTP/1.1" 200 OK
+ap2_merchant             | INFO:     151.101.64.223:62346 - "GET /transactions HTTP/1.1" 200 OK
+ap2_shopping_agent       | INFO:     151.101.64.223:35370 - "POST /chat/stream HTTP/1.1" 200 OK
+ap2_shopping_agent       | [2025-10-19 23:03:53,902] INFO in agent: [ShoppingAgent] Loaded session from DB: session_1760914996823_q66mmo, step=cart_selection
+ap2_shopping_agent       | INFO:     151.101.64.223:35370 - "POST /chat/stream HTTP/1.1" 200 OK
+ap2_shopping_agent       | [2025-10-19 23:03:56,220] INFO in agent: [ShoppingAgent] Loaded session from DB: session_1760914996823_q66mmo, step=select_credential_provider
+ap2_shopping_agent       | [2025-10-19 23:03:57,032] INFO in agent: [ShoppingAgent] Requesting payment methods from Credential Provider (http://credential_provider:8003) for user: user_demo_001
+ap2_credential_provider  | INFO:     172.18.0.6:53818 - "GET /payment-methods?user_id=user_demo_001 HTTP/1.1" 200 OK
+ap2_shopping_agent       | [2025-10-19 23:03:57,043] INFO in httpx: HTTP Request: GET http://credential_provider:8003/payment-methods?user_id=user_demo_001 "HTTP/1.1 200 OK"
+ap2_shopping_agent       | [2025-10-19 23:03:57,044] INFO in agent: [ShoppingAgent] Retrieved 2 payment methods from Credential Provider
+ap2_shopping_agent       | INFO:     151.101.64.223:58520 - "POST /chat/stream HTTP/1.1" 200 OK
+ap2_shopping_agent       | [2025-10-19 23:03:59,612] INFO in agent: [ShoppingAgent] Loaded session from DB: session_1760914996823_q66mmo, step=select_payment_method
+ap2_shopping_agent       | [2025-10-19 23:03:59,616] INFO in agent: [ShoppingAgent] Payment method requires step-up: pm_003, brand=amex
+ap2_shopping_agent       | [2025-10-19 23:03:59,616] INFO in agent: [ShoppingAgent] Set cart_mandate from selected_cart_mandate for step-up flow
+ap2_credential_provider  | [2025-10-19 23:03:59,619] INFO in provider: [initiate_step_up] Created step-up session: session_id=stepup_c09085f14f6d46bb, payment_method_id=pm_003
+ap2_credential_provider  | INFO:     172.18.0.6:53818 - "POST /payment-methods/initiate-step-up HTTP/1.1" 200 OK
+ap2_shopping_agent       | [2025-10-19 23:03:59,620] INFO in httpx: HTTP Request: POST http://credential_provider:8003/payment-methods/initiate-step-up "HTTP/1.1 200 OK"
+ap2_shopping_agent       | [2025-10-19 23:03:59,633] INFO in agent: [ShoppingAgent] Step-up session created and saved to DB: step_up_session_id=stepup_c09085f14f6d46bb, step_up_url=http://localhost:8003/step-up/stepup_c09085f14f6d46bb
+ap2_credential_provider  | INFO:     151.101.64.223:17525 - "GET /step-up/stepup_c09085f14f6d46bb HTTP/1.1" 200 OK
+ap2_credential_provider  | INFO:     151.101.64.223:17525 - "GET /favicon.ico HTTP/1.1" 404 Not Found
+ap2_credential_provider  | [2025-10-19 23:04:01,266] INFO in provider: [complete_step_up] Step-up completed successfully: session_id=stepup_c09085f14f6d46bb, token=tok_stepup_53574f4c_...
+ap2_credential_provider  | INFO:     151.101.64.223:17525 - "POST /step-up/stepup_c09085f14f6d46bb/complete HTTP/1.1" 200 OK
+ap2_shopping_agent       | INFO:     151.101.64.223:43218 - "POST /chat/stream HTTP/1.1" 200 OK
+ap2_shopping_agent       | [2025-10-19 23:04:03,311] INFO in agent: [ShoppingAgent] Loaded session from DB: session_1760914996823_q66mmo, step=step_up_redirect
+ap2_shopping_agent       | [2025-10-19 23:04:03,312] INFO in agent: [ShoppingAgent] Step-up completed: session_id=stepup_c09085f14f6d46bb
+ap2_credential_provider  | [2025-10-19 23:04:03,316] INFO in provider: [verify_step_up] Step-up verified successfully: stepup_c09085f14f6d46bb
+ap2_credential_provider  | INFO:     172.18.0.6:53818 - "POST /payment-methods/verify-step-up HTTP/1.1" 200 OK
+ap2_shopping_agent       | [2025-10-19 23:04:03,318] INFO in httpx: HTTP Request: POST http://credential_provider:8003/payment-methods/verify-step-up "HTTP/1.1 200 OK"
+ap2_shopping_agent       | [2025-10-19 23:04:03,319] INFO in agent: [ShoppingAgent] Tokenized payment method set after step-up: token=tok_stepup_53574f4c_..., expires_at=None
+ap2_shopping_agent       | [2025-10-19 23:04:04,326] INFO in agent: [ShoppingAgent] transaction_type=human_not_present (no strong authentication detected)
+ap2_shopping_agent       | [2025-10-19 23:04:04,326] INFO in agent: [ShoppingAgent] Performing risk assessment...
+ap2_shopping_agent       | [2025-10-19 23:04:04,327] INFO in v2.common.risk_assessment: [RiskAssessmentEngine] Assessment completed: risk_score=4, recommendation=approve, fraud_indicators=['card_not_present_transaction']
+ap2_shopping_agent       | [2025-10-19 23:04:04,327] INFO in agent: [ShoppingAgent] Risk assessment completed: score=4, recommendation=approve, indicators=['card_not_present_transaction']
+ap2_shopping_agent       | [2025-10-19 23:04:04,328] INFO in agent: [ShoppingAgent] PaymentMandate created (without user_authorization yet). user_authorization will be added after WebAuthn attestation from frontend.
+ap2_shopping_agent       | [2025-10-19 23:04:04,328] INFO in agent: [ShoppingAgent] PaymentMandate created: amount=6880.0 JPY, payment_method=amex ****3782, token=tok_stepup_53574f4c_..., risk_score=4
+ap2_shopping_agent       | INFO:     151.101.64.223:43218 - "OPTIONS /payment/submit-attestation HTTP/1.1" 200 OK
+ap2_shopping_agent       | [2025-10-19 23:04:07,824] INFO in agent: [submit_payment_attestation] Verifying attestation for PaymentMandate: payment_6259d4f8
+ap2_shopping_agent       | [2025-10-19 23:04:07,824] INFO in agent: [ShoppingAgent] Verifying WebAuthn attestation with Credential Provider (http://credential_provider:8003) for PaymentMandate: payment_6259d4f8
+ap2_shopping_agent       | [2025-10-19 23:04:07,824] INFO in agent:
+ap2_shopping_agent       | ================================================================================
+ap2_shopping_agent       | [ShoppingAgent → CredentialProvider] WebAuthn検証リクエスト送信
+ap2_shopping_agent       |   URL: http://credential_provider:8003/verify/attestation
+ap2_shopping_agent       |   PaymentMandate ID: payment_6259d4f8
+ap2_shopping_agent       |   Attestation Type: passkey
+ap2_shopping_agent       |   ペイロード:
+ap2_shopping_agent       |     PaymentMandate: {
+ap2_shopping_agent       |   "payment_mandate_contents": {
+ap2_shopping_agent       |     "payment_mandate_id": "payment_6259d4f8",
+ap2_shopping_agent       |     "payment_details_id": "cart_648e6453",
+ap2_shopping_agent       |     "payment_details_total": {
+ap2_shopping_agent       |       "label": "Total",
+ap2_shopping_agent       |       "amount": {
+ap2_shopping_agent       |         "value": "6880.0",
+ap2_shopping_agent       |         "currency": "JPY"
+ap2_shopping_agent       |       }
+ap2_shopping_agent       |     },
+ap2_shopping_agent       |     "payment_response": {
+ap2_shopping_agent       |       "methodName": "basic-card",
+ap2_shopping_agent       |       "details": {
+ap2_shopping_agent       |         "cardholderName": "Demo User",
+ap2_shopping_agent       |         "cardNumber": "****3782",
+ap2_shopping_agent       |         "cardSecurityCode": "***",
+ap2_shopping_agent       |         "cardBrand": "amex",
+ap2_shopping_agent       |         "expiryMonth": 9,
+ap2_shopping_agent       |         "expiryYear": 2026,
+ap2_shopping_agent       |         "token": "tok_stepup_53574f4c_zGQXPzcB2r-GY-SjtPFXvOo4",
+ap2_shopping_agent       |         "tokenized": true
+ap2_shopping_agent       |       }
+ap2_shopping_agent       |     },
+ap2_shopping_agent       |     "merchant_agent": "did:ap2:merchant:mugibo_merchant",
+ap2_shopping_agent       |     "timestamp": "2025-10-19T23:04:04.326130Z"
+ap2_shopping_agent       |   },
+ap2_shopping_agent       |   "agent_involved": true,
+ap2_shopping_agent       |   "transaction_type": "human_not_present",
+ap2_shopping_agent       |   "id": "payment_6259d4f8",
+ap2_shopping_agent       |   "cart_mandate_id": "cart_648e6453",
+ap2_shopping_agent       |   "intent_mandate_id": "intent_f9f9d44d",
+ap2_shopping_agent       |   "payer_id": "user_demo_001",
+ap2_shopping_agent       |   "payee_id": "did:ap2:merchant:mugibo_merchant",
+ap2_shopping_agent       |   "amount": {
+ap2_shopping_agent       |     "value": "6880.0",
+ap2_shopping_agent       |     "currency": "JPY"
+ap2_shopping_agent       |   },
+ap2_shopping_agent       |   "payment_method": {
+ap2_shopping_agent       |     "type": "card",
+ap2_credential_provider  | [2025-10-19 23:04:07,836] INFO in provider: [verify_attestation] Found passkey: 1IQmlP1Ht6SGVXl1...
+
+
+ap2_credential_provider  | [2025-10-19 23:04:07,836] INFO in provider:   User: user_demo_001
+
+
+ap2_shopping_agent       |     "token": "tok_stepup_53574f4c_zGQXPzcB2r-GY-SjtPFXvOo4",
+
+
+ap2_shopping_agent       |     "brand": "amex",
+v View in Docker Desktop   o View Config   w Enable Watch
+ap2_shopping_agent       |     "expiry_month": 9,
+ap2_shopping_agent       |     "expiry_year": 2026
+ap2_credential_provider  | [DeviceAttestationManager] WebAuthn認証結果を検証中...
+ap2_shopping_agent       |   },
+
+
+ap2_credential_provider  |   - Client Data Type: webauthn.get
+ap2_credential_provider  |   - Origin: http://localhost:3000
+
+
+ap2_credential_provider  |   ✓ Challenge一致
+ap2_credential_provider  |   ✓ 認証タイプ: webauthn.get
+
+ap2_shopping_agent       |     "card_not_present_transaction"
+
+ap2_credential_provider  |   ℹ️  Signature counter: 0 (AP2準拠: user_authorizationのnonceによりリプレイ攻撃は防止されます)
+ap2_credential_provider  |   ✓ RP ID Hash一致
+ap2_shopping_agent       |   ],
+ap2_credential_provider  |   ✓ WebAuthn署名検証成功
+ap2_credential_provider  | [2025-10-19 23:04:07,845] INFO in provider: [verify_attestation] Signature counter: 0 → 0 (AP2準拠: Authenticatorがcounterを実装していない場合でも、user_authorizationのnonceによりリプレイ攻撃は防止されます)
+
+
+ap2_shopping_agent       |   "user_authorization": null
+ap2_credential_provider  | [2025-10-19 23:04:07,845] INFO in provider: [CredentialProvider] Generated attestation token for user: user_demo_001
+
+ap2_shopping_agent       | }
+ap2_credential_provider  | [2025-10-19 23:04:07,845] INFO in provider: [verify_attestation] PaymentMandate contains payment_method.token, calling Payment Network (Step 23)
+
+ap2_shopping_agent       |     Attestation: {
+
+ap2_credential_provider  | [2025-10-19 23:04:07,846] INFO in provider: [CredentialProvider] Requesting Agent Token from Payment Network: payment_mandate_id=payment_6259d4f8
+
+
+ap2_shopping_agent       |   "id": "1IQmlP1Ht6SGVXl1Z6BBz_HQJaH1",
+
+ap2_shopping_agent       |   "rawId": "1IQmlP1Ht6SGVXl1Z6BBz_HQJaH1",
+
+ap2_shopping_agent       |   "response": {
+ap2_shopping_agent       |     "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoia2ZHWkxCYUYzdzBHcVZnMWlhWTQ0ZzZ0VnI3UVVBMVFsRW5BanZHbHFEZyIsIm9yaWdpbiI6Imh0dHA6Ly9sb2NhbGhvc3Q6MzAwMCIsImNyb3NzT3JpZ2luIjpmYWxzZX0",
+ap2_shopping_agent       |     "authenticatorData": "SZYN5YgOjGh0NBcPZHZgW4_krrmihjLHmVzzuoMdl2MdAAAAAA",
+ap2_shopping_agent       |     "signature": "MEUCIQDjslu2srJbNEdoy_0ajNgDi93znLJDUE9nVFMOQnPkOgIgIWO2JsPBTthCE5SiglDT2r6uURDD-1QXnTczZ8qR9KM",
+ap2_shopping_agent       |     "userHandle": "dXNlcl9kZW1vXzAwMQ"
+ap2_shopping_agent       |   },
+ap2_shopping_agent       |   "type": "public-key",
+ap2_shopping_agent       |   "attestation_type": "passkey",
+ap2_shopping_agent       |   "challenge": "kfGZLBaF3w0GqVg1iaY44g6tVr7QUA1QlEnAjvGlqDg"
+ap2_shopping_agent       | }
+ap2_shopping_agent       | ================================================================================
+ap2_payment_network      | [2025-10-19 23:04:07,897] INFO in network: [DemoPaymentNetwork] Received tokenization request: payment_mandate_id=payment_6259d4f8, payment_method_token=tok_stepup_53574f4c_...
+ap2_payment_network      | [2025-10-19 23:04:07,898] INFO in network: [DemoPaymentNetwork] Issued Agent Token: agent_tok_demopaymentnetwork_548..., expires_at=2025-10-20T00:04:07.897691+00:00
+ap2_payment_network      | INFO:     172.18.0.2:38198 - "POST /network/tokenize HTTP/1.1" 200 OK
+ap2_credential_provider  | [2025-10-19 23:04:07,900] INFO in httpx: HTTP Request: POST http://payment_network:8005/network/tokenize "HTTP/1.1 200 OK"
+ap2_credential_provider  | [2025-10-19 23:04:07,900] INFO in provider: [CredentialProvider] Received Agent Token from Payment Network: agent_tok_demopaymentnetwork_548..., network_name=DemoPaymentNetwork
+ap2_credential_provider  | [2025-10-19 23:04:07,904] INFO in provider: [CredentialProvider] Saved attestation: user=user_demo_001, verified=True, agent_token=agent_tok_demopaymentnetwork_548...
+ap2_credential_provider  | INFO:     172.18.0.6:53818 - "POST /verify/attestation HTTP/1.1" 200 OK
+ap2_shopping_agent       | [2025-10-19 23:04:07,905] INFO in httpx: HTTP Request: POST http://credential_provider:8003/verify/attestation "HTTP/1.1 200 OK"
+ap2_shopping_agent       | [2025-10-19 23:04:07,905] INFO in agent:
+ap2_shopping_agent       | ================================================================================
+ap2_shopping_agent       | [ShoppingAgent ← CredentialProvider] WebAuthn検証レスポンス受信
+ap2_shopping_agent       |   Status: 200
+ap2_shopping_agent       |   Verified: True
+ap2_shopping_agent       |   Response Body: {
+ap2_shopping_agent       |   "verified": true,
+ap2_shopping_agent       |   "token": "cred_token_2c8df494_vQ6jSIzNgRn8hNGaBa5VsKzp",
+ap2_shopping_agent       |   "details": {
+ap2_shopping_agent       |     "attestation_type": "passkey",
+ap2_shopping_agent       |     "timestamp": "2025-10-19T23:04:07.904459+00:00",
+ap2_shopping_agent       |     "counter": 0,
+ap2_shopping_agent       |     "agent_token": "agent_tok_demopaymentnetwork_5481ce11_znQc37uQTYTyLxUIkJaIN7nv"
+ap2_shopping_agent       |   }
+ap2_shopping_agent       | }
+ap2_shopping_agent       | ================================================================================
+ap2_shopping_agent       | [2025-10-19 23:04:07,905] INFO in agent: [ShoppingAgent] WebAuthn attestation verified successfully: token=cred_token_2c8df494_...
+ap2_shopping_agent       | [2025-10-19 23:04:07,905] INFO in agent: [submit_payment_attestation] Attestation verified, processing payment...
+ap2_shopping_agent       | [2025-10-19 23:04:07,907] INFO in httpx: HTTP Request: POST http://credential_provider:8003/passkey/get-public-key "HTTP/1.1 200 OK"
+ap2_shopping_agent       | [2025-10-19 23:04:07,907] INFO in agent: [submit_payment_attestation] Public key retrieved from Credential Provider: credential_id=1IQmlP1Ht6SGVXl1...
+ap2_shopping_agent       | [2025-10-19 23:04:07,908] INFO in v2.common.user_authorization: [create_user_authorization_vp] WebAuthn challenge from assertion: kfGZLBaF3w0GqVg1...
+ap2_shopping_agent       | [2025-10-19 23:04:07,908] INFO in v2.common.user_authorization: [create_user_authorization_vp] cart_hash: d714b99173b88d1a...
+ap2_shopping_agent       | [2025-10-19 23:04:07,908] INFO in v2.common.user_authorization: [create_user_authorization_vp] payment_hash: ece166b4d3505289...
+ap2_shopping_agent       | [2025-10-19 23:04:07,909] INFO in v2.common.user_authorization: [create_user_authorization_vp] Restored public key from COSE format
+ap2_shopping_agent       | [2025-10-19 23:04:07,909] INFO in v2.common.user_authorization: [create_user_authorization_vp] cnf claim with JWK added to Issuer JWT
+ap2_shopping_agent       | [2025-10-19 23:04:07,909] INFO in v2.common.user_authorization: [create_user_authorization_vp] Generated user_authorization VP: length=2283, cart_hash=d714b99173b88d1a..., payment_hash=ece166b4d3505289...
+ap2_shopping_agent       | [2025-10-19 23:04:07,909] INFO in agent: [submit_payment_attestation] SD-JWT-VC user_authorization generated: user_id=user_demo_001, vp_length=2283
+ap2_shopping_agent       | [2025-10-19 23:04:07,909] INFO in agent: [ShoppingAgent] Requesting payment processing for PaymentMandate: payment_6259d4f8
+ap2_shopping_agent       | [SignatureManager] A2Aメッセージに署名中（送信者: shopping_agent）
+ap2_shopping_agent       | [SignatureManager] データに署名中（鍵ID: shopping_agent, アルゴリズム: ECDSA）
+ap2_shopping_agent       |   ✓ 署名完了
+ap2_shopping_agent       | [2025-10-19 23:04:07,910] INFO in v2.common.a2a_handler:
+ap2_shopping_agent       | ================================================================================
+ap2_shopping_agent       | [A2A送信] レスポンス作成
+ap2_shopping_agent       |   送信元: did:ap2:agent:shopping_agent
+ap2_shopping_agent       |   送信先: did:ap2:agent:merchant_agent
+ap2_shopping_agent       |   タイプ: ap2.mandates.PaymentMandate
+
+
+ap2_shopping_agent       |   データID: payment_6259d4f8
+ap2_merchant_agent       | [2025-10-19 23:04:07,915] INFO in v2.common.base_agent:
+ap2_credential_provider  | [2025-10-19 23:04:07,907] INFO in provider: [get_passkey_public_key] Public key retrieved: credential_id=1IQmlP1Ht6SGVXl1..., user_id=user_demo_001
+ap2_credential_provider  | INFO:     172.18.0.6:53818 - "POST /passkey/get-public-key HTTP/1.1" 200 OK
+ap2_merchant_agent       | ================================================================================
+ap2_merchant_agent       | [Merchant Agent] A2Aエンドポイント: POST /a2a/message
+ap2_merchant_agent       |   受信メッセージ: ID=7530105b-e70b-4e8a-8d6e-96830fd4078a
+
+ap2_shopping_agent       |   署名: あり
+ap2_merchant_agent       |   送信元: did:ap2:agent:shopping_agent
+
+
+ap2_merchant_agent       |   タイプ: ap2.mandates.PaymentMandate
+
+
+ap2_shopping_agent       |   タイムスタンプ: 2025-10-19T23:04:07.909440Z
+ap2_shopping_agent       |   ペイロード: {
+
+
+ap2_merchant_agent       | ================================================================================
+ap2_shopping_agent       |   "payment_mandate": {
+ap2_shopping_agent       |     "payment_mandate_contents": {
+ap2_shopping_agent       |       "payment_mandate_id": "payment_6259d4f8",
+ap2_merchant_agent       | [2025-10-19 23:04:07,916] INFO in v2.common.a2a_handler:
+ap2_payment_processor    | [2025-10-19 23:04:07,928] INFO in v2.common.base_agent:
+ap2_merchant_agent       | ================================================================================
+
+
+
+ap2_merchant_agent       | [A2A受信] メッセージID: 7530105b-e70b-4e8a-8d6e-96830fd4078a
+ap2_payment_processor    | ================================================================================
+ap2_shopping_agent       |       "payment_details_total": {
+ap2_merchant_agent       |   送信元: did:ap2:agent:shopping_agent
+ap2_merchant_agent       |   送信先: did:ap2:agent:merchant_agent
+
+
+
+
+ap2_merchant_agent       |   タイプ: ap2.mandates.PaymentMandate
+v View in Docker Desktop   o View Config   w Enable Watch
+
+ap2_shopping_agent       |         "label": "Total",
+ap2_payment_processor    | [Payment Processor] A2Aエンドポイント: POST /a2a/message
+ap2_merchant_agent       |   データID: payment_6259d4f8
+ap2_shopping_agent       |         "amount": {
+
+
+
+ap2_payment_processor    |   受信メッセージ: ID=b982da7f-b76b-4ae5-bccb-fb9348e0dee0
+
+
+ap2_payment_processor    |   送信元: did:ap2:agent:merchant_agent
+ap2_payment_processor    |   タイプ: ap2.mandates.PaymentMandate
+ap2_payment_processor    | ================================================================================
+ap2_shopping_agent       |           "currency": "JPY"
+ap2_merchant_agent       |   ペイロード: {
+
+
+ap2_merchant_agent       |   "payment_mandate": {
+ap2_shopping_agent       |         }
+ap2_payment_processor    | [2025-10-19 23:04:07,929] INFO in v2.common.a2a_handler:
+ap2_payment_processor    | ================================================================================
+
+
+ap2_payment_processor    | [A2A受信] メッセージID: b982da7f-b76b-4ae5-bccb-fb9348e0dee0
+v View in Docker Desktop   o View Config   w Enable Watch
+
+ap2_payment_processor    |   送信元: did:ap2:agent:merchant_agent
+ap2_payment_processor    |   送信先: did:ap2:agent:payment_processor
+ap2_payment_processor    |   タイプ: ap2.mandates.PaymentMandate
+
+
+
+ap2_shopping_agent       |       },
+ap2_merchant_agent       |     "payment_mandate_contents": {
+
+ap2_payment_processor    |   タイムスタンプ: 2025-10-19T23:04:07.917663Z
+ap2_payment_processor    |   ペイロード: {
+ap2_payment_processor    |   "payment_mandate": {
+ap2_payment_processor    |     "payment_mandate_contents": {
+ap2_payment_processor    |       "payment_mandate_id": "payment_6259d4f8",
+ap2_shopping_agent       |       "payment_response": {
+ap2_shopping_agent       |         "methodName": "basic-card",
+ap2_merchant_agent       |       "payment_mandate_id": "payment_6259d4f8",
+ap2_payment_processor    |       "payment_details_id": "cart_648e6453",
+ap2_shopping_agent       |         "details": {
+
+
+
+ap2_merchant_agent       |       "payment_details_id": "cart_648e6453",
+ap2_merchant_agent       |       "payment_details_total": {
+ap2_payment_processor    |       "payment_details_total": {
+
+
+
+ap2_merchant_agent       |         "label": "Total",
+ap2_merchant_agent       |         "amount": {
+ap2_merchant_agent       |           "value": "6880.0",
+
+ap2_payment_processor    |         "label": "Total",
+
+
+ap2_merchant_agent       |           "currency": "JPY"
+
+ap2_shopping_agent       |           "cardNumber": "****3782",
+ap2_shopping_agent       |           "cardSecurityCode": "***",
+ap2_merchant_agent       |       },
+ap2_shopping_agent       |           "cardBrand": "amex",
+ap2_merchant_agent       |       "payment_response": {
+ap2_payment_processor    |         "amount": {
+ap2_merchant_agent       |         "methodName": "basic-card",
+
+
+ap2_payment_processor    |           "value": "6880.0",
+ap2_merchant_agent       |         "details": {
+
+ap2_shopping_agent       |           "expiryMonth": 9,
+
+ap2_credential_provider  | [2025-10-19 23:04:07,959] INFO in provider: [verify_credentials] Verifying token for payer: user_demo_001
+ap2_merchant_agent       |           "cardholderName": "Demo User",
+ap2_payment_processor    |           "currency": "JPY"
+ap2_shopping_agent       |           "expiryYear": 2026,
+ap2_shopping_agent       |           "token": "tok_stepup_53574f4c_zGQXPzcB2r-GY-SjtPFXvOo4",
+ap2_credential_provider  | [2025-10-19 23:04:07,959] INFO in provider: [verify_credentials] Token verified: payment_method_id=pm_003, user_id=user_demo_001
+
+ap2_payment_processor    |         }
+
+                                                         ap2_shopping_agent       |           "tokenized": true
+ap2_shopping_agent       |         }
+ap2_credential_provider  | INFO:     172.18.0.5:33302 - "POST /credentials/verify HTTP/1.1" 200 OK
+ap2_payment_processor    |       },
+ap2_payment_processor    |       "payment_response": {
+ap2_shopping_agent       |       },"methodName": "basic-card",
+
+ap2_merchant_agent       |           "cardNumber": "****3782",
+
+
+
+
+ap2_payment_processor    |         "details": {
+
+
+
+
+ap2_payment_processor    |           "cardholderName": "Demo User",
+ap2_merchant_agent       |           "cardSecurityCode": "***",
+ap2_merchant_agent       |           "cardBrand": "amex",
+ap2_merchant_agent       |           "expiryMonth": 9,
+ap2_merchant_agent       |           "expiryYear": 2026,
+ap2_merchant_agent       |           "token": "tok_stepup_53574f4c_zGQXPzcB2r-GY-SjtPFXvOo4",
+ap2_merchant_agent       |           "tokenized": true
+
+
+ap2_merchant_agent       |         }
+ap2_shopping_agent       |       "timestamp": "2025-10-19T23:04:04.326130Z"
+ap2_shopping_agent       |     },
+
+ap2_merchant_agent       |       },
+ap2_shopping_agent       |     "agent_involved": true,
+ap2_shopping_agent       |     "transaction_type": "human_not_present",
+
+
+ap2_payment_processor    |           "cardNumber": "****3782",
+ap2_shopping_agent       |     "id": "payment_6259d4f8",
+
+
+
+ap2_merchant_agent       |       "timestamp": "2025-10-19T23:04:04.326130Z"
+ap2_merchant_agent       |     },
+ap2_merchant_agent       |     "agent_involved": true,
+
+ap2_payment_processor    |           "cardSecurityCode": "***",
+
+ap2_shopping_agent       |     "cart_mandate_id": "cart_648e6453",
+
+
+ap2_merchant_agent       |     "transaction_type": "human_not_present",
+ap2_payment_processor    |           "cardBrand": "amex",
+ap2_shopping_agent       |     "intent_mandate_id": "intent_f9f9d44d",
+
+ap2_payment_processor    |           "expiryMonth": 9,
+
+
+ap2_shopping_agent       |     "payer_id": "user_demo_001",
+ap2_merchant_agent       |     "cart_mandate_id": "cart_648e6453",
+
+
+ap2_merchant_agent       |     "intent_mandate_id": "intent_f9f9d44d",
+ap2_shopping_agent       |     "payee_id": "did:ap2:merchant:mugibo_merchant",
+
+ap2_payment_processor    |           "expiryYear": 2026,
+ap2_payment_processor    |           "token": "tok_stepup_53574f4c_zGQXPzcB2r-GY-SjtPFXvOo4",
+ap2_shopping_agent       |     "amount": {
+
+
+
+
+ap2_merchant_agent       |     "payer_id": "user_demo_001",
+ap2_shopping_agent       |       "value": "6880.0",
+ap2_payment_processor    |           "tokenized": true
+ap2_payment_processor    |         }
+
+ap2_merchant_agent       |     "payee_id": "did:ap2:merchant:mugibo_merchant",
+ap2_merchant_agent       |     "amount": {
+
+
+ap2_shopping_agent       |     },
+ap2_merchant_agent       |       "value": "6880.0",
+ap2_merchant_agent       |       "currency": "JPY"
+ap2_merchant_agent       |     },
+ap2_merchant_agent       |     "payment_method": {
+ap2_merchant_agent       |       "type": "card",
+ap2_merchant_agent       |       "token": "tok_stepup_53574f4c_zGQXPzcB2r-GY-SjtPFXvOo4",
+ap2_merchant_agent       |       "last4": "3782",
+ap2_shopping_agent       |     "payment_method": {
+
+
+ap2_merchant_agent       |       "brand": "amex",
+
+
+ap2_payment_processor    |       },
+ap2_shopping_agent       |       "type": "card",
+ap2_shopping_agent       |       "token": "tok_stepup_53574f4c_zGQXPzcB2r-GY-SjtPFXvOo4",
+
+ap2_shopping_agent       |       "last4": "3782",
+ap2_payment_processor    |       "merchant_agent": "did:ap2:merchant:mugibo_merchant",
+ap2_shopping_agent       |       "brand": "amex",
+
+ap2_merchant_agent       |       "expiry_year": 2026
+
+ap2_payment_processor    |       "timestamp": "2025-10-19T23:04:04.326130Z"
+ap2_payment_processor    |     },
+
+ap2_shopping_agent       |       "expiry_month": 9,
+ap2_shopping_agent       |       "expiry_year": 2026
+ap2_shopping_agent       |     },
+ap2_shopping_agent       |     "risk_score": 4,
+ap2_shopping_agent       |     "fraud_indicators": [
+ap2_shopping_agent       |       "card_not_present_transaction"
+ap2_shopping_agent       |     ],
+
+
+ap2_merchant_agent       |     "risk_score": 4,
+ap2_merchant_agent       |     "fraud_indicators": [
+ap2_merchant_agent       |       "card_not_present_transaction"
+ap2_shopping_agent       |     "user_authorization": "eyJpc3N1ZXJfand0IjoiZXlKaGJHY2lPaUpGVXpJMU5pSXNJblI1Y0NJNklrcFhWQ0o5LmV5SnBjM01pT2lKa2FXUTZZWEF5T25WelpYSTZkWE5sY2w5a1pXMXZYekF3TVNJc0luTjFZaUk2SW1ScFpEcGhjREk2ZFhObGNqcDFjMlZ5WDJSbGJXOWZNREF4SWl3aWFXRjBJam94TnpZd09URTFNRFEzTENKbGVIQWlPakUzTmpBNU1UVXpORGNzSW01aVppSTZNVGMyTURreE5UQTBOeXdpWTI1bUlqcDdJbXAzYXlJNmV5SnJkSGtpT2lKRlF5SXNJbU55ZGlJNklsQXRNalUySWl3aWVDSTZJa1ExY2xvMlQxcFpibmxFVlVVeFNYSlNNalpPWVd4UlJFOTVUbkI0WDJsMlJFeHhXbEIwVGw5bFMzTWlMQ0o1SWpvaVVXdFdORGR4ZUhSQmRIWm9WblZNVkhWbGJuWm9VVTlFTUVsdk5URkRRa2d0YmkxclJWQjVMV0ZwY3lKOWZYMCIsImtiX2p3dCI6ImV5SmhiR2NpT2lKRlV6STFOaUlzSW5SNWNDSTZJbXRpSzJwM2RDSjkuZXlKaGRXUWlPaUprYVdRNllYQXlPbUZuWlc1ME9uQmhlVzFsYm5SZmNISnZZMlZ6YzI5eUlpd2libTl1WTJVaU9pSmZPV0ZMTFV0MVZubDJWRjg0VUdRdFNFZHROakJRTWxVeGQyMTJOek14VWpoTVpIcHpUWGhwU2pKM0lpd2lhV0YwSWpveE56WXdPVEUxTURRM0xDSnpaRjlvWVhOb0lqb2lNRFkzTWpRMk4yTmlOakUxWXpVeE9EaGtPREl3T1dReU5qY3pZVEl4T1dNMU5XTmhPV0UxTmpabU9UQTBZV0ppWTJOak5EVTJNRFJpTVdGbE1qRTJZU0lzSW5SeVlXNXpZV04wYVc5dVgyUmhkR0VpT2xzaVpEY3hOR0k1T1RFM00ySTRPR1F4WVROak5tUm1ZVFl6TXpFMU1XRTJZakUzTmpVM01ETXpZelU1TVRrek5UaGxPVEE1Tm1RME5tUTRNekZoTXprM1lTSXNJbVZqWlRFMk5tSTBaRE0xTURVeU9EazJZamMyWkRNeU5UQTNOV1V4Tnpkak5tTmtObUk0TmpBeU5EVmlaRGhrTTJGaE1UWmtPVFl3TTJNME5tTTVPVEFpWFgwIiwid2ViYXV0aG5fYXNzZXJ0aW9uIjp7ImlkIjoiMUlRbWxQMUh0NlNHVlhsMVo2QkJ6X0hRSmFIMSIsInJhd0lkIjoiMUlRbWxQMUh0NlNHVlhsMVo2QkJ6X0hRSmFIMSIsInJlc3BvbnNlIjp7ImNsaWVudERhdGFKU09OIjoiZXlKMGVYQmxJam9pZDJWaVlYVjBhRzR1WjJWMElpd2lZMmhoYkd4bGJtZGxJam9pYTJaSFdreENZVVl6ZHpCSGNWWm5NV2xoV1RRMFp6WjBWbkkzVVZWQk1WRnNSVzVCYW5aSGJIRkVaeUlzSW05eWFXZHBiaUk2SW1oMGRIQTZMeTlzYjJOaGJHaHZjM1E2TXpBd01DSXNJbU55YjNOelQzSnBaMmx1SWpwbVlXeHpaWDAiLCJhdXRoZW50aWNhdG9yRGF0YSI6IlNaWU41WWdPakdoME5CY1BaSFpnVzRfa3JybWloakxIbVZ6enVvTWRsMk1kQUFBQUFBIiwic2lnbmF0dXJlIjoiTUVVQ0lRRGpzbHUyc3JKYk5FZG95XzBhak5nRGk5M3puTEpEVUU5blZGTU9RblBrT2dJZ0lXTzJKc1BCVHRoQ0U1U2lnbERUMnI2dVVSREQtMVFYblRjelo4cVI5S00iLCJ1c2VySGFuZGxlIjoiZFhObGNsOWtaVzF2WHpBd01RIn0sInR5cGUiOiJwdWJsaWMta2V5IiwiYXR0ZXN0YXRpb25fdHlwZSI6InBhc3NrZXkiLCJjaGFsbGVuZ2UiOiJrZkdaTEJhRjN3MEdxVmcxaWFZNDRnNnRWcjdRVUExUWxFbkFqdkdscURnIn0sImNhcnRfaGFzaCI6ImQ3MTRiOTkxNzNiODhkMWEzYzZkZmE2MzMxNTFhNmIxNzY1NzAzM2M1OTE5MzU4ZTkwOTZkNDZkODMxYTM5N2EiLCJwYXltZW50X2hhc2giOiJlY2UxNjZiNGQzNTA1Mjg5NmI3NmQzMjUwNzVlMTc3YzZjZDZiODYwMjQ1YmQ4ZDNhYTE2ZDk2MDNjNDZjOTkwIn0"
+ap2_merchant_agent       |     ],
+ap2_payment_processor    |     "agent_involved": true,
+
+ap2_merchant_agent       |     "user_authorization": "eyJpc3N1ZXJfand0IjoiZXlKaGJHY2lPaUpGVXpJMU5pSXNJblI1Y0NJNklrcFhWQ0o5LmV5SnBjM01pT2lKa2FXUTZZWEF5T25WelpYSTZkWE5sY2w5a1pXMXZYekF3TVNJc0luTjFZaUk2SW1ScFpEcGhjREk2ZFhObGNqcDFjMlZ5WDJSbGJXOWZNREF4SWl3aWFXRjBJam94TnpZd09URTFNRFEzTENKbGVIQWlPakUzTmpBNU1UVXpORGNzSW01aVppSTZNVGMyTURreE5UQTBOeXdpWTI1bUlqcDdJbXAzYXlJNmV5SnJkSGtpT2lKRlF5SXNJbU55ZGlJNklsQXRNalUySWl3aWVDSTZJa1ExY2xvMlQxcFpibmxFVlVVeFNYSlNNalpPWVd4UlJFOTVUbkI0WDJsMlJFeHhXbEIwVGw5bFMzTWlMQ0o1SWpvaVVXdFdORGR4ZUhSQmRIWm9WblZNVkhWbGJuWm9VVTlFTUVsdk5URkRRa2d0YmkxclJWQjVMV0ZwY3lKOWZYMCIsImtiX2p3dCI6ImV5SmhiR2NpT2lKRlV6STFOaUlzSW5SNWNDSTZJbXRpSzJwM2RDSjkuZXlKaGRXUWlPaUprYVdRNllYQXlPbUZuWlc1ME9uQmhlVzFsYm5SZmNISnZZMlZ6YzI5eUlpd2libTl1WTJVaU9pSmZPV0ZMTFV0MVZubDJWRjg0VUdRdFNFZHROakJRTWxVeGQyMTJOek14VWpoTVpIcHpUWGhwU2pKM0lpd2lhV0YwSWpveE56WXdPVEUxTURRM0xDSnpaRjlvWVhOb0lqb2lNRFkzTWpRMk4yTmlOakUxWXpVeE9EaGtPREl3T1dReU5qY3pZVEl4T1dNMU5XTmhPV0UxTmpabU9UQTBZV0ppWTJOak5EVTJNRFJpTVdGbE1qRTJZU0lzSW5SeVlXNXpZV04wYVc5dVgyUmhkR0VpT2xzaVpEY3hOR0k1T1RFM00ySTRPR1F4WVROak5tUm1ZVFl6TXpFMU1XRTJZakUzTmpVM01ETXpZelU1TVRrek5UaGxPVEE1Tm1RME5tUTRNekZoTXprM1lTSXNJbVZqWlRFMk5tSTBaRE0xTURVeU9EazJZamMyWkRNeU5UQTNOV1V4Tnpkak5tTmtObUk0TmpBeU5EVmlaRGhrTTJGaE1UWmtPVFl3TTJNME5tTTVPVEFpWFgwIiwid2ViYXV0aG5fYXNzZXJ0aW9uIjp7ImlkIjoiMUlRbWxQMUh0NlNHVlhsMVo2QkJ6X0hRSmFIMSIsInJhd0lkIjoiMUlRbWxQMUh0NlNHVlhsMVo2QkJ6X0hRSmFIMSIsInJlc3BvbnNlIjp7ImNsaWVudERhdGFKU09OIjoiZXlKMGVYQmxJam9pZDJWaVlYVjBhRzR1WjJWMElpd2lZMmhoYkd4bGJtZGxJam9pYTJaSFdreENZVVl6ZHpCSGNWWm5NV2xoV1RRMFp6WjBWbkkzVVZWQk1WRnNSVzVCYW5aSGJIRkVaeUlzSW05eWFXZHBiaUk2SW1oMGRIQTZMeTlzYjJOaGJHaHZjM1E2TXpBd01DSXNJbU55YjNOelQzSnBaMmx1SWpwbVlXeHpaWDAiLCJhdXRoZW50aWNhdG9yRGF0YSI6IlNaWU41WWdPakdoME5CY1BaSFpnVzRfa3JybWloakxIbVZ6enVvTWRsMk1kQUFBQUFBIiwic2lnbmF0dXJlIjoiTUVVQ0lRRGpzbHUyc3JKYk5FZG95XzBhak5nRGk5M3puTEpEVUU5blZGTU9RblBrT2dJZ0lXTzJKc1BCVHRoQ0U1U2lnbERUMnI2dVVSREQtMVFYblRjelo4cVI5S00iLCJ1c2VySGFuZGxlIjoiZFhObGNsOWtaVzF2WHpBd01RIn0sInR5cGUiOiJwdWJsaWMta2V5IiwiYXR0ZXN0YXRpb25fdHlwZSI6InBhc3NrZXkiLCJjaGFsbGVuZ2UiOiJrZkdaTEJhRjN3MEdxVmcxaWFZNDRnNnRWcjdRVUExUWxFbkFqdkdscURnIn0sImNhcnRfaGFzaCI6ImQ3MTRiOTkxNzNiODhkMWEzYzZkZmE2MzMxNTFhNmIxNzY1NzAzM2M1OTE5MzU4ZTkwOTZkNDZkODMxYTM5N2EiLCJwYXltZW50X2hhc2giOiJlY2UxNjZiNGQzNTA1Mjg5NmI3NmQzMjUwNzVlMTc3YzZjZDZiODYwMjQ1YmQ4ZDNhYTE2ZDk2MDNjNDZjOTkwIn0"
+ap2_payment_processor    |     "transaction_type": "human_not_present",
+ap2_merchant_agent       |   },
+
+ap2_merchant_agent       |   "cart_mandate": {
+ap2_merchant_agent       |     "id": "cart_648e6453",
+ap2_merchant_agent       |     "type": "CartMandate",
+ap2_merchant_agent       |     "version": "0.2",
+ap2_shopping_agent       |   },"intent_mandate_id": "intent_f9f9d44d",
+ap2_shopping_agent       |   "cart_mandate": {
+ap2_shopping_agent       |     "id": "cart_648e6453",
+ap2_shopping_agent       |     "type": "CartMandate",
+ap2_shopping_agent       |     "version": "0.2",
+
+ap2_shopping_agent       |     "intent_mandate_id": "intent_f9f9d44d",
+ap2_shopping_agent       |     "items": [
+ap2_shopping_agent       |       {
+ap2_merchant_agent       |     "items": ["item_8bd6a898",
+
+
+ap2_shopping_agent       |         "name": "むぎぼーアクリルキーホルダー",
+ap2_merchant_agent       |       {
+ap2_payment_processor    |     "cart_mandate_id": "cart_648e6453",
+ap2_merchant_agent       |         "id": "item_8bd6a898",
+
+ap2_payment_processor    |     "intent_mandate_id": "intent_f9f9d44d",
+ap2_shopping_agent       |         "description": "かわいいむぎぼーのアクリルキーホルダー。バッグやポーチに付けて持ち歩けます。",
+ap2_shopping_agent       |         "quantity": 1,
+
+
+ap2_merchant_agent       |         "name": "むぎぼーアクリルキーホルダー",
+ap2_merchant_agent       |         "description": "かわいいむぎぼーのアクリルキーホルダー。バッグやポーチに付けて持ち歩けます。",
+ap2_merchant_agent       |         "quantity": 1,
+ap2_payment_processor    |     "payer_id": "user_demo_001",
+
+
+ap2_payment_processor    |     "payee_id": "did:ap2:merchant:mugibo_merchant",
+
+ap2_shopping_agent       |           "value": "800.0",
+ap2_shopping_agent       |           "currency": "JPY"
+ap2_payment_processor    |     "amount": {
+ap2_shopping_agent       |         },
+ap2_payment_processor    |       "value": "6880.0",
+ap2_merchant_agent       |         "unit_price": {
+
+
+ap2_payment_processor    |       "currency": "JPY"
+ap2_merchant_agent       |           "value": "800.0",
+ap2_merchant_agent       |           "currency": "JPY"
+ap2_merchant_agent       |         },
+
+ap2_shopping_agent       |         "total_price": {
+
+
+
+ap2_merchant_agent       |         "total_price": {
+ap2_merchant_agent       |           "value": "800.0",
+ap2_merchant_agent       |           "currency": "JPY"
+ap2_payment_processor    |     "payment_method": {
+
+
+ap2_merchant_agent       |         },
+
+
+
+ap2_payment_processor    |       "type": "card",
+
+
+ap2_payment_processor    |       "token": "tok_stepup_53574f4c_zGQXPzcB2r-GY-SjtPFXvOo4",
+ap2_payment_processor    |       "last4": "3782",
+ap2_shopping_agent       |           "currency": "JPY"
+ap2_payment_processor    |       "brand": "amex",EYCHAIN-001",
+
+
+
+ap2_shopping_agent       |         },ategory": "Keychains",
+
+
+ap2_payment_processor    |       "expiry_year": 2026
+ap2_merchant_agent       |         "brand": "Mugibow Official"
+
+ap2_payment_processor    |     },
+ap2_shopping_agent       |         "sku": "MUGI-KEYCHAIN-001",
+ap2_payment_processor    |     "risk_score": 4,
+
+
+ap2_shopping_agent       |         "category": "Keychains",
+ap2_merchant_agent       |       },
+ap2_payment_processor    |     "fraud_indicators": [
+
+
+
+
+
+ap2_merchant_agent       |       {
+ap2_merchant_agent       |         "id": "item_745dfd12",
+ap2_shopping_agent       |         "brand": "Mugibow Official"
+ap2_payment_processor    |       "card_not_present_transaction"
+
+ap2_shopping_agent       |       },onfig   w Enable Watch
+ap2_payment_processor    |     ],
+ap2_merchant_agent       |         "name": "むぎぼー時計",
+ap2_payment_processor    |     "user_authorization": "eyJpc3N1ZXJfand0IjoiZXlKaGJHY2lPaUpGVXpJMU5pSXNJblI1Y0NJNklrcFhWQ0o5LmV5SnBjM01pT2lKa2FXUTZZWEF5T25WelpYSTZkWE5sY2w5a1pXMXZYekF3TVNJc0luTjFZaUk2SW1ScFpEcGhjREk2ZFhObGNqcDFjMlZ5WDJSbGJXOWZNREF4SWl3aWFXRjBJam94TnpZd09URTFNRFEzTENKbGVIQWlPakUzTmpBNU1UVXpORGNzSW01aVppSTZNVGMyTURreE5UQTBOeXdpWTI1bUlqcDdJbXAzYXlJNmV5SnJkSGtpT2lKRlF5SXNJbU55ZGlJNklsQXRNalUySWl3aWVDSTZJa1ExY2xvMlQxcFpibmxFVlVVeFNYSlNNalpPWVd4UlJFOTVUbkI0WDJsMlJFeHhXbEIwVGw5bFMzTWlMQ0o1SWpvaVVXdFdORGR4ZUhSQmRIWm9WblZNVkhWbGJuWm9VVTlFTUVsdk5URkRRa2d0YmkxclJWQjVMV0ZwY3lKOWZYMCIsImtiX2p3dCI6ImV5SmhiR2NpT2lKRlV6STFOaUlzSW5SNWNDSTZJbXRpSzJwM2RDSjkuZXlKaGRXUWlPaUprYVdRNllYQXlPbUZuWlc1ME9uQmhlVzFsYm5SZmNISnZZMlZ6YzI5eUlpd2libTl1WTJVaU9pSmZPV0ZMTFV0MVZubDJWRjg0VUdRdFNFZHROakJRTWxVeGQyMTJOek14VWpoTVpIcHpUWGhwU2pKM0lpd2lhV0YwSWpveE56WXdPVEUxTURRM0xDSnpaRjlvWVhOb0lqb2lNRFkzTWpRMk4yTmlOakUxWXpVeE9EaGtPREl3T1dReU5qY3pZVEl4T1dNMU5XTmhPV0UxTmpabU9UQTBZV0ppWTJOak5EVTJNRFJpTVdGbE1qRTJZU0lzSW5SeVlXNXpZV04wYVc5dVgyUmhkR0VpT2xzaVpEY3hOR0k1T1RFM00ySTRPR1F4WVROak5tUm1ZVFl6TXpFMU1XRTJZakUzTmpVM01ETXpZelU1TVRrek5UaGxPVEE1Tm1RME5tUTRNekZoTXprM1lTSXNJbVZqWlRFMk5tSTBaRE0xTURVeU9EazJZamMyWkRNeU5UQTNOV1V4Tnpkak5tTmtObUk0TmpBeU5EVmlaRGhrTTJGaE1UWmtPVFl3TTJNME5tTTVPVEFpWFgwIiwid2ViYXV0aG5fYXNzZXJ0aW9uIjp7ImlkIjoiMUlRbWxQMUh0NlNHVlhsMVo2QkJ6X0hRSmFIMSIsInJhd0lkIjoiMUlRbWxQMUh0NlNHVlhsMVo2QkJ6X0hRSmFIMSIsInJlc3BvbnNlIjp7ImNsaWVudERhdGFKU09OIjoiZXlKMGVYQmxJam9pZDJWaVlYVjBhRzR1WjJWMElpd2lZMmhoYkd4bGJtZGxJam9pYTJaSFdreENZVVl6ZHpCSGNWWm5NV2xoV1RRMFp6WjBWbkkzVVZWQk1WRnNSVzVCYW5aSGJIRkVaeUlzSW05eWFXZHBiaUk2SW1oMGRIQTZMeTlzYjJOaGJHaHZjM1E2TXpBd01DSXNJbU55YjNOelQzSnBaMmx1SWpwbVlXeHpaWDAiLCJhdXRoZW50aWNhdG9yRGF0YSI6IlNaWU41WWdPakdoME5CY1BaSFpnVzRfa3JybWloakxIbVZ6enVvTWRsMk1kQUFBQUFBIiwic2lnbmF0dXJlIjoiTUVVQ0lRRGpzbHUyc3JKYk5FZG95XzBhak5nRGk5M3puTEpEVUU5blZGTU9RblBrT2dJZ0lXTzJKc1BCVHRoQ0U1U2lnbERUMnI2dVVSREQtMVFYblRjelo4cVI5S00iLCJ1c2VySGFuZGxlIjoiZFhObGNsOWtaVzF2WHpBd01RIn0sInR5cGUiOiJwdWJsaWMta2V5IiwiYXR0ZXN0YXRpb25fdHlwZSI6InBhc3NrZXkiLCJjaGFsbGVuZ2UiOiJrZkdaTEJhRjN3MEdxVmcxaWFZNDRnNnRWcjdRVUExUWxFbkFqdkdscURnIn0sImNhcnRfaGFzaC
+ap2_shopping_agent       |       {MzMxNTFhNmIxNzY1NzAzM2M1OTE5MzU4ZTkwOTZkNDZkODMxYTM5N2EiLCJwYXltZW50X2hhc2giOiJlY2UxNjZiNGQzNTA1Mjg5NmI3NmQzMjUwNzVlMTc3YzZjZDZiODYwMjQ1YmQ4ZDNhYTE2ZDk2MDNjNDZjOTkwIn0"
+ap2_payment_processor    |   },
+ap2_shopping_agent       |         "id": "item_745dfd12",
+ap2_payment_processor    |   "cart_mandate": {
+
+ap2_shopping_agent       |         "name": "むぎぼー時計",
+ap2_merchant_agent       |         "quantity": 1,
+
+
+
+ap2_shopping_agent       |         "quantity": 1,
+ap2_merchant_agent       |         "unit_price": {
+ap2_merchant_agent       |           "value": "3500.0",
+
+ap2_payment_processor    |     "id": "cart_648e6453",
+ap2_shopping_agent       |         "unit_price": {
+ap2_merchant_agent       |           "currency": "JPY"
+ap2_merchant_agent       |         },
+ap2_merchant_agent       |         "total_price": {
+ap2_merchant_agent       |           "value": "3500.0",
+ap2_merchant_agent       |           "currency": "JPY"
+
+ap2_shopping_agent       |           "value": "3500.0",
+ap2_credential_provider  | [2025-10-19 23:04:08,040] INFO in provider: [CredentialProvider] Receipt received and stored: transaction_id=txn_fbe3f438fec3, payer_id=user_demo_001, receipt_url=http://localhost:8004/receipts/txn_fbe3f438fec3.pdf
+ap2_shopping_agent       |           "currency": "JPY"
+ap2_shopping_agent       |         },
+
+
+
+
+v View in Docker Desktop   o View Config   w Enable Watch
+
+ap2_merchant_agent       |         },
+ap2_credential_provider  | INFO:     172.18.0.5:33302 - "POST /receipts HTTP/1.1" 200 OK
+ap2_shopping_agent       |         "total_price": {
+ap2_shopping_agent       |           "value": "3500.0",
+
+
+ap2_shopping_agent       |           "currency": "JPY"
+
+
+ap2_merchant_agent       |         "image_url": "/assets/むぎぼー時計.png",
+ap2_merchant_agent       |         "sku": "MUGI-CLOCK-001",
+ap2_shopping_agent       |         },
+ap2_payment_processor    |     "type": "CartMandate",
+ap2_shopping_agent       |         "image_url": "/assets/むぎぼー時計.png",
+
+
+ap2_shopping_agent       |         "sku": "MUGI-CLOCK-001",
+ap2_merchant_agent       |         "category": "Clocks",
+ap2_shopping_agent       |         "category": "Clocks",
+
+
+ap2_payment_processor    |     "version": "0.2",
+ap2_merchant_agent       |         "brand": "Mugibow Official"
+ap2_merchant_agent       |       },
+ap2_payment_processor    |     "intent_mandate_id": "intent_f9f9d44d",
+ap2_payment_processor    |     "items": [
+
+
+
+
+ap2_shopping_agent       |         "brand": "Mugibow Official"
+ap2_shopping_agent       |       },
+ap2_payment_processor    |       {
+ap2_payment_processor    |         "id": "item_8bd6a898",
+
+ap2_merchant_agent       |       {
+ap2_merchant_agent       |         "id": "item_ac1923a4",
+ap2_payment_processor    |         "name": "むぎぼーアクリルキーホルダー",
+
+
+ap2_shopping_agent       |       {
+
+
+ap2_payment_processor    |         "description": "かわいいむぎぼーのアクリルキーホルダー。バッグやポーチに付けて持ち歩けます。",
+ap2_merchant_agent       |         "name": "むぎぼーカレンダー",
+
+
+ap2_merchant_agent       |         "description": "むぎぼーの1年カレンダー。毎月違うむぎぼーのイラストが楽しめます。",
+
+ap2_shopping_agent       |         "id": "item_ac1923a4",
+
+ap2_merchant_agent       |         "quantity": 1,
+ap2_shopping_agent       |         "name": "むぎぼーカレンダー",
+
+
+ap2_merchant_agent       |         "unit_price": {
+ap2_payment_processor    |         "quantity": 1,
+
+
+ap2_shopping_agent       |         "description": "むぎぼーの1年カレンダー。毎月違うむぎぼーのイラストが楽しめます。",
+ap2_merchant_agent       |           "value": "1500.0",
+
+
+
+ap2_shopping_agent       |         "quantity": 1,
+ap2_merchant_agent       |           "currency": "JPY"
+
+
+ap2_payment_processor    |           "value": "800.0",
+
+
+
+
+ap2_merchant_agent       |         },
+ap2_payment_processor    |           "currency": "JPY"
+
+ap2_payment_processor    |         "total_price": {
+ap2_shopping_agent       |           "value": "1500.0",
+ap2_merchant_agent       |         "total_price": {
+ap2_shopping_agent       |           "currency": "JPY"
+ap2_payment_processor    |           "value": "800.0",
+
+ap2_merchant_agent       |           "value": "1500.0",
+
+ap2_payment_processor    |           "currency": "JPY"
+ap2_payment_processor    |         },
+ap2_payment_processor    |         "image_url": "/assets/むぎぼーアクリルキーホルダー.png",
+
+ap2_merchant_agent       |           "currency": "JPY"
+ap2_shopping_agent       |         "total_price": {
+ap2_shopping_agent       |           "value": "1500.0",
+
+ap2_payment_processor    |         "sku": "MUGI-KEYCHAIN-001",
+
+
+ap2_merchant_agent       |         },
+ap2_shopping_agent       |           "currency": "JPY"
+ap2_shopping_agent       |         },
+
+
+ap2_merchant_agent       |         "image_url": "/assets/むぎぼーカレンダー.png",
+ap2_payment_processor    |         "category": "Keychains",
+
+
+ap2_merchant_agent       |         "sku": "MUGI-CALENDAR-001",
+
+ap2_payment_processor    |         "brand": "Mugibow Official"
+ap2_shopping_agent       |         "image_url": "/assets/むぎぼーカレンダー.png",
+ap2_merchant_agent       |         "category": "Calendars",
+ap2_merchant_agent       |         "brand": "Mugibow Official"
+
+ap2_shopping_agent       |         "sku": "MUGI-CALENDAR-001",
+
+ap2_payment_processor    |       },
+ap2_shopping_agent       |         "category": "Calendars",
+
+
+ap2_merchant_agent       |       }
+ap2_merchant_agent       |     ],
+ap2_merchant_agent       |     "subtotal": {
+ap2_payment_processor    |       {
+ap2_payment_processor    |         "id": "item_745dfd12",
+ap2_shopping_agent       |         "brand": "Mugibow Official"
+ap2_payment_processor    |         "name": "むぎぼー時計",
+ap2_merchant_agent       |       "currency": "JPY"
+ap2_merchant_agent       |     },
+
+ap2_shopping_agent       |       }
+ap2_shopping_agent       |     ],  "quantity": 1,
+ap2_merchant_agent       |     "tax": {
+ap2_shopping_agent       |     "subtotal": {
+
+ap2_merchant_agent       |       "value": "580.0",
+ap2_shopping_agent       |       "value": "5800.0",
+
+ap2_payment_processor    |         "unit_price": {
+
+
+ap2_merchant_agent       |       "currency": "JPY"
+ap2_payment_processor    |           "value": "3500.0",
+
+ap2_merchant_agent       |     },
+ap2_payment_processor    |           "currency": "JPY"
+ap2_shopping_agent       |     },
+ap2_merchant_agent       |     "shipping": {
+
+
+
+
+ap2_merchant_agent       |       "address": {
+
+
+ap2_payment_processor    |         "total_price": {
+
+
+ap2_payment_processor    |           "value": "3500.0",
+
+ap2_merchant_agent       |         "recipient": "あ",
+ap2_shopping_agent       |       "currency": "JPY"
+
+
+ap2_shopping_agent       |     },
+
+ap2_payment_processor    |           "currency": "JPY"
+ap2_shopping_agent       |     "shipping": { Enable Watch
+ap2_payment_processor    |         },
+
+
+ap2_merchant_agent       |         "address_line1": "っっｊ",
+
+ap2_payment_processor    |         "image_url": "/assets/むぎぼー時計.png",
+ap2_shopping_agent       |       "address": {
+
+
+
+ap2_payment_processor    |         "sku": "MUGI-CLOCK-001",
+
+
+ap2_merchant_agent       |         "country": "JP"
+
+ap2_payment_processor    |         "category": "Clocks",
+ap2_payment_processor    |         "brand": "Mugibow Official"
+
+
+ap2_shopping_agent       |         "postal_code": "１１１１１１１",
+
+
+ap2_shopping_agent       |         "address_line1": "っっｊ",
+ap2_merchant_agent       |       "method": "standard",
+
+ap2_payment_processor    |       },
+ap2_shopping_agent       |         "country": "JP"
+
+
+
+ap2_payment_processor    |       {
+
+
+ap2_merchant_agent       |       "cost": {
+
+ap2_payment_processor    |         "id": "item_ac1923a4",
+
+
+
+
+ap2_shopping_agent       |       },
+ap2_payment_processor    |         "name": "むぎぼーカレンダー",
+
+
+ap2_payment_processor    |         "description": "むぎぼーの1年カレンダー。毎月違うむぎぼーのイラストが楽しめます。",
+ap2_merchant_agent       |         "currency": "JPY"
+
+
+ap2_shopping_agent       |         "value": "500.0",
+ap2_payment_processor    |         "unit_price": {
+ap2_shopping_agent       |         "currency": "JPY"
+
+
+ap2_merchant_agent       |       "estimated_delivery": "2025-10-22T23:03:51.574423Z"
+ap2_payment_processor    |           "value": "1500.0",
+ap2_payment_processor    |           "currency": "JPY"
+ap2_merchant_agent       |     },
+
+ap2_payment_processor    |         },
+
+ap2_merchant_agent       |     "total": {
+ap2_payment_processor    |         "total_price": {
+ap2_shopping_agent       |       },
+
+ap2_merchant_agent       |       "value": "6880.0",
+
+
+ap2_merchant_agent       |       "currency": "JPY"
+ap2_shopping_agent       |       "estimated_delivery": "2025-10-22T23:03:51.574423Z"
+
+
+v View in Docker Desktop   o View Config   w Enable Watch
+
+ap2_shopping_agent       |     },
+ap2_merchant_agent       |     },
+
+
+ap2_payment_processor    |           "value": "1500.0",
+ap2_merchant_agent       |     "merchant_id": "did:ap2:merchant:mugibo_merchant",
+ap2_payment_processor    |           "currency": "JPY"
+
+
+ap2_shopping_agent       |     "total": {
+ap2_payment_processor    |         },ant_name": "むぎぼーショップ",
+
+
+
+
+ap2_payment_processor    |         "image_url": "/assets/むぎぼーカレンダー.png",
+ap2_merchant_agent       |     "created_at": "2025-10-19T23:03:51.574423Z",
+ap2_shopping_agent       |       "value": "6880.0",
+
+ap2_merchant_agent       |     "expires_at": "2025-10-19T23:33:51.574423Z",
+ap2_payment_processor    |         "sku": "MUGI-CALENDAR-001",
+
+
+
+
+ap2_shopping_agent       |       "currency": "JPY"
+ap2_payment_processor    |         "category": "Calendars",
+ap2_merchant_agent       |     "merchant_signature": {
+
+ap2_shopping_agent       |     },
+ap2_payment_processor    |         "brand": "Mugibow Official"
+
+
+ap2_payment_processor    |       }
+
+ap2_merchant_agent       |       "algorithm": "ECDSA",
+ap2_payment_processor    |     ],
+
+ap2_merchant_agent       |       "value": "MEUCIQCaJlnDeU4tuZIWidocfMIDbHHUkNjptXS6YnsaEFuptwIgQq0BnxVIctNeQ+Kucw5yE6AIhKNsQ06gR9uM/2CeiRI=",
+
+
+ap2_merchant_agent       |       "public_key": "LS0tLS1CRUdJTiBQVUJMSUMgS0VZLS0tLS0KTUZrd0V3WUhLb1pJemowQ0FRWUlLb1pJemowREFRY0RRZ0FFMDJ6M2c1UkdrQ2lCUkVOTm95ejdUVWpNOEkxWApNM1BndGluOUZFZ1lNaFV3U0tFcEU5QjhDWng1eUtZVmJrRGxLZXc2aEtEc3Y3RFMzbXJGRXhFRUNnPT0KLS0tLS1FTkQgUFVCTElDIEtFWS0tLS0tCg==",
+ap2_payment_processor    |     "subtotal": {
+ap2_shopping_agent       |     "merchant_name": "むぎぼーショップ",
+ap2_shopping_agent       |     "created_at": "2025-10-19T23:03:51.574423Z",
+ap2_merchant_agent       |       "signed_at": "2025-10-19T23:03:51.653900Z"
+ap2_payment_processor    |       "value": "5800.0",
+ap2_merchant_agent       |     },
+ap2_payment_processor    |       "currency": "JPY"
+ap2_payment_processor    |     },
+ap2_shopping_agent       |     "expires_at": "2025-10-19T23:33:51.574423Z",
+
+
+ap2_shopping_agent       |     "merchant_signature": {
+ap2_shopping_agent       |       "algorithm": "ECDSA",
+ap2_shopping_agent       |       "value": "MEUCIQCaJlnDeU4tuZIWidocfMIDbHHUkNjptXS6YnsaEFuptwIgQq0BnxVIctNeQ+Kucw5yE6AIhKNsQ06gR9uM/2CeiRI=",
+
+ap2_payment_processor    |     "tax": {
+
+ap2_payment_processor    |       "value": "580.0",
+
+ap2_payment_processor    |       "currency": "JPY"
+ap2_payment_processor    |     },"public_key": "LS0tLS1CRUdJTiBQVUJMSUMgS0VZLS0tLS0KTUZrd0V3WUhLb1pJemowQ0FRWUlLb1pJemowREFRY0RRZ0FFMDJ6M2c1UkdrQ2lCUkVOTm95ejdUVWpNOEkxWApNM1BndGluOUZFZ1lNaFV3U0tFcEU5QjhDWng1eUtZVmJrRGxLZXc2aEtEc3Y3RFMzbXJGRXhFRUNnPT0KLS0tLS1FTkQgUFVCTElDIEtFWS0tLS0tCg==",
+ap2_payment_processor    |     "shipping": {
+
+
+
+
+ap2_shopping_agent       |       "signed_at": "2025-10-19T23:03:51.653900Z"
+ap2_merchant_agent       |       "name": "人気商品セット",
+
+
+ap2_payment_processor    |       "address": {
+ap2_merchant_agent       |       "description": "検索結果で人気の商品を組み合わせたカートです"
+
+
+ap2_shopping_agent       |     "cart_metadata": {
+
+ap2_shopping_agent       |       "name": "人気商品セット",
+v View in Docker Desktop   o View Config   w Enable Watch
+
+ap2_payment_processor    |         "postal_code": "１１１１１１１",
+
+ap2_shopping_agent       |       "description": "検索結果で人気の商品を組み合わせたカートです"
+
+
+ap2_merchant_agent       |     "merchant_authorization": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImRpZDphcDI6bWVyY2hhbnQ6bXVnaWJvX21lcmNoYW50I2tleS0xIiwidHlwIjoiSldUIn0.eyJpc3MiOiJkaWQ6YXAyOm1lcmNoYW50Om11Z2lib19tZXJjaGFudCIsInN1YiI6ImRpZDphcDI6bWVyY2hhbnQ6bXVnaWJvX21lcmNoYW50IiwiYXVkIjoiZGlkOmFwMjphZ2VudDpwYXltZW50X3Byb2Nlc3NvciIsImlhdCI6MTc2MDkxNTAzMSwiZXhwIjoxNzYwOTE1OTMxLCJqdGkiOiJkZDFjOTkyMi05NmZhLTQ4ODktOGE4Yi1iN2EwZDFjOWRjZjciLCJjYXJ0X2hhc2giOiJkNzE0Yjk5MTczYjg4ZDFhM2M2ZGZhNjMzMTUxYTZiMTc2NTcwMzNjNTkxOTM1OGU5MDk2ZDQ2ZDgzMWEzOTdhIn0.MEUCIQDEe3iNShfHz5D7PQDUrfstxK2mCoe-cawypUaEut_DPgIgfmw0KHD3RiWDXAFGFvJHtf9J_gUCxz7gcL6mKODa3DA"
+ap2_payment_processor    |         "address_line1": "っっｊ",
+ap2_merchant_agent       |   }
+
+
+ap2_merchant_agent       | }
+
+ap2_payment_processor    |         "country": "JP"
+
+
+ap2_payment_processor    |       },
+
+ap2_merchant_agent       | ================================================================================
+
+ap2_shopping_agent       |     },
+ap2_payment_processor    |       "method": "standard",
+ap2_shopping_agent       |     "merchant_authorization": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImRpZDphcDI6bWVyY2hhbnQ6bXVnaWJvX21lcmNoYW50I2tleS0xIiwidHlwIjoiSldUIn0.eyJpc3MiOiJkaWQ6YXAyOm1lcmNoYW50Om11Z2lib19tZXJjaGFudCIsInN1YiI6ImRpZDphcDI6bWVyY2hhbnQ6bXVnaWJvX21lcmNoYW50IiwiYXVkIjoiZGlkOmFwMjphZ2VudDpwYXltZW50X3Byb2Nlc3NvciIsImlhdCI6MTc2MDkxNTAzMSwiZXhwIjoxNzYwOTE1OTMxLCJqdGkiOiJkZDFjOTkyMi05NmZhLTQ4ODktOGE4Yi1iN2EwZDFjOWRjZjciLCJjYXJ0X2hhc2giOiJkNzE0Yjk5MTczYjg4ZDFhM2M2ZGZhNjMzMTUxYTZiMTc2NTcwMzNjNTkxOTM1OGU5MDk2ZDQ2ZDgzMWEzOTdhIn0.MEUCIQDEe3iNShfHz5D7PQDUrfstxK2mCoe-cawypUaEut_DPgIgfmw0KHD3RiWDXAFGFvJHtf9J_gUCxz7gcL6mKODa3DA"
+ap2_merchant_agent       | [SignatureManager] A2Aメッセージ署名を検証中...
+ap2_merchant_agent       | [SignatureManager] 署名を検証中（アルゴリズム: ECDSA）...
+ap2_merchant_agent       | [2025-10-19 23:04:07,917] INFO in v2.common.a2a_handler: [A2AHandler] proof署名検証成功: sender=did:ap2:agent:shopping_agent, alg=ecdsa, kid=did:ap2:agent:shopping_agent#key-1, public_key_source=DID-resolved
+ap2_shopping_agent       |   }
+ap2_payment_processor    |       "cost": {
+
+
+
+
+ap2_payment_processor    |         "value": "500.0",
+ap2_payment_processor    |         "currency": "JPY"
+
+ap2_shopping_agent       | }
+ap2_merchant_agent       |   ✓ 署名は有効です
+ap2_payment_processor    |       },
+
+ap2_shopping_agent       | ================================================================================
+ap2_shopping_agent       | [2025-10-19 23:04:07,910] INFO in agent:
+ap2_merchant_agent       | [2025-10-19 23:04:07,917] INFO in v2.common.a2a_handler: [A2A処理] ハンドラー実行中: type=ap2.mandates.PaymentMandate, from=did:ap2:agent:shopping_agent
+ap2_payment_processor    |     },
+ap2_shopping_agent       | ================================================================================
+
+
+ap2_shopping_agent       | [ShoppingAgent → MerchantAgent] A2Aメッセージ送信（PaymentRequest）
+ap2_merchant_agent       | [2025-10-19 23:04:07,917] INFO in agent: [MerchantAgent] Received PaymentRequest from Shopping Agent
+ap2_shopping_agent       |   URL: http://merchant_agent:8001/a2a/message
+ap2_merchant_agent       | [2025-10-19 23:04:07,917] INFO in agent: [MerchantAgent] Forwarding PaymentMandate to Payment Processor: payment_mandate_id=payment_6259d4f8
+
+ap2_shopping_agent       |   メッセージID: 7530105b-e70b-4e8a-8d6e-96830fd4078a
+
+ap2_shopping_agent       |   タイプ: ap2.mandates.PaymentMandate
+ap2_merchant_agent       | [SignatureManager] A2Aメッセージに署名中（送信者: merchant_agent）
+
+
+
+ap2_payment_processor    |       "value": "6880.0",
+
+ap2_merchant_agent       | [SignatureManager] データに署名中（鍵ID: merchant_agent, アルゴリズム: ECDSA）
+ap2_merchant_agent       |   ✓ 署名完了: {
+
+
+
+
+
+ap2_payment_processor    |     },
+ap2_merchant_agent       | [2025-10-19 23:04:07,918] INFO in v2.common.a2a_handler:
+
+ap2_merchant_agent       | ================================================================================
+ap2_merchant_agent       | [A2A送信] レスポンス作成
+
+ap2_shopping_agent       |   "payment_mandate_contents": {
+
+ap2_merchant_agent       |   送信元: did:ap2:agent:merchant_agent
+ap2_payment_processor    |     "merchant_id": "did:ap2:merchant:mugibo_merchant",
+
+
+
+
+ap2_payment_processor    |     "merchant_name": "むぎぼーショップ",
+ap2_merchant_agent       |   タイプ: ap2.mandates.PaymentMandate
+ap2_shopping_agent       |     "payment_details_id": "cart_648e6453",
+
+v View in Docker Desktop   o View Config   w Enable Watch
+
+ap2_payment_processor    |     "created_at": "2025-10-19T23:03:51.574423Z",
+ap2_shopping_agent       |     "payment_details_total": {
+ap2_payment_processor    |     "expires_at": "2025-10-19T23:33:51.574423Z",
+
+ap2_payment_processor    |     "merchant_signature": {
+ap2_shopping_agent       |       "label": "Total",
+ap2_payment_processor    |       "algorithm": "ECDSA",
+ap2_shopping_agent       |       "amount": {
+ap2_shopping_agent       |         "value": "6880.0",
+ap2_payment_processor    |       "value": "MEUCIQCaJlnDeU4tuZIWidocfMIDbHHUkNjptXS6YnsaEFuptwIgQq0BnxVIctNeQ+Kucw5yE6AIhKNsQ06gR9uM/2CeiRI=",
+ap2_merchant_agent       |   データID: payment_6259d4f8
+
+ap2_shopping_agent       |         "currency": "JPY"
+
+
+
+ap2_payment_processor    |       "public_key": "LS0tLS1CRUdJTiBQVUJMSUMgS0VZLS0tLS0KTUZrd0V3WUhLb1pJemowQ0FRWUlLb1pJemowREFRY0RRZ0FFMDJ6M2c1UkdrQ2lCUkVOTm95ejdUVWpNOEkxWApNM1BndGluOUZFZ1lNaFV3U0tFcEU5QjhDWng1eUtZVmJrRGxLZXc2aEtEc3Y3RFMzbXJGRXhFRUNnPT0KLS0tLS1FTkQgUFVCTElDIEtFWS0tLS0tCg==",
+ap2_payment_processor    |       "signed_at": "2025-10-19T23:03:51.653900Z"
+
+ap2_shopping_agent       |     },
+ap2_merchant_agent       |   署名: あり
+
+
+ap2_shopping_agent       |     "payment_response": {
+ap2_shopping_agent       |       "methodName": "basic-card",
+ap2_payment_processor    |     },
+ap2_payment_processor    |     "cart_metadata": {
+ap2_payment_processor    |       "name": "人気商品セット",
+ap2_merchant_agent       |   タイムスタンプ: 2025-10-19T23:04:07.917663Z
+ap2_shopping_agent       |       "details": {
+
+ap2_merchant_agent       |   ペイロード: {
+
+
+
+ap2_payment_processor    |       "description": "検索結果で人気の商品を組み合わせたカートです"
+ap2_merchant_agent       |   "payment_mandate": {
+ap2_shopping_agent       |         "cardNumber": "****3782",
+
+
+ap2_payment_processor    |     },
+ap2_merchant_agent       |     "payment_mandate_contents": {
+
+
+ap2_merchant_agent       |       "payment_mandate_id": "payment_6259d4f8",
+
+ap2_shopping_agent       |         "cardSecurityCode": "***",
+ap2_payment_processor    |     "merchant_authorization": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImRpZDphcDI6bWVyY2hhbnQ6bXVnaWJvX21lcmNoYW50I2tleS0xIiwidHlwIjoiSldUIn0.eyJpc3MiOiJkaWQ6YXAyOm1lcmNoYW50Om11Z2lib19tZXJjaGFudCIsInN1YiI6ImRpZDphcDI6bWVyY2hhbnQ6bXVnaWJvX21lcmNoYW50IiwiYXVkIjoiZGlkOmFwMjphZ2VudDpwYXltZW50X3Byb2Nlc3NvciIsImlhdCI6MTc2MDkxNTAzMSwiZXhwIjoxNzYwOTE1OTMxLCJqdGkiOiJkZDFjOTkyMi05NmZhLTQ4ODktOGE4Yi1iN2EwZDFjOWRjZjciLCJjYXJ0X2hhc2giOiJkNzE0Yjk5MTczYjg4ZDFhM2M2ZGZhNjMzMTUxYTZiMTc2NTcwMzNjNTkxOTM1OGU5MDk2ZDQ2ZDgzMWEzOTdhIn0.MEUCIQDEe3iNShfHz5D7PQDUrfstxK2mCoe-cawypUaEut_DPgIgfmw0KHD3RiWDXAFGFvJHtf9J_gUCxz7gcL6mKODa3DA"
+
+
+ap2_payment_processor    |   }
+ap2_payment_processor    | }
+ap2_payment_processor    | ================================================================================
+ap2_shopping_agent       |         "cardBrand": "amex",
+ap2_shopping_agent       |         "expiryMonth": 9,
+
+
+ap2_shopping_agent       |         "expiryYear": 2026,
+ap2_shopping_agent       |         "token": "tok_stepup_53574f4c_zGQXPzcB2r-GY-SjtPFXvOo4",
+ap2_shopping_agent       |         "tokenized": true
+ap2_merchant_agent       |       "payment_details_id": "cart_648e6453",
+ap2_shopping_agent       |       }
+ap2_shopping_agent       |     },
+ap2_shopping_agent       |     "merchant_agent": "did:ap2:merchant:mugibo_merchant",
+ap2_payment_processor    | [SignatureManager] A2Aメッセージ署名を検証中...
+
+
+
+
+ap2_payment_processor    | [SignatureManager] 署名を検証中（アルゴリズム: ECDSA）...
+ap2_payment_processor    |   ✓ 署名は有効です
+
+ap2_shopping_agent       |   },
+
+
+
+
+ap2_merchant_agent       |       "payment_details_total": {
+ap2_shopping_agent       |   "agent_involved": true,
+
+
+
+
+ap2_merchant_agent       |         "label": "Total",
+ap2_shopping_agent       |   "transaction_type": "human_not_present",
+ap2_payment_processor    | [2025-10-19 23:04:07,939] INFO in v2.common.a2a_handler: [A2AHandler] proof署名検証成功: sender=did:ap2:agent:merchant_agent, alg=ecdsa, kid=did:ap2:agent:merchant_agent#key-1, public_key_source=DID-resolved
+
+
+ap2_merchant_agent       |         "amount": {
+ap2_payment_processor    | [2025-10-19 23:04:07,939] INFO in v2.common.a2a_handler: [A2A処理] ハンドラー実行中: type=ap2.mandates.PaymentMandate, from=did:ap2:agent:merchant_agent
+ap2_shopping_agent       |   "id": "payment_6259d4f8",NFO in processor: [PaymentProcessor] Received PaymentMandate
+
+ap2_merchant_agent       |           "value": "6880.0",
+
+
+
+ap2_payment_processor    | [2025-10-19 23:04:07,939] INFO in processor: [PaymentProcessor] PaymentMandate validation passed: payment_6259d4f8, user_authorization present: eyJpc3N1ZXJfand0Ijoi...
+ap2_merchant_agent       |           "currency": "JPY"
+ap2_shopping_agent       |   "cart_mandate_id": "cart_648e6453",
+
+
+ap2_shopping_agent       |   "intent_mandate_id": "intent_f9f9d44d",
+ap2_merchant_agent       |       },
+ap2_payment_processor    | [2025-10-19 23:04:07,940] INFO in processor: [PaymentProcessor] Verifying SD-JWT-VC user_authorization: cart_hash=d714b99173b88d1a..., payment_hash=ece
+
+
+ap2_shopping_agent       |   "payer_id": "user_demo_001",
+
+ap2_merchant_agent       |       "payment_response": {
+ap2_payment_processor    | [2025-10-19 23:04:07,940] INFO in v2.common.user_authorization: [verify_user_authorization_vp] Decoded VP successfully
+ap2_payment_processor    | [2025-10-19 23:04:07,940] INFO in v2.common.user_authorization: [verify_user_authorization_vp] Hash verification passed: cart_hash=d714b99173b88d1a..., payment_hash=ece166b4d3505289...
+ap2_payment_processor    | [2025-10-19 23:04:07,940] INFO in v2.common.user_authorization: [verify_user_authorization_vp] ✓ WebAuthn signature verified successfully
+ap2_payment_processor    | [2025-10-19 23:04:07,940] INFO in v2.common.user_authorization: [verify_user_authorization_vp] Key-binding JWT payload verified
+ap2_payment_processor    | [2025-10-19 23:04:07,940] INFO in v2.common.user_authorization: [verify_user_authorization_vp] ✓ VP verification passed
+ap2_payment_processor    | [2025-10-19 23:04:07,940] INFO in processor: [PaymentProcessor] ✓ SD-JWT-VC user_authorization verified: cart_hash_match=True, payment_hash_match=True, webauthn_signature_verified=True
+ap2_payment_processor    | [2025-10-19 23:04:07,941] INFO in v2.common.did_resolver: [DIDResolver] 永続化されたDIDドキュメントを読み込み中: /app/v2/data/did_documents/shopping_agent_did.json
+ap2_payment_processor    | [2025-10-19 23:04:07,941] INFO in v2.common.did_resolver: [DIDResolver] ✓ 永続化DIDドキュメントを登録: did:ap2:agent:shopping_agent
+
+
+ap2_shopping_agent       |   "payee_id": "did:ap2:merchant:mugibo_merchant",
+
+
+ap2_merchant_agent       |         "methodName": "basic-card",
+ap2_payment_processor    | [2025-10-19 23:04:07,942] INFO in v2.common.did_resolver: [DIDResolver] 永続化されたDIDドキュメントを読み込み中: /app/v2/data/did_documents/merchant_agent_did.json
+ap2_payment_processor    | [2025-10-19 23:04:07,942] INFO in v2.common.did_resolver: [DIDResolver] ✓ 永続化DIDドキュメントを登録: did:ap2:agent:merchant_agent
+ap2_shopping_agent       |   "amount": {
+
+
+
+
+ap2_payment_processor    | [2025-10-19 23:04:07,942] INFO in v2.common.did_resolver: [DIDResolver] 永続化されたDIDドキュメントを読み込み中: /app/v2/data/did_documents/merchant_di
+ap2_shopping_agent       |     "value": "6880.0",
+
+
+ap2_shopping_agent       |     "currency": "JPY"
+ap2_payment_processor    | [2025-10-19 23:04:07,942] INFO in v2.common.did_resolver: [DIDResolver] ✓ 永続化DIDドキュメントを登録: did:ap2:merchant:mugibo_merchant
+ap2_shopping_agent       |   },
+
+ap2_shopping_agent       |   "payment_method": {
+ap2_shopping_agent       |     "type": "card",
+ap2_shopping_agent       |     "token": "tok_stepup_53574f4c_zGQXPzcB2r-GY-SjtPFXvOo4",
+ap2_shopping_agent       |     "last4": "3782",
+ap2_shopping_agent       |     "brand": "amex",
+ap2_shopping_agent       |     "expiry_month": 9,
+ap2_merchant_agent       |         "details": {
+ap2_shopping_agent       |     "expiry_year": 2026
+ap2_merchant_agent       |           "cardholderName": "Demo User",
+
+
+ap2_payment_processor    | [2025-10-19 23:04:07,942] INFO in v2.common.did_resolver: [DIDResolver] 永続化されたDIDドキュメントを読み込み中: /app/v2/data/did_documents/credential_provider_did.json
+ap2_payment_processor    | [2025-10-19 23:04:07,942] INFO in v2.common.did_resolver: [DIDResolver] ✓ 永続化DIDドキュメントを登録: did:ap2:cp:demo_cp
+
+ap2_payment_processor    | [2025-10-19 23:04:07,942] INFO in v2.common.did_resolver: [DIDResolver] 永続化されたDIDドキュメントを読み込み中: /app/v2/data/did_documents/payment_processor_did.json
+
+
+ap2_shopping_agent       |   },
+ap2_shopping_agent       |   "risk_score": 4,
+ap2_shopping_agent       |   "fraud_indicators": [
+ap2_shopping_agent       |     "card_not_present_transaction"
+ap2_shopping_agent       |   ],
+ap2_shopping_agent       |   "user_authorization": "eyJpc3N1ZXJfand0IjoiZXlKaGJHY2lPaUpGVXpJMU5pSXNJblI1Y0NJNklrcFhWQ0o5LmV5SnBjM01pT2lKa2FXUTZZWEF5T25WelpYSTZkWE5sY2w5a1pXMXZYekF3TVNJc0luTjFZaUk2SW1ScFpEcGhjREk2ZFhObGNqcDFjMlZ5WDJSbGJXOWZNREF4SWl3aWFXRjBJam94TnpZd09URTFNRFEzTENKbGVIQWlPakUzTmpBNU1UVXpORGNzSW01aVppSTZNVGMyTURreE5UQTBOeXdpWTI1bUlqcDdJbXAzYXlJNmV5SnJkSGtpT2lKRlF5SXNJbU55ZGlJNklsQXRNalUySWl3aWVDSTZJa1ExY2xvMlQxcFpibmxFVlVVeFNYSlNNalpPWVd4UlJFOTVUbkI0WDJsMlJFeHhXbEIwVGw5bFMzTWlMQ0o1SWpvaVVXdFdORGR4ZUhSQmRIWm9WblZNVkhWbGJuWm9VVTlFTUVsdk5URkRRa2d0YmkxclJWQjVMV0ZwY3lKOWZYMCIsImtiX2p3dCI6ImV5SmhiR2NpT2lKRlV6STFOaUlzSW5SNWNDSTZJbXRpSzJwM2RDSjkuZXlKaGRXUWlPaUprYVdRNllYQXlPbUZuWlc1ME9uQmhlVzFsYm5SZmNISnZZMlZ6YzI5eUlpd2libTl1WTJVaU9pSmZPV0ZMTFV0MVZubDJWRjg0VUdRdFNFZHROakJRTWxVeGQyMTJOek14VWpoTVpIcHpUWGhwU2pKM0lpd2lhV0YwSWpveE56WXdPVEUxTURRM0xDSnpaRjlvWVhOb0lqb2lNRFkzTWpRMk4yTmlOakUxWXpVeE9EaGtPREl3T1dReU5qY3pZVEl4T1dNMU5XTmhPV0UxTmpabU9UQTBZV0ppWTJOak5EVTJNRFJpTVdGbE1qRTJZU0lzSW5SeVlXNXpZV04wYVc5dVgyUmhkR0VpT2xzaVpEY3hOR0k1T1RFM00ySTRPR1F4WVROak5tUm1ZVFl6TXpFMU1XRTJZakUzTmpVM01ETXpZelU1TVRrek5UaGxPVEE1Tm1RME5tUTRNekZoTXprM1lTSXNJbVZqWlRFMk5tSTBaRE0xTURVeU9EazJZamMyWkRNeU5UQTNOV1V4Tnpkak5tTmtObUk0TmpBeU5EVmlaRGhrTTJGaE1UWmtPVFl3TTJNME5tTTVPVEFpWFgwIiwid2ViYXV0aG5fYXNzZXJ0aW9uIjp7ImlkIjoiMUlRbWxQMUh0NlNHVlhsMVo2QkJ6X0hRSmFIMSIsInJhd0lkIjoiMUlRbWxQMUh0NlNHVlhsMVo2QkJ6X0hRSmFIMSIsInJlc3BvbnNlIjp7ImNsaWVudERhdGFKU09OIjoiZXlKMGVYQmxJam9pZDJWaVlYVjBhRzR1WjJWMElpd2lZMmhoYkd4bGJtZGxJam9pYTJaSFdreENZVVl6ZHpCSGNWWm5NV2xoV1RRMFp6WjBWbkkzVVZWQk1WRnNSVzVCYW5aSGJIRkVaeUlzSW05eWFXZHBiaUk2SW1oMGRIQTZMeTlzYjJOaGJHaHZjM1E2TXpBd01DSXNJbU55YjNOelQzSnBaMmx1SWpwbVlXeHpaWDAiLCJhdXRoZW50aWNhdG9yRGF0YSI6IlNaWU41WWdPakdoME5CY1BaSFpnVzRfa3JybWloakxIbVZ6enVvTWRsMk1kQUFBQUFBIiwic2lnbmF0dXJlIjoiTUVVQ0lRRGpzbHUyc3JKYk5FZG95XzBhak5nRGk5M3puTEpEVUU5blZGTU9RblBrT2dJZ0lXTzJKc1BCVHRoQ0U1U2lnbERUMnI2dVVSREQtMVFYblRjelo4cVI5S00iLCJ1c2VySGFuZGxlIjoiZFhObGNsOWtaVzF2WHpBd01RIn0sInR5cGUiOiJwdWJsaWMta2V5IiwiYXR0ZXN0YXRpb25fdHlwZSI6InBhc3NrZXkiLCJjaGFsbGVuZ2UiOiJrZkdaTEJhRjN3MEdxVmcxaWFZNDRnNnRWcjdRVUExUWxFbkFqdkdscURnIn0sImNhcnRfaGFzaCI6ImQ3MTRiOTkxNzNiODhkMWEzYzZkZmE2MzMxNTFhNmIxNzY1NzAzM2M1OTE5MzU4ZTkwOTZkNDZkODMxYTM5N2EiLCJwYXltZW50X2hhc2giOiJlY2UxNjZiNGQzNTA1Mjg5NmI3NmQzMjUwNzVlMTc3YzZjZDZiODYwMjQ1YmQ4ZDNhYTE2ZDk2MDNjNDZjOTkwIn0"
+ap2_merchant_agent       |           "cardSecurityCode": "***",
+
+ap2_merchant_agent       |           "cardBrand": "amex",
+ap2_payment_processor    | [2025-10-19 23:04:07,942] INFO in v2.common.did_resolver: [DIDResolver] ✓ 永続化DIDドキュメントを登録: did:ap2:agent:payment_processor
+
+ap2_shopping_agent       | }
+ap2_shopping_agent       | ================================================================================
+ap2_shopping_agent       | [2025-10-19 23:04:08,050] INFO in httpx: HTTP Request: POST http://merchant_agent:8001/a2a/message "HTTP/1.1 200 OK"
+ap2_shopping_agent       | [2025-10-19 23:04:08,050] INFO in agent:
+ap2_shopping_agent       | ================================================================================
+ap2_shopping_agent       | [ShoppingAgent ← MerchantAgent] A2Aレスポンス受信
+ap2_shopping_agent       |   Status: 200
+ap2_shopping_agent       |   Response Body: {
+ap2_shopping_agent       |   "header": {
+ap2_shopping_agent       |     "message_id": "cb8f48de-d32d-4ae6-bc42-94c060f50f1f",
+ap2_shopping_agent       |     "sender": "did:ap2:agent:merchant_agent",
+ap2_shopping_agent       |     "recipient": "did:ap2:agent:shopping_agent",
+ap2_shopping_agent       |     "timestamp": "2025-10-19T23:04:08.049137Z",
+ap2_shopping_agent       |     "nonce": "a5d52906fdb3c56ae745a61661e5f9fec737ce95d0b5c331dafda5ef2d201d86",
+ap2_merchant_agent       |           "expiryMonth": 9,
+ap2_shopping_agent       |     "schema_version": "0.2",,
+ap2_shopping_agent       |     "proof": {
+ap2_shopping_agent       |       "algorithm": "ecdsa",
+ap2_shopping_agent       |       "signatureValue": "MEUCIHYBUUvia7CSr+AbD9YbQasEKSUGDPP9pn2BR+wVcHKaAiEAgap93toFEAPPuJOZGFSk6+Df7ysBV20w3q9lcHT0A2g=",
+ap2_shopping_agent       |       "publicKey": "LS0tLS1CRUdJTiBQVUJMSUMgS0VZLS0tLS0KTUZrd0V3WUhLb1pJemowQ0FRWUlLb1pJemowREFRY0RRZ0FFZE53N3BTNGRTVy8wWkwrcTBJanVYL3RCY21sbgpUSGkvdndrOE1CL3Z2cW5QTVoreUhtSmhOSmp4TUthZHlTRnA0Q2JYNkRETWpyemt1ajVXamRyQjVBPT0KLS0tLS1FTkQgUFVCTElDIEtFWS0tLS0tCg==",
+ap2_shopping_agent       |       "kid": "did:ap2:agent:merchant_agent#key-1",
+ap2_shopping_agent       |       "created": "2025-10-19T23:04:08.049137Z",
+ap2_shopping_agent       |       "proofPurpose": "authentication"
+ap2_shopping_agent       |     },
+ap2_shopping_agent       |     "signature": null
+ap2_shopping_agent       |   },
+ap2_shopping_agent       |   "dataPart": {
+ap2_payment_processor    | [2025-10-19 23:04:07,942] INFO in processor: [_verify_merchant_authorization_jwt] ✓ JWT signature verified successfully
+ap2_payment_processor    | [2025-10-19 23:04:07,942] INFO in processor: [_verify_merchant_authorization_jwt] JWT validation passed: iss=did:ap2:merchant:mugibo_merchant, exp=1760915931, jti=dd1c9922-96fa-48..., cart_hash=d714b99173b88d1a...
+ap2_payment_processor    | [2025-10-19 23:04:07,942] INFO in processor: [PaymentProcessor] merchant_authorization JWT verified: iss=did:ap2:merchant:mugibo_merchant
+ap2_payment_processor    | [2025-10-19 23:04:07,942] INFO in processor: [PaymentProcessor] CartMandate hash in merchant_authorization: d714b99173b88d1a...
+
+
+ap2_merchant_agent       |           "token": "tok_stepup_53574f4c_zGQXPzcB2r-GY-SjtPFXvOo4",
+ap2_merchant_agent       |           "tokenized": true
+ap2_merchant_agent       |         }
+ap2_merchant_agent       |       },
+ap2_merchant_agent       |       "merchant_agent": "did:ap2:merchant:mugibo_merchant",
+ap2_merchant_agent       |       "timestamp": "2025-10-19T23:04:04.326130Z"
+ap2_payment_processor    | [2025-10-19 23:04:07,942] INFO in processor: [PaymentProcessor] ✓ CartMandate hash verified (merchant_authorization): d714b99173b88d1a...
+ap2_shopping_agent       |     "@type": "ap2.responses.PaymentResult",
+
+
+ap2_payment_processor    | [2025-10-19 23:04:07,942] INFO in processor: [PaymentProcessor] Full mandate chain validated: IntentMandate(intent_f9f9d44d) → CartMandate(cart_648e6453) → PaymentMandate(payment_6259d4f8)
+ap2_payment_processor    | [2025-10-19 23:04:07,942] INFO in processor: [PaymentProcessor] Mandate chain validation passed
+ap2_payment_processor    | [2025-10-19 23:04:07,943] INFO in processor: [PaymentProcessor] Processing payment (mock): txn_fbe3f438fec3
+ap2_shopping_agent       |     "id": "da9ce2a8-d68d-452b-a88a-799496e2c311",
+ap2_shopping_agent       |     "payload": {
+ap2_merchant_agent       |     },"transaction_id": "txn_fbe3f438fec3",
+ap2_merchant_agent       |     "agent_involved": true,
+ap2_merchant_agent       |     "transaction_type": "human_not_present",
+ap2_merchant_agent       |     "id": "payment_6259d4f8",
+ap2_merchant_agent       |     "cart_mandate_id": "cart_648e6453",
+ap2_merchant_agent       |     "intent_mandate_id": "intent_f9f9d44d",
+ap2_merchant_agent       |     "payer_id": "user_demo_001",
+
+ap2_payment_processor    | [2025-10-19 23:04:07,943] INFO in processor: [PaymentProcessor] Verifying credential with Credential Provider: token=tok_stepup_53574f4c_...
+ap2_shopping_agent       |       "status": "captured",
+ap2_shopping_agent       |       "receipt_url": "http://localhost:8004/receipts/txn_fbe3f438fec3.pdf"
+ap2_shopping_agent       |     },
+ap2_shopping_agent       |     "kind": null,
+
+
+ap2_merchant_agent       |     "payee_id": "did:ap2:merchant:mugibo_merchant",
+ap2_payment_processor    | [2025-10-19 23:04:07,961] INFO in processor: [PaymentProcessor] Credential verification succeeded: payment_method_id=pm_003
+ap2_payment_processor    | [2025-10-19 23:04:07,961] INFO in processor: [PaymentProcessor] Credential verified: pm_003
+ap2_payment_processor    | [2025-10-19 23:04:07,961] INFO in processor: [PaymentProcessor] Risk assessment: score=4, indicators=['card_not_present_transaction']
+ap2_merchant_agent       |     "amount": {
+ap2_merchant_agent       |       "value": "6880.0",
+
+ap2_merchant_agent       |       "currency": "JPY"1] INFO in processor: [PaymentProcessor] Payment succeeded: txn_fbe3f438fec3, amount={'value': '6880.0', 'currency': 'JPY'}, risk_score=4
+ap2_shopping_agent       |     "artifact": null
+ap2_shopping_agent       |   }
+ap2_shopping_agent       | }
+ap2_payment_processor    | [2025-10-19 23:04:07,995] INFO in processor: [PaymentProcessor] Transaction saved: txn_fbe3f438fec3
+ap2_payment_processor    | [2025-10-19 23:04:08,033] WARNING in processor: [PaymentProcessor] User not found for payer_id: user_demo_001, using default name
+ap2_payment_processor    | [2025-10-19 23:04:08,034] INFO in v2.common.receipt_generator: [ReceiptGenerator] Generating PDF receipt for transaction: txn_fbe3f438fec3
+ap2_payment_processor    | [2025-10-19 23:04:08,038] INFO in v2.common.receipt_generator: [ReceiptGenerator] PDF receipt generated successfully
+ap2_payment_processor    | [2025-10-19 23:04:08,039] INFO in processor: [PaymentProcessor] Generated receipt PDF: /app/v2/data/receipts/txn_fbe3f438fec3.pdf
+
+
+ap2_shopping_agent       | ================================================================================
+ap2_shopping_agent       | [2025-10-19 23:04:08,050] INFO in agent: [ShoppingAgent] Payment processing completed: status=captured
+
+ap2_shopping_agent       | [2025-10-19 23:04:08,050] INFO in agent: [submit_payment_attestation] Payment successful: txn_fbe3f438fec3
+ap2_payment_processor    | [2025-10-19 23:04:08,039] INFO in processor: [PaymentProcessor] Sending receipt notification to Credential Provider: transaction_id=txn_fbe3f438fec3, payer_id=user_demo_001
+ap2_shopping_agent       | [2025-10-19 23:04:08,050] INFO in agent: [submit_payment_attestation] CartMandate info: items_count=3, total={'value': '6880.0', 'currency': 'JPY'}
+ap2_shopping_agent       | [2025-10-19 23:04:08,050] INFO in agent: [submit_payment_attestation] Payment success response: product_name=むぎぼーアクリルキーホルダー 他2点, amount=6880.0, currency=JPY
+ap2_shopping_agent       | INFO:     151.101.64.223:43218 - "POST /payment/submit-attestation HTTP/1.1" 200 OK
+ap2_merchant_agent       |     },
+ap2_merchant_agent       |     "payment_method": {
+ap2_payment_processor    | [2025-10-19 23:04:08,040] INFO in httpx: HTTP Request: POST http://credential_provider:8003/receipts "HTTP/1.1 200 OK"
+ap2_payment_processor    | [2025-10-19 23:04:08,040] INFO in processor: [PaymentProcessor] Receipt notification sent successfully: transaction_id=txn_fbe3f438fec3, status=200
+
+
+
+ap2_merchant_agent       |       "type": "card",
+
+
+ap2_payment_processor    | [2025-10-19 23:04:08,041] INFO in v2.common.a2a_handler: [A2A処理] ハンドラー完了: type=ap2.mandates.PaymentMandate, result_type=ap2.responses.PaymentResult
+ap2_payment_processor    | [SignatureManager] A2Aメッセージに署名中（送信者: payment_processor）
+ap2_merchant_agent       |       "token": "tok_stepup_53574f4c_zGQXPzcB2r-GY-SjtPFXvOo4",
+ap2_payment_processor    | [SignatureManager] データに署名中（鍵ID: payment_processor, アルゴリズム: ECDSA）
+ap2_payment_processor    |   ✓ 署名完了
+
+ap2_merchant_agent       |       "last4": "3782",45] INFO in v2.common.a2a_handler:
+ap2_merchant_agent       |       "brand": "amex",
+ap2_merchant_agent       |       "expiry_month": 9,
+ap2_merchant_agent       |       "expiry_year": 2026
+ap2_merchant_agent       |     },
+ap2_merchant_agent       |     "risk_score": 4,
+ap2_merchant_agent       |     "fraud_indicators": [
+ap2_merchant_agent       |       "card_not_present_transaction"
+ap2_merchant_agent       |     ],
+ap2_merchant_agent       |     "user_authorization": "eyJpc3N1ZXJfand0IjoiZXlKaGJHY2lPaUpGVXpJMU5pSXNJblI1Y0NJNklrcFhWQ0o5LmV5SnBjM01pT2lKa2FXUTZZWEF5T25WelpYSTZkWE5sY2w5a1pXMXZYekF3TVNJc0luTjFZaUk2SW1ScFpEcGhjREk2ZFhObGNqcDFjMlZ5WDJSbGJXOWZNREF4SWl3aWFXRjBJam94TnpZd09URTFNRFEzTENKbGVIQWlPakUzTmpBNU1UVXpORGNzSW01aVppSTZNVGMyTURreE5UQTBOeXdpWTI1bUlqcDdJbXAzYXlJNmV5SnJkSGtpT2lKRlF5SXNJbU55ZGlJNklsQXRNalUySWl3aWVDSTZJa1ExY2xvMlQxcFpibmxFVlVVeFNYSlNNalpPWVd4UlJFOTVUbkI0WDJsMlJFeHhXbEIwVGw5bFMzTWlMQ0o1SWpvaVVXdFdORGR4ZUhSQmRIWm9WblZNVkhWbGJuWm9VVTlFTUVsdk5URkRRa2d0YmkxclJWQjVMV0ZwY3lKOWZYMCIsImtiX2p3dCI6ImV5SmhiR2NpT2lKRlV6STFOaUlzSW5SNWNDSTZJbXRpSzJwM2RDSjkuZXlKaGRXUWlPaUprYVdRNllYQXlPbUZuWlc1ME9uQmhlVzFsYm5SZmNISnZZMlZ6YzI5eUlpd2libTl1WTJVaU9pSmZPV0ZMTFV0MVZubDJWRjg0VUdRdFNFZHROakJRTWxVeGQyMTJOek14VWpoTVpIcHpUWGhwU2pKM0lpd2lhV0YwSWpveE56WXdPVEUxTURRM0xDSnpaRjlvWVhOb0lqb2lNRFkzTWpRMk4yTmlOakUxWXpVeE9EaGtPREl3T1dReU5qY3pZVEl4T1dNMU5XTmhPV0UxTmpabU9UQTBZV0ppWTJOak5EVTJNRFJpTVdGbE1qRTJZU0lzSW5SeVlXNXpZV04wYVc5dVgyUmhkR0VpT2xzaVpEY3hOR0k1T1RFM00ySTRPR1F4WVROak5tUm1ZVFl6TXpFMU1XRTJZakUzTmpVM01ETXpZelU1TVRrek5UaGxPVEE1Tm1RME5tUTRNekZoTXprM1lTSXNJbVZqWlRFMk5tSTBaRE0xTURVeU9EazJZamMyWkRNeU5UQTNOV1V4Tnpkak5tTmtObUk0TmpBeU5EVmlaRGhrTTJGaE1UWmtPVFl3TTJNME5tTTVPVEFpWFgwIiwid2ViYXV0aG5fYXNzZXJ0aW9uIjp7ImlkIjoiMUlRbWxQMUh0NlNHVlhsMVo2QkJ6X0hRSmFIMSIsInJhd0lkIjoiMUlRbWxQMUh0NlNHVlhsMVo2QkJ6X0hRSmFIMSIsInJlc3BvbnNlIjp7ImNsaWVudERhdGFKU09OIjoiZXlKMGVYQmxJam9pZDJWaVlYVjBhRzR1WjJWMElpd2lZMmhoYkd4bGJtZGxJam9pYTJaSFdreENZVVl6ZHpCSGNWWm5NV2xoV1RRMFp6WjBWbkkzVVZWQk1WRnNSVzVCYW5aSGJIRkVaeUlzSW05eWFXZHBiaUk2SW1oMGRIQTZMeTlzYjJOaGJHaHZjM1E2TXpBd01DSXNJbU55YjNOelQzSnBaMmx1SWpwbVlXeHpaWDAiLCJhdXRoZW50aWNhdG9yRGF0YSI6IlNaWU41WWdPakdoME5CY1BaSFpnVzRfa3JybWloakxIbVZ6enVvTWRsMk1kQUFBQUFBIiwic2lnbmF0dXJlIjoiTUVVQ0lRRGpzbHUyc3JKYk5FZG95XzBhak5nRGk5M3puTEpEVUU5blZGTU9RblBrT2dJZ0lXTzJKc1BCVHRoQ0U1U2lnbERUMnI2dVVSREQtMVFYblRjelo4cVI5S00iLCJ1c2VySGFuZGxlIjoiZFhObGNsOWtaVzF2WHpBd01RIn0sInR5cGUiOiJwdWJsaWMta2V5IiwiYXR0ZXN0YXRpb25fdHlwZSI6InBhc3NrZXkiLCJjaGFsbGVuZ2UiOiJrZkdaTEJhRjN3MEdxVmcxaWFZNDRnNnRWcjdRVUExUWxFbkFqdkdscURnIn0sImNhcnRfaGFzaCI6ImQ3MTRiOTkxNzNiODhkMWEzYzZkZmE2MzMxNTFhNmIxNzY1NzAzM2M1OTE5MzU4ZTkwOTZkNDZkODMxYTM5N2EiLCJwYXltZW50X2hhc2giOiJlY2UxNjZiNGQzNTA1Mjg5NmI3NmQzMjUwNzVlMTc3YzZjZDZiODYwMjQ1YmQ4ZDNhYTE2ZDk2MDNjNDZjOTkwIn0"
+ap2_payment_processor    | ================================================================================
+
+ap2_merchant_agent       |   "cart_mandate": {
+
+ap2_payment_processor    | [A2A送信] レスポンス作成
+ap2_payment_processor    |   送信元: did:ap2:agent:payment_processor
+ap2_payment_processor    |   送信先: did:ap2:agent:merchant_agent
+
+ap2_merchant_agent       |     "id": "cart_648e6453",
+ap2_payment_processor    |   タイプ: ap2.responses.PaymentResult
+ap2_merchant_agent       |     "type": "CartMandate",
+ap2_merchant_agent       |     "version": "0.2",
+ap2_merchant_agent       |     "intent_mandate_id": "intent_f9f9d44d",
+ap2_merchant_agent       |     "items": [
+ap2_merchant_agent       |       {
+ap2_merchant_agent       |         "id": "item_8bd6a898",
+ap2_merchant_agent       |         "name": "むぎぼーアクリルキーホルダー",
+
+ap2_merchant_agent       |         "description": "かわいいむぎぼーのアクリルキーホルダー。バッグやポーチに付けて持ち歩けます。",
+ap2_merchant_agent       |         "quantity": 1,
+ap2_merchant_agent       |         "unit_price": {
+ap2_merchant_agent       |           "value": "800.0",
+ap2_merchant_agent       |           "currency": "JPY"
+ap2_merchant_agent       |         },
+ap2_merchant_agent       |         "total_price": {
+ap2_payment_processor    |   データID: da9ce2a8-d68d-452b-a88a-799496e2c311
+ap2_payment_processor    |   署名: あり
+
+ap2_merchant_agent       |           "value": "800.0",
+ap2_payment_processor    |   タイムスタンプ: 2025-10-19T23:04:08.041065Z
+ap2_payment_processor    |   ペイロード: {
+
+
+ap2_payment_processor    |   "transaction_id": "txn_fbe3f438fec3",
+ap2_payment_processor    |   "status": "captured",
+
+ap2_merchant_agent       |           "currency": "JPY"
+ap2_merchant_agent       |         },
+ap2_payment_processor    |   "receipt_url": "http://localhost:8004/receipts/txn_fbe3f438fec3.pdf"
+ap2_merchant_agent       |         "image_url": "/assets/むぎぼーアクリルキーホルダー.png",
+ap2_payment_processor    | }
+
+ap2_merchant_agent       |         "sku": "MUGI-KEYCHAIN-001",
+ap2_payment_processor    | ================================================================================
+ap2_payment_processor    | [2025-10-19 23:04:08,045] INFO in v2.common.base_agent: [Payment Processor] A2Aレスポンス返却: type=ap2.responses.PaymentResult, to=did:ap2:agent:merchant_agent
+ap2_payment_processor    | INFO:     172.18.0.4:44804 - "POST /a2a/message HTTP/1.1" 200 OK
+
+ap2_merchant_agent       |         "category": "Keychains",
+ap2_merchant_agent       |         "brand": "Mugibow Official"
+ap2_merchant_agent       |       },
+
+
+ap2_merchant_agent       |       {
+ap2_merchant_agent       |         "id": "item_745dfd12",
+ap2_merchant_agent       |         "name": "むぎぼー時計",
+
+ap2_merchant_agent       |         "description": "むぎぼーデザインのかわいい壁掛け時計。お部屋を明るく彩ります。",
+ap2_merchant_agent       |         "unit_price": {
+ap2_merchant_agent       |           "value": "3500.0",
+ap2_merchant_agent       |           "currency": "JPY"
+ap2_merchant_agent       |         },
+ap2_merchant_agent       |         "total_price": {
+ap2_merchant_agent       |           "value": "3500.0",
+ap2_merchant_agent       |           "currency": "JPY"
+ap2_merchant_agent       |         },
+ap2_merchant_agent       |         "image_url": "/assets/むぎぼー時計.png",
+ap2_merchant_agent       |         "sku": "MUGI-CLOCK-001",
+ap2_merchant_agent       |         "category": "Clocks",
+ap2_merchant_agent       |         "brand": "Mugibow Official"
+ap2_merchant_agent       |       },
+ap2_merchant_agent       |       {
+ap2_merchant_agent       |         "id": "item_ac1923a4",
+ap2_merchant_agent       |         "name": "むぎぼーカレンダー",
+ap2_merchant_agent       |         "description": "むぎぼーの1年カレンダー。毎月違うむぎぼーのイラストが楽しめます。",
+ap2_merchant_agent       |         "quantity": 1,
+ap2_merchant_agent       |         "unit_price": {
+ap2_merchant_agent       |           "value": "1500.0",
+ap2_merchant_agent       |           "currency": "JPY"
+ap2_merchant_agent       |         },
+ap2_merchant_agent       |         "total_price": {
+ap2_merchant_agent       |           "value": "1500.0",
+ap2_merchant_agent       |           "currency": "JPY"
+ap2_merchant_agent       |         },
+ap2_merchant_agent       |         "image_url": "/assets/むぎぼーカレンダー.png",
+ap2_merchant_agent       |         "sku": "MUGI-CALENDAR-001",
+ap2_merchant_agent       |         "category": "Calendars",
+ap2_merchant_agent       |         "brand": "Mugibow Official"
+ap2_merchant_agent       |       }
+ap2_merchant_agent       |     ],
+ap2_merchant_agent       |     "subtotal": {
+ap2_merchant_agent       |       "value": "5800.0",
+ap2_merchant_agent       |       "currency": "JPY"
+ap2_merchant_agent       |     },
+ap2_merchant_agent       |     "tax": {
+ap2_merchant_agent       |       "value": "580.0",
+ap2_merchant_agent       |       "currency": "JPY"
+ap2_merchant_agent       |     },
+ap2_merchant_agent       |     "shipping": {
+ap2_merchant_agent       |       "address": {
+ap2_merchant_agent       |         "recipient": "あ",
+ap2_merchant_agent       |         "postal_code": "１１１１１１１",
+ap2_merchant_agent       |         "address_line1": "っっｊ",
+ap2_merchant_agent       |         "country": "JP"
+ap2_merchant_agent       |       },
+ap2_merchant_agent       |       "method": "standard",
+ap2_merchant_agent       |       "cost": {
+ap2_merchant_agent       |         "value": "500.0",
+ap2_merchant_agent       |         "currency": "JPY"
+ap2_merchant_agent       |       },
+ap2_merchant_agent       |       "estimated_delivery": "2025-10-22T23:03:51.574423Z"
+ap2_merchant_agent       |     },
+ap2_merchant_agent       |     "total": {
+ap2_merchant_agent       |       "value": "6880.0",
+ap2_merchant_agent       |       "currency": "JPY"
+ap2_merchant_agent       |     },
+ap2_merchant_agent       |     "merchant_id": "did:ap2:merchant:mugibo_merchant",
+ap2_merchant_agent       |     "merchant_name": "むぎぼーショップ",
+ap2_merchant_agent       |     "created_at": "2025-10-19T23:03:51.574423Z",
+ap2_merchant_agent       |     "expires_at": "2025-10-19T23:33:51.574423Z",
+ap2_merchant_agent       |     "merchant_signature": {
+ap2_merchant_agent       |       "algorithm": "ECDSA",
+ap2_merchant_agent       |       "value": "MEUCIQCaJlnDeU4tuZIWidocfMIDbHHUkNjptXS6YnsaEFuptwIgQq0BnxVIctNeQ+Kucw5yE6AIhKNsQ06gR9uM/2CeiRI=",
+ap2_merchant_agent       |       "public_key": "LS0tLS1CRUdJTiBQVUJMSUMgS0VZLS0tLS0KTUZrd0V3WUhLb1pJemowQ0FRWUlLb1pJemowREFRY0RRZ0FFMDJ6M2c1UkdrQ2lCUkVOTm95ejdUVWpNOEkxWApNM1BndGluOUZFZ1lNaFV3U0tFcEU5QjhDWng1eUtZVmJrRGxLZXc2aEtEc3Y3RFMzbXJGRXhFRUNnPT0KLS0tLS1FTkQgUFVCTElDIEtFWS0tLS0tCg==",
+ap2_merchant_agent       |       "signed_at": "2025-10-19T23:03:51.653900Z"
+ap2_merchant_agent       |     },
+ap2_merchant_agent       |     "cart_metadata": {
+ap2_merchant_agent       |       "name": "人気商品セット",
+ap2_merchant_agent       |       "description": "検索結果で人気の商品を組み合わせたカートです"
+ap2_merchant_agent       |     },
+ap2_merchant_agent       |     "merchant_authorization": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImRpZDphcDI6bWVyY2hhbnQ6bXVnaWJvX21lcmNoYW50I2tleS0xIiwidHlwIjoiSldUIn0.eyJpc3MiOiJkaWQ6YXAyOm1lcmNoYW50Om11Z2lib19tZXJjaGFudCIsInN1YiI6ImRpZDphcDI6bWVyY2hhbnQ6bXVnaWJvX21lcmNoYW50IiwiYXVkIjoiZGlkOmFwMjphZ2VudDpwYXltZW50X3Byb2Nlc3NvciIsImlhdCI6MTc2MDkxNTAzMSwiZXhwIjoxNzYwOTE1OTMxLCJqdGkiOiJkZDFjOTkyMi05NmZhLTQ4ODktOGE4Yi1iN2EwZDFjOWRjZjciLCJjYXJ0X2hhc2giOiJkNzE0Yjk5MTczYjg4ZDFhM2M2ZGZhNjMzMTUxYTZiMTc2NTcwMzNjNTkxOTM1OGU5MDk2ZDQ2ZDgzMWEzOTdhIn0.MEUCIQDEe3iNShfHz5D7PQDUrfstxK2mCoe-cawypUaEut_DPgIgfmw0KHD3RiWDXAFGFvJHtf9J_gUCxz7gcL6mKODa3DA"
+ap2_merchant_agent       |   }
+ap2_merchant_agent       | }
+ap2_merchant_agent       | ================================================================================
+ap2_merchant_agent       | [2025-10-19 23:04:07,918] INFO in agent:
+ap2_merchant_agent       | ================================================================================
+ap2_merchant_agent       | [MerchantAgent → PaymentProcessor] A2Aメッセージ転送
+ap2_merchant_agent       |   URL: http://payment_processor:8004/a2a/message
+ap2_merchant_agent       |   メッセージID: b982da7f-b76b-4ae5-bccb-fb9348e0dee0
+ap2_merchant_agent       |   タイプ: ap2.mandates.PaymentMandate
+ap2_merchant_agent       | ================================================================================
+ap2_merchant_agent       | [2025-10-19 23:04:08,048] INFO in httpx: HTTP Request: POST http://payment_processor:8004/a2a/message "HTTP/1.1 200 OK"
+ap2_merchant_agent       | [2025-10-19 23:04:08,049] INFO in agent:
+ap2_merchant_agent       | ================================================================================
+ap2_merchant_agent       | [MerchantAgent ← PaymentProcessor] A2Aレスポンス受信
+ap2_merchant_agent       |   Status: 200
+ap2_merchant_agent       |   Response Body: {
+ap2_merchant_agent       |   "header": {
+ap2_merchant_agent       |     "message_id": "5269c8f8-5cc7-4574-bfb3-9bebc8de0f77",
+ap2_merchant_agent       |     "sender": "did:ap2:agent:payment_processor",
+ap2_merchant_agent       |     "recipient": "did:ap2:agent:merchant_agent",
+ap2_merchant_agent       |     "timestamp": "2025-10-19T23:04:08.041065Z",
+ap2_merchant_agent       |     "nonce": "d7e868c26bb17754e2417059d9da7f70ead62b6b0d0f73da3fcb8ca39939b6fb",
+ap2_merchant_agent       |     "schema_version": "0.2",
+ap2_merchant_agent       |     "proof": {
+ap2_merchant_agent       |       "algorithm": "ecdsa",
+ap2_merchant_agent       |       "signatureValue": "MEUCIQCPf71+SE9XfHGKFdKmyb4aq3aJujEZIfbRO3n7LTPIswIgY3FluSOSEElAsDG5PuWixbPT5FhcSf4aolNgDq0ItEs=",
+ap2_merchant_agent       |       "publicKey": "LS0tLS1CRUdJTiBQVUJMSUMgS0VZLS0tLS0KTUZrd0V3WUhLb1pJemowQ0FRWUlLb1pJemowREFRY0RRZ0FFaXh4emtuM1p5OVFlRGN4bFF0bkxZMUdoVVA5cgpNaFNwMzVuaWxmK29EQmhYUm5naWtlVFNaZ3ZWSnVGNnVVZWx0aExpYnlaWlBSSENBQzJoUUt6Kyt3PT0KLS0tLS1FTkQgUFVCTElDIEtFWS0tLS0tCg==",
+ap2_merchant_agent       |       "kid": "did:ap2:agent:payment_processor#key-1",
+ap2_merchant_agent       |       "created": "2025-10-19T23:04:08.041065Z",
+ap2_merchant_agent       |       "proofPurpose": "authentication"
+ap2_merchant_agent       |     },
+ap2_merchant_agent       |     "signature": null
+ap2_merchant_agent       |   },
+ap2_merchant_agent       |   "dataPart": {
+ap2_merchant_agent       |     "@type": "ap2.responses.PaymentResult",
+ap2_merchant_agent       |     "id": "da9ce2a8-d68d-452b-a88a-799496e2c311",
+ap2_merchant_agent       |     "payload": {
+ap2_merchant_agent       |       "transaction_id": "txn_fbe3f438fec3",
+ap2_merchant_agent       |       "status": "captured",
+ap2_merchant_agent       |       "receipt_url": "http://localhost:8004/receipts/txn_fbe3f438fec3.pdf"
+ap2_merchant_agent       |     },
+ap2_merchant_agent       |     "kind": null,
+ap2_merchant_agent       |     "artifact": null
+ap2_merchant_agent       |   }
+ap2_merchant_agent       | }
+ap2_merchant_agent       | ================================================================================
+ap2_merchant_agent       | [2025-10-19 23:04:08,049] INFO in agent: [MerchantAgent] Payment processing completed, forwarding result to Shopping Agent
+ap2_merchant_agent       | [2025-10-19 23:04:08,049] INFO in v2.common.a2a_handler: [A2A処理] ハンドラー完了: type=ap2.mandates.PaymentMandate, result_type=ap2.responses.PaymentResult
+ap2_merchant_agent       | [SignatureManager] A2Aメッセージに署名中（送信者: merchant_agent）
+ap2_merchant_agent       | [SignatureManager] データに署名中（鍵ID: merchant_agent, アルゴリズム: ECDSA）
+ap2_merchant_agent       |   ✓ 署名完了
+ap2_merchant_agent       | [2025-10-19 23:04:08,049] INFO in v2.common.a2a_handler:
+ap2_merchant_agent       | ================================================================================
+ap2_merchant_agent       | [A2A送信] レスポンス作成
+ap2_merchant_agent       |   送信元: did:ap2:agent:merchant_agent
+ap2_merchant_agent       |   送信先: did:ap2:agent:shopping_agent
+ap2_merchant_agent       |   タイプ: ap2.responses.PaymentResult
+ap2_merchant_agent       |   データID: da9ce2a8-d68d-452b-a88a-799496e2c311
+ap2_merchant_agent       |   署名: あり
+ap2_merchant_agent       |   タイムスタンプ: 2025-10-19T23:04:08.049137Z
+ap2_merchant_agent       |   ペイロード: {
+ap2_merchant_agent       |   "transaction_id": "txn_fbe3f438fec3",
+ap2_merchant_agent       |   "status": "captured",
+ap2_merchant_agent       |   "receipt_url": "http://localhost:8004/receipts/txn_fbe3f438fec3.pdf"
+ap2_merchant_agent       | }
+ap2_merchant_agent       | ================================================================================
+ap2_merchant_agent       | [2025-10-19 23:04:08,049] INFO in v2.common.base_agent: [Merchant Agent] A2Aレスポンス返却: type=ap2.responses.PaymentResult, to=did:ap2:agent:shopping_agent
+ap2_merchant_agent       | INFO:     172.18.0.6:42074 - "POST /a2a/message HTTP/1.1" 200 OK
+ap2_payment_processor    | INFO:     151.101.64.223:44127 - "GET /receipts/txn_fbe3f438fec3.pdf HTTP/1.1" 200 OK
