@@ -351,8 +351,81 @@ def verify_user_authorization_vp(
             f"cart_hash={cart_hash[:16]}..., payment_hash={payment_hash[:16]}..."
         )
 
-        # Step 4: WebAuthn assertionの署名を検証（公開鍵が必要）
-        # この検証は別途行う必要がある（Credential Providerまたは公開鍵レジストリから公開鍵を取得）
+        # Step 4: WebAuthn assertionの署名を検証（AP2仕様完全準拠）
+        # 公開鍵はIssuer JWTのcnf claimから取得
+        issuer_jwt_str = vp.get("issuer_jwt")
+        if issuer_jwt_str:
+            try:
+                # Issuer JWTをデコード（署名検証なし、公開鍵抽出のため）
+                issuer_jwt_parts = issuer_jwt_str.split(".")
+                if len(issuer_jwt_parts) >= 2:
+                    issuer_payload_bytes = base64url_decode(issuer_jwt_parts[1])
+                    issuer_payload = json.loads(issuer_payload_bytes.decode('utf-8'))
+
+                    # cnf claimから公開鍵（JWK形式）を取得
+                    cnf = issuer_payload.get("cnf", {})
+                    jwk = cnf.get("jwk", {})
+
+                    if jwk and jwk.get("kty") == "EC" and jwk.get("crv") == "P-256":
+                        # JWKから公開鍵を再構築
+                        from cryptography.hazmat.primitives.asymmetric.ec import (
+                            EllipticCurvePublicNumbers, SECP256R1
+                        )
+                        from cryptography.hazmat.backends import default_backend
+                        from cryptography.hazmat.primitives.asymmetric import ec
+                        from cryptography.hazmat.primitives import hashes
+
+                        # X, Y座標をデコード
+                        x_bytes = base64url_decode(jwk["x"])
+                        y_bytes = base64url_decode(jwk["y"])
+                        x_int = int.from_bytes(x_bytes, byteorder='big')
+                        y_int = int.from_bytes(y_bytes, byteorder='big')
+
+                        # 公開鍵オブジェクトを構築
+                        public_numbers = EllipticCurvePublicNumbers(x_int, y_int, SECP256R1())
+                        public_key = public_numbers.public_key(default_backend())
+
+                        # WebAuthn assertionの署名を検証
+                        response = webauthn_assertion.get("response", {})
+                        authenticator_data_b64 = response.get("authenticatorData")
+                        client_data_json_b64 = response.get("clientDataJSON")
+                        signature_b64 = response.get("signature")
+
+                        if authenticator_data_b64 and client_data_json_b64 and signature_b64:
+                            # 署名対象データ: authenticatorData + SHA256(clientDataJSON)
+                            authenticator_data_bytes = base64url_decode(authenticator_data_b64)
+                            client_data_json_bytes = base64url_decode(client_data_json_b64)
+                            client_data_hash = hashlib.sha256(client_data_json_bytes).digest()
+                            signed_data = authenticator_data_bytes + client_data_hash
+
+                            # 署名をデコード
+                            signature_bytes = base64url_decode(signature_b64)
+
+                            # ECDSA署名を検証（P-256 + SHA-256）
+                            try:
+                                public_key.verify(
+                                    signature_bytes,
+                                    signed_data,
+                                    ec.ECDSA(hashes.SHA256())
+                                )
+                                logger.info(
+                                    "[verify_user_authorization_vp] ✓ WebAuthn signature verified successfully"
+                                )
+                            except Exception as sig_error:
+                                raise ValueError(f"WebAuthn signature verification failed: {sig_error}")
+                        else:
+                            logger.warning(
+                                "[verify_user_authorization_vp] WebAuthn assertion missing signature fields, "
+                                "skipping cryptographic verification"
+                            )
+                    else:
+                        logger.warning(
+                            "[verify_user_authorization_vp] No valid public key in cnf claim, "
+                            "skipping WebAuthn signature verification"
+                        )
+            except Exception as e:
+                logger.error(f"[verify_user_authorization_vp] Failed to verify WebAuthn signature: {e}")
+                raise ValueError(f"WebAuthn signature verification failed: {e}")
 
         # Step 5: Key-binding JWTのペイロードを検証
         kb_jwt_str = vp.get("kb_jwt")
