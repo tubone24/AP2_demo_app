@@ -23,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 from v2.common.base_agent import BaseAgent, AgentPassphraseManager
 from v2.common.models import A2AMessage, ProcessPaymentRequest, ProcessPaymentResponse
 from v2.common.database import DatabaseManager, TransactionCRUD
+from v2.common.user_authorization import verify_user_authorization_vp, compute_mandate_hash
 
 logger = logging.getLogger(__name__)
 
@@ -492,39 +493,41 @@ class PaymentProcessorService(BaseAgent):
             did_resolver = DIDResolver(self.key_manager)
             public_key_pem = did_resolver.resolve_public_key(kid)
 
+            # fail-fast: 公開鍵が見つからない場合はエラーを発生させる
             if not public_key_pem:
-                logger.warning(
+                raise ValueError(
                     f"[_verify_user_authorization_jwt] Public key not found for KID: {kid}. "
-                    f"Skipping signature verification (demo mode)."
+                    f"Cannot verify JWT signature without public key. "
+                    f"Ensure the user's public key is registered in the DID document."
                 )
-            else:
-                try:
-                    # PEM形式の公開鍵を読み込み
-                    public_key = serialization.load_pem_public_key(
-                        public_key_pem.encode('utf-8')
-                    )
 
-                    # 署名対象データ（header_b64.payload_b64）
-                    message_to_verify = f"{header_b64}.{payload_b64}".encode('utf-8')
+            try:
+                # PEM形式の公開鍵を読み込み
+                public_key = serialization.load_pem_public_key(
+                    public_key_pem.encode('utf-8')
+                )
 
-                    # 署名をデコード
-                    signature_bytes = base64url_decode(signature_b64)
+                # 署名対象データ（header_b64.payload_b64）
+                message_to_verify = f"{header_b64}.{payload_b64}".encode('utf-8')
 
-                    # ECDSA署名を検証
-                    public_key.verify(
-                        signature_bytes,
-                        message_to_verify,
-                        ec.ECDSA(hashes.SHA256())
-                    )
+                # 署名をデコード
+                signature_bytes = base64url_decode(signature_b64)
 
-                    logger.info(
-                        f"[_verify_user_authorization_jwt] ✓ JWT signature verified successfully"
-                    )
+                # ECDSA署名を検証
+                public_key.verify(
+                    signature_bytes,
+                    message_to_verify,
+                    ec.ECDSA(hashes.SHA256())
+                )
 
-                except InvalidSignature:
-                    raise ValueError(f"Invalid JWT signature: signature verification failed")
-                except Exception as e:
-                    raise ValueError(f"JWT signature verification error: {e}")
+                logger.info(
+                    f"[_verify_user_authorization_jwt] ✓ JWT signature verified successfully"
+                )
+
+            except InvalidSignature:
+                raise ValueError(f"Invalid JWT signature: signature verification failed")
+            except Exception as e:
+                raise ValueError(f"JWT signature verification error: {e}")
 
             logger.info(
                 f"[_verify_user_authorization_jwt] JWT validation passed: "
@@ -540,7 +543,6 @@ class PaymentProcessorService(BaseAgent):
         except Exception as e:
             logger.error(f"[_verify_user_authorization_jwt] Verification failed: {e}", exc_info=True)
             raise ValueError(f"user_authorization JWT verification failed: {e}")
-
     def _verify_merchant_authorization_jwt(self, merchant_authorization_jwt: str) -> Dict[str, Any]:
         """
         merchant_authorization JWTを検証
@@ -664,39 +666,41 @@ class PaymentProcessorService(BaseAgent):
             did_resolver = DIDResolver(self.key_manager)
             public_key_pem = did_resolver.resolve_public_key(kid)
 
+            # fail-fast: 公開鍵が見つからない場合はエラーを発生させる
             if not public_key_pem:
-                logger.warning(
+                raise ValueError(
                     f"[_verify_merchant_authorization_jwt] Public key not found for KID: {kid}. "
-                    f"Skipping signature verification (demo mode)."
+                    f"Cannot verify JWT signature without public key. "
+                    f"Ensure the merchant's public key is registered in the DID document."
                 )
-            else:
-                try:
-                    # PEM形式の公開鍵を読み込み
-                    public_key = serialization.load_pem_public_key(
-                        public_key_pem.encode('utf-8')
-                    )
 
-                    # 署名対象データ（header_b64.payload_b64）
-                    message_to_verify = f"{header_b64}.{payload_b64}".encode('utf-8')
+            try:
+                # PEM形式の公開鍵を読み込み
+                public_key = serialization.load_pem_public_key(
+                    public_key_pem.encode('utf-8')
+                )
 
-                    # 署名をデコード
-                    signature_bytes = base64url_decode(signature_b64)
+                # 署名対象データ（header_b64.payload_b64）
+                message_to_verify = f"{header_b64}.{payload_b64}".encode('utf-8')
 
-                    # ECDSA署名を検証
-                    public_key.verify(
-                        signature_bytes,
-                        message_to_verify,
-                        ec.ECDSA(hashes.SHA256())
-                    )
+                # 署名をデコード
+                signature_bytes = base64url_decode(signature_b64)
 
-                    logger.info(
-                        f"[_verify_merchant_authorization_jwt] ✓ JWT signature verified successfully"
-                    )
+                # ECDSA署名を検証
+                public_key.verify(
+                    signature_bytes,
+                    message_to_verify,
+                    ec.ECDSA(hashes.SHA256())
+                )
 
-                except InvalidSignature:
-                    raise ValueError(f"Invalid JWT signature: signature verification failed")
-                except Exception as e:
-                    raise ValueError(f"JWT signature verification error: {e}")
+                logger.info(
+                    f"[_verify_merchant_authorization_jwt] ✓ JWT signature verified successfully"
+                )
+
+            except InvalidSignature:
+                raise ValueError(f"Invalid JWT signature: signature verification failed")
+            except Exception as e:
+                raise ValueError(f"JWT signature verification error: {e}")
 
             logger.info(
                 f"[_verify_merchant_authorization_jwt] JWT validation passed: "
@@ -763,45 +767,41 @@ class PaymentProcessorService(BaseAgent):
             f"CartMandate({cart_mandate_id})"
         )
 
-        # 3. user_authorization JWT検証
+        # 3. user_authorization SD-JWT-VC検証（AP2仕様完全準拠）
         user_authorization = payment_mandate.get("user_authorization")
         if user_authorization:
             try:
-                user_payload = self._verify_user_authorization_jwt(user_authorization)
+                # CartMandateとPaymentMandateのハッシュを計算（AP2仕様準拠）
+                cart_hash = compute_mandate_hash(cart_mandate)
+
+                # PaymentMandateのハッシュ計算時はuser_authorizationを除外
+                payment_mandate_for_hash = {k: v for k, v in payment_mandate.items() if k != "user_authorization"}
+                payment_hash = compute_mandate_hash(payment_mandate_for_hash)
+
                 logger.info(
-                    f"[PaymentProcessor] user_authorization JWT verified: "
-                    f"iss={user_payload.get('iss')}"
+                    f"[PaymentProcessor] Verifying SD-JWT-VC user_authorization: "
+                    f"cart_hash={cart_hash[:16]}..., payment_hash={payment_hash[:16]}..."
                 )
 
-                # CartMandateハッシュの検証（JWTペイロード内のハッシュと実際のハッシュを比較）
-                transaction_data = user_payload.get("transaction_data", {})
-                cart_hash_in_jwt = transaction_data.get("cart_mandate_hash")
-                if cart_hash_in_jwt:
-                    logger.info(
-                        f"[PaymentProcessor] CartMandate hash in user_authorization: "
-                        f"{cart_hash_in_jwt[:16]}..."
-                    )
+                # SD-JWT-VC形式のuser_authorizationを検証
+                vp_result = verify_user_authorization_vp(
+                    user_authorization=user_authorization,
+                    expected_cart_hash=cart_hash,
+                    expected_payment_hash=payment_hash,
+                    expected_audience="did:ap2:agent:payment_processor"
+                )
 
-                    # 実際のCartMandateハッシュを計算（SHA-256）
-                    from v2.common.crypto import compute_mandate_hash
+                logger.info(
+                    f"[PaymentProcessor] ✓ SD-JWT-VC user_authorization verified: "
+                    f"cart_hash_match=True, payment_hash_match=True"
+                )
 
-                    actual_cart_hash = compute_mandate_hash(cart_mandate, hash_format='hex')
-
-                    # ハッシュを比較
-                    if actual_cart_hash != cart_hash_in_jwt:
-                        raise ValueError(
-                            f"CartMandate hash mismatch: "
-                            f"JWT contains {cart_hash_in_jwt[:16]}..., "
-                            f"but actual hash is {actual_cart_hash[:16]}..."
-                        )
-
-                    logger.info(
-                        f"[PaymentProcessor] ✓ CartMandate hash verified: {actual_cart_hash[:16]}..."
-                    )
+                # TODO: WebAuthn署名の検証（公開鍵が必要）
+                # 公開鍵はVP内のcnf claimから取得可能、またはCredential Providerに問い合わせ
 
             except ValueError as e:
-                logger.error(f"[PaymentProcessor] user_authorization JWT verification failed: {e}")
-                raise ValueError(f"user_authorization JWT verification failed: {e}")
+                logger.error(f"[PaymentProcessor] user_authorization SD-JWT-VC verification failed: {e}")
+                raise ValueError(f"user_authorization SD-JWT-VC verification failed: {e}")
         else:
             logger.warning(
                 "[PaymentProcessor] PaymentMandate does not have user_authorization. "
@@ -826,10 +826,9 @@ class PaymentProcessorService(BaseAgent):
                         f"{cart_hash_in_jwt[:16]}..."
                     )
 
-                    # 実際のCartMandateハッシュを計算（SHA-256）
-                    from v2.common.crypto import compute_mandate_hash
-
-                    actual_cart_hash = compute_mandate_hash(cart_mandate, hash_format='hex')
+                    # 実際のCartMandateハッシュを計算（RFC 8785準拠）
+                    # compute_mandate_hashは既にグローバルにimportされている（v2.common.user_authorizationから）
+                    actual_cart_hash = compute_mandate_hash(cart_mandate)
 
                     # ハッシュを比較
                     if actual_cart_hash != cart_hash_in_jwt:

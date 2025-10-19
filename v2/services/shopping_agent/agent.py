@@ -36,7 +36,8 @@ from v2.common.models import (
 )
 from v2.common.database import DatabaseManager, MandateCRUD, TransactionCRUD
 from v2.common.risk_assessment import RiskAssessmentEngine
-from v2.common.crypto import WebAuthnChallengeManager
+from v2.common.crypto import WebAuthnChallengeManager, CryptoError
+from v2.common.user_authorization import create_user_authorization_vp
 
 logger = logging.getLogger(__name__)
 
@@ -681,10 +682,40 @@ class ShoppingAgent(BaseAgent):
                 session["attestation_token"] = verification_result.get("token")
                 session["step"] = "payment_processing"
 
-                # Payment Processorに決済依頼（VDC交換：CartMandateも含める）
+                # CartMandateを取得（user_authorization生成に必要）
                 cart_mandate = session.get("cart_mandate")
                 if not cart_mandate:
                     raise HTTPException(status_code=400, detail="CartMandate not found in session")
+
+                # AP2仕様完全準拠：WebAuthn assertionからSD-JWT-VC形式のuser_authorizationを生成
+                # refs/AP2-main/src/ap2/types/mandate.py:181-200 に基づく実装
+                user_id = session.get("user_id", "user_demo_001")
+
+                try:
+                    # VP生成時、PaymentMandateからuser_authorizationフィールドを除外
+                    # （ハッシュ計算の一貫性を保つため）
+                    payment_mandate_for_vp = {k: v for k, v in payment_mandate.items() if k != "user_authorization"}
+
+                    user_authorization = create_user_authorization_vp(
+                        webauthn_assertion=attestation,
+                        cart_mandate=cart_mandate,
+                        payment_mandate_contents=payment_mandate_for_vp,
+                        user_id=user_id,
+                        payment_processor_id="did:ap2:agent:payment_processor"
+                    )
+
+                    payment_mandate["user_authorization"] = user_authorization
+
+                    logger.info(
+                        f"[submit_payment_attestation] SD-JWT-VC user_authorization generated: "
+                        f"user_id={user_id}, vp_length={len(user_authorization)}"
+                    )
+                except Exception as e:
+                    logger.error(f"[submit_payment_attestation] Failed to generate user_authorization VP: {e}", exc_info=True)
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"Failed to generate user_authorization: {e}"
+                    )
 
                 payment_result = await self._process_payment_via_payment_processor(payment_mandate, cart_mandate)
 
@@ -1780,14 +1811,15 @@ class ShoppingAgent(BaseAgent):
             "expires_at": expires_at.isoformat().replace('+00:00', 'Z')
         }
 
-        # User公開鍵を取得（WebAuthn Passkey公開鍵のプレースホルダー）
+        # User公開鍵を取得（WebAuthn Passkey公開鍵）
         # 実際の公開鍵はPasskey署名と一緒にフロントエンドから送信される
         try:
             user_public_key_pem = self.key_manager.get_public_key_pem(user_id)
             intent_mandate_unsigned["user_public_key"] = user_public_key_pem
         except Exception as e:
-            logger.warning(f"[ShoppingAgent] Failed to get user public key: {e}. Using placeholder.")
-            intent_mandate_unsigned["user_public_key"] = "user_public_key_placeholder"
+            logger.info(f"[ShoppingAgent] User public key not available yet (will be provided by frontend): {e}")
+            # 公開鍵はフロントエンドのPasskey署名時に提供されるため、この時点では省略可能
+            intent_mandate_unsigned["user_public_key"] = None
 
         logger.info(
             f"[ShoppingAgent] IntentMandate created (unsigned, awaiting Passkey signature): "
@@ -1852,9 +1884,9 @@ class ShoppingAgent(BaseAgent):
         Returns:
             str: SHA256ハッシュの16進数表現
         """
-        # compute_mandate_hash関数を使用（署名フィールドを自動除外）
-        from v2.common.crypto import compute_mandate_hash
-        return compute_mandate_hash(cart_mandate, hash_format='hex')
+        # RFC 8785準拠のcompute_mandate_hash関数を使用（署名フィールドを自動除外）
+        from v2.common.user_authorization import compute_mandate_hash
+        return compute_mandate_hash(cart_mandate)
 
     def _generate_payment_mandate_hash(self, payment_mandate: Dict[str, Any]) -> str:
         """
@@ -1873,9 +1905,9 @@ class ShoppingAgent(BaseAgent):
         """
         # PaymentMandateからuser_authorizationフィールドを除外してコピー
         payment_mandate_copy = {k: v for k, v in payment_mandate.items() if k != 'user_authorization'}
-        # compute_mandate_hash関数を使用（より堅牢なハッシュ計算）
-        from v2.common.crypto import compute_mandate_hash
-        return compute_mandate_hash(payment_mandate_copy, hash_format='hex')
+        # RFC 8785準拠のcompute_mandate_hash関数を使用（より堅牢なハッシュ計算）
+        from v2.common.user_authorization import compute_mandate_hash
+        return compute_mandate_hash(payment_mandate_copy)
 
     def _determine_transaction_type(self, session: Dict[str, Any]) -> str:
         """
@@ -1922,128 +1954,6 @@ class ShoppingAgent(BaseAgent):
         # デフォルト: human_not_present
         logger.info("[ShoppingAgent] transaction_type=human_not_present (no strong authentication detected)")
         return "human_not_present"
-
-    def _generate_user_authorization_jwt(
-        self,
-        cart_mandate_hash: str,
-        payment_mandate_hash: str,
-        user_id: str
-    ) -> str:
-        """
-        AP2仕様準拠のuser_authorization JWTを生成
-
-        AP2仕様では、user_authorizationはSD-JWT-VC（Selective Disclosure JWT Verifiable Credential）
-        形式であるべきですが、v0.1仕様では標準的なJWT形式でも許容されます。
-
-        JWT構造（AP2 v0.1準拠）：
-        - Header: { "alg": "ES256", "kid": "did:ap2:user:xxx#key-1" }
-        - Payload: {
-            "iss": "did:ap2:user:xxx",
-            "aud": "did:ap2:agent:payment_processor",
-            "iat": <timestamp>,
-            "exp": <timestamp + 300>,  # 5分
-            "nonce": <random>,
-            "transaction_data": {
-              "cart_mandate_hash": "<hash>",
-              "payment_mandate_hash": "<hash>"
-            }
-          }
-        - Signature: ECDSA署名（ユーザーの秘密鍵）
-
-        将来のv1.x: 完全なSD-JWT-VC実装に移行（選択的開示機能）
-
-        Args:
-            cart_mandate_hash: CartMandateのSHA256ハッシュ
-            payment_mandate_hash: PaymentMandateのSHA256ハッシュ
-            user_id: ユーザーID
-
-        Returns:
-            str: base64url エンコードされたJWT
-        """
-        try:
-            import base64
-            from datetime import datetime, timezone, timedelta
-
-            # 現在時刻
-            now = datetime.now(timezone.utc)
-            exp_time = now + timedelta(seconds=300)  # 5分後に期限切れ
-
-            # JWTヘッダー
-            header = {
-                "alg": "ES256",  # ECDSA with P-256 and SHA-256
-                "kid": f"did:ap2:user:{user_id}#key-1",
-                "typ": "JWT"
-            }
-
-            # JWTペイロード（AP2仕様準拠）
-            payload = {
-                "iss": f"did:ap2:user:{user_id}",
-                "aud": "did:ap2:agent:payment_processor",
-                "iat": int(now.timestamp()),
-                "exp": int(exp_time.timestamp()),
-                "nonce": uuid.uuid4().hex,  # リプレイ攻撃対策
-                "transaction_data": {
-                    "cart_mandate_hash": cart_mandate_hash,
-                    "payment_mandate_hash": payment_mandate_hash
-                }
-            }
-
-            # JWTエンコード（簡易版：ヘッダーとペイロードをbase64url）
-            # 注意: 本番環境では適切なJWTライブラリ（PyJWT等）を使用すること
-            header_b64 = base64.urlsafe_b64encode(
-                json.dumps(header, separators=(',', ':')).encode()
-            ).decode().rstrip('=')
-
-            payload_b64 = base64.urlsafe_b64encode(
-                json.dumps(payload, separators=(',', ':')).encode()
-            ).decode().rstrip('=')
-
-            # 署名対象データ
-            signing_input = f"{header_b64}.{payload_b64}"
-
-            # ECDSA署名を生成（ユーザーの秘密鍵で）
-            try:
-                # ユーザーの秘密鍵を読み込もうと試みる
-                user_private_key = self.key_manager.load_private_key_encrypted(user_id, "demo_passphrase")
-
-                # 署名を生成
-                signature_value = self.signature_manager.sign_data(
-                    data=signing_input,
-                    key_id=user_id
-                )
-
-                # 署名をbase64urlエンコード
-                if hasattr(signature_value, 'value'):
-                    # Signatureオブジェクトの場合
-                    signature_b64 = signature_value.value.rstrip('=')
-                else:
-                    # 文字列の場合
-                    signature_b64 = signature_value.rstrip('=')
-
-            except Exception as e:
-                logger.warning(f"[ShoppingAgent] Failed to load user private key: {e}. Using placeholder signature.")
-                # フォールバック：プレースホルダー署名
-                # 注意: 本番環境では絶対に使用しないこと
-                signature_b64 = base64.urlsafe_b64encode(
-                    b"PLACEHOLDER_SIGNATURE_DEMO_ONLY"
-                ).decode().rstrip('=')
-
-            # JWT完成
-            jwt_token = f"{signing_input}.{signature_b64}"
-
-            logger.info(
-                f"[ShoppingAgent] Generated user_authorization JWT: "
-                f"iss={payload['iss']}, "
-                f"aud={payload['aud']}, "
-                f"exp={payload['exp']}, "
-                f"nonce={payload['nonce'][:8]}..."
-            )
-
-            return jwt_token
-
-        except Exception as e:
-            logger.error(f"[_generate_user_authorization_jwt] Failed to generate JWT: {e}", exc_info=True)
-            raise
 
     def _create_payment_mandate(self, session: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -2174,43 +2084,16 @@ class ShoppingAgent(BaseAgent):
             payment_mandate["risk_score"] = 50  # 中リスク
             payment_mandate["fraud_indicators"] = ["risk_assessment_failed"]
 
-        # user_authorizationフィールドを生成（AP2仕様準拠）
-        # AP2仕様: SD-JWT-VC形式のuser_authorizationを生成
-        # - CartMandateとPaymentMandateのハッシュを含む
-        # - ユーザーの秘密鍵で署名
-        # - base64url エンコード
-        cart_mandate = session.get("cart_mandate")
-        if cart_mandate:
-            try:
-                cart_mandate_hash = self._generate_cart_mandate_hash(cart_mandate)
-                payment_mandate_hash = self._generate_payment_mandate_hash(payment_mandate)
+        # AP2仕様準拠：user_authorizationフィールドは後で追加
+        # user_authorizationはフロントエンドからのWebAuthn attestationを使用
+        # この時点ではまだフロントエンドから受け取っていないため、Noneに設定
+        # submit_payment_attestation()でattestationを受け取った後に設定される
+        payment_mandate["user_authorization"] = None
 
-                # AP2仕様準拠：JWT形式のuser_authorizationを生成
-                # AP2 v0.1では標準的なJWT形式で実装（v1.xでSD-JWT-VCに移行予定）
-
-                # sessionからuser_idを取得（デフォルト値あり）
-                user_id = session.get("user_id", "user_demo_001")
-
-                user_authorization = self._generate_user_authorization_jwt(
-                    cart_mandate_hash=cart_mandate_hash,
-                    payment_mandate_hash=payment_mandate_hash,
-                    user_id=user_id
-                )
-                payment_mandate["user_authorization"] = user_authorization
-
-                logger.info(
-                    f"[ShoppingAgent] Generated user_authorization (JWT): "
-                    f"cart_hash={cart_mandate_hash[:16]}..., "
-                    f"payment_hash={payment_mandate_hash[:16]}..., "
-                    f"jwt_prefix={user_authorization[:30] if user_authorization else 'None'}..."
-                )
-            except Exception as e:
-                logger.error(f"[ShoppingAgent] Failed to generate user_authorization: {e}", exc_info=True)
-                # user_authorizationの生成に失敗してもPaymentMandate自体は返す
-                payment_mandate["user_authorization"] = None
-        else:
-            logger.warning("[ShoppingAgent] No CartMandate found in session, user_authorization not generated")
-            payment_mandate["user_authorization"] = None
+        logger.info(
+            f"[ShoppingAgent] PaymentMandate created (without user_authorization yet). "
+            f"user_authorization will be added after WebAuthn attestation from frontend."
+        )
 
         logger.info(
             f"[ShoppingAgent] PaymentMandate created: "

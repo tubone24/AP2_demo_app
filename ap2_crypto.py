@@ -20,6 +20,14 @@ from cryptography.exceptions import InvalidSignature
 
 from ap2_types import Signature, DeviceAttestation, AttestationType
 
+# RFC8785 JSON Canonicalization Scheme
+try:
+    import rfc8785
+    RFC8785_AVAILABLE = True
+except ImportError:
+    RFC8785_AVAILABLE = False
+    print("[Warning] rfc8785 library not available. Falling back to basic JSON canonicalization.")
+
 # WebAuthn COSE key parsing
 try:
     import cbor2
@@ -74,19 +82,22 @@ def compute_mandate_hash(
 
     converted_mandate = convert_enums(mandate_copy)
 
-    # 3. Canonical JSON文字列を生成
-    # - キーをアルファベット順にソート
-    # - 余分なスペースを削除
-    # - UTF-8エンコーディング
-    canonical_json = json.dumps(
-        converted_mandate,
-        sort_keys=True,
-        separators=(',', ':'),
-        ensure_ascii=False
-    )
+    # 3. RFC 8785準拠のCanonical JSON文字列を生成
+    if RFC8785_AVAILABLE:
+        # rfc8785.dumps() はUTF-8バイト列を返す
+        canonical_bytes = rfc8785.dumps(converted_mandate)
+    else:
+        # フォールバック: 基本的な正規化（本番環境では非推奨）
+        canonical_json = json.dumps(
+            converted_mandate,
+            sort_keys=True,
+            separators=(',', ':'),
+            ensure_ascii=False
+        )
+        canonical_bytes = canonical_json.encode('utf-8')
 
     # 4. SHA-256ハッシュを計算
-    hash_bytes = hashlib.sha256(canonical_json.encode('utf-8')).digest()
+    hash_bytes = hashlib.sha256(canonical_bytes).digest()
 
     # 5. 指定された形式で返す
     if hash_format == 'base64':
@@ -346,7 +357,7 @@ class SignatureManager:
 
     def _hash_data(self, data: Any) -> bytes:
         """
-        データをハッシュ化
+        データをハッシュ化（RFC 8785準拠）
 
         Args:
             data: ハッシュ化するデータ（辞書、文字列など）
@@ -354,18 +365,24 @@ class SignatureManager:
         Returns:
             bytes: SHA-256ハッシュ
         """
-        # データをJSON文字列に変換（決定論的な順序で）
+        # データをRFC 8785準拠のJSON文字列に変換（決定論的な順序で）
         if isinstance(data, dict):
             # Enumを.valueに変換
             converted_data = self._convert_enums(data)
-            json_str = json.dumps(converted_data, sort_keys=True, ensure_ascii=False)
+            if RFC8785_AVAILABLE:
+                # rfc8785.dumps() はUTF-8バイト列を返す
+                canonical_bytes = rfc8785.dumps(converted_data)
+            else:
+                # フォールバック: 基本的な正規化（本番環境では非推奨）
+                json_str = json.dumps(converted_data, sort_keys=True, ensure_ascii=False)
+                canonical_bytes = json_str.encode('utf-8')
         elif isinstance(data, str):
-            json_str = data
+            canonical_bytes = data.encode('utf-8')
         else:
-            json_str = str(data)
+            canonical_bytes = str(data).encode('utf-8')
 
         # SHA-256でハッシュ化
-        return hashlib.sha256(json_str.encode('utf-8')).digest()
+        return hashlib.sha256(canonical_bytes).digest()
     
     def sign_data(
         self,
@@ -1074,9 +1091,14 @@ class DeviceAttestationManager:
             "platform": platform
         }
 
-        # データをJSON文字列に変換してハッシュ化
-        json_str = json.dumps(attestation_data, sort_keys=True, ensure_ascii=False)
-        data_hash = hashlib.sha256(json_str.encode('utf-8')).digest()
+        # RFC 8785準拠の正規化を使用してハッシュ化
+        if RFC8785_AVAILABLE:
+            canonical_bytes = rfc8785.dumps(attestation_data)
+        else:
+            # フォールバック: 基本的な正規化（本番環境では非推奨）
+            json_str = json.dumps(attestation_data, sort_keys=True, ensure_ascii=False)
+            canonical_bytes = json_str.encode('utf-8')
+        data_hash = hashlib.sha256(canonical_bytes).digest()
 
         # ECDSA署名を生成
         attestation_signature = device_private_key.sign(
@@ -1167,9 +1189,14 @@ class DeviceAttestationManager:
                 "platform": device_attestation.platform
             }
 
-            # データをJSON文字列に変換してハッシュ化
-            json_str = json.dumps(attestation_data, sort_keys=True, ensure_ascii=False)
-            data_hash = hashlib.sha256(json_str.encode('utf-8')).digest()
+            # RFC 8785準拠の正規化を使用してハッシュ化
+            if RFC8785_AVAILABLE:
+                canonical_bytes = rfc8785.dumps(attestation_data)
+            else:
+                # フォールバック: 基本的な正規化（本番環境では非推奨）
+                json_str = json.dumps(attestation_data, sort_keys=True, ensure_ascii=False)
+                canonical_bytes = json_str.encode('utf-8')
+            data_hash = hashlib.sha256(canonical_bytes).digest()
 
             # 3. デバイスの公開鍵で署名を検証
             device_public_key = self.key_manager.public_key_from_base64(

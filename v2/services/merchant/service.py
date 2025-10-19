@@ -678,9 +678,9 @@ class MerchantService(BaseAgent):
 
         # 1. Cart Contentsのハッシュ計算
         # CartMandateの署名フィールドを除外してハッシュ化（AP2仕様）
-        # compute_mandate_hash関数を使用して一貫性を保つ
-        from v2.common.crypto import compute_mandate_hash
-        cart_hash = compute_mandate_hash(cart_mandate, hash_format='hex')
+        # RFC 8785準拠のcompute_mandate_hash関数を使用して一貫性を保つ
+        from v2.common.user_authorization import compute_mandate_hash
+        cart_hash = compute_mandate_hash(cart_mandate)
 
         # 2. JWTのHeader
         header = {
