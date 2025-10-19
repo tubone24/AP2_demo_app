@@ -673,13 +673,14 @@ class MerchantAgent(BaseAgent):
         - 各カートはCartMandateとして構造化
         - Merchantに署名依頼してArtifactとしてラップ
 
+        UX改善：すべてのカート候補を一気に作成し、署名依頼を並列化
+        手動署名モードでは、3つの署名依頼が同時にMerchant Dashboardに表示される
+
         戦略：
         1. 人気順（検索結果上位3商品）
         2. 低価格順（最安値3商品）
         3. プレミアム（高価格帯3商品）
         """
-        cart_candidates = []
-
         async with self.db_manager.get_session() as session:
             # 商品検索
             products = await ProductCRUD.search(session, intent_text, limit=20)
@@ -690,45 +691,64 @@ class MerchantAgent(BaseAgent):
 
             logger.info(f"[_create_multiple_cart_candidates] Found {len(products)} products")
 
-            # 戦略1: 人気順（検索結果上位3商品、各1個ずつ）
-            popular_cart = await self._create_cart_from_products(
+        # ステップ1: すべてのカート候補の定義を作成（署名依頼前）
+        cart_definitions = []
+
+        # 戦略1: 人気順（検索結果上位3商品、各1個ずつ）
+        cart_definitions.append({
+            "products": products[:3],
+            "quantities": [1] * min(3, len(products)),
+            "name": "人気商品セット",
+            "description": "検索結果で人気の商品を組み合わせたカートです"
+        })
+
+        # 戦略2: 低価格順（最安値3商品、各1個ずつ）
+        if len(products) >= 2:
+            sorted_by_price = sorted(products, key=lambda p: p.price)
+            cart_definitions.append({
+                "products": sorted_by_price[:3],
+                "quantities": [1] * min(3, len(sorted_by_price)),
+                "name": "お得なセット",
+                "description": "価格を抑えた組み合わせのカートです"
+            })
+
+        # 戦略3: プレミアム（高価格帯2商品、各1個ずつ）
+        if len(products) >= 3:
+            sorted_by_price_desc = sorted(products, key=lambda p: p.price, reverse=True)
+            cart_definitions.append({
+                "products": sorted_by_price_desc[:2],
+                "quantities": [1] * min(2, len(sorted_by_price_desc)),
+                "name": "プレミアムセット",
+                "description": "高品質な商品を厳選したカートです"
+            })
+
+        logger.info(f"[_create_multiple_cart_candidates] Creating {len(cart_definitions)} cart candidates")
+
+        # ステップ2: すべてのカート候補を並列で作成・署名依頼
+        # asyncio.gatherで並列実行してUX改善（一気に署名依頼が届く）
+        import asyncio
+        cart_creation_tasks = [
+            self._create_cart_from_products(
                 intent_mandate_id=intent_mandate_id,
-                products=products[:3],
-                quantities=[1] * min(3, len(products)),
+                products=cart_def["products"],
+                quantities=cart_def["quantities"],
                 shipping_address=shipping_address,
-                cart_name="人気商品セット",
-                cart_description="検索結果で人気の商品を組み合わせたカートです"
+                cart_name=cart_def["name"],
+                cart_description=cart_def["description"]
             )
-            if popular_cart:
-                cart_candidates.append(popular_cart)
+            for cart_def in cart_definitions
+        ]
 
-            # 戦略2: 低価格順（最安値3商品、各1個ずつ）
-            if len(products) >= 2:
-                sorted_by_price = sorted(products, key=lambda p: p.price)
-                budget_cart = await self._create_cart_from_products(
-                    intent_mandate_id=intent_mandate_id,
-                    products=sorted_by_price[:3],
-                    quantities=[1] * min(3, len(sorted_by_price)),
-                    shipping_address=shipping_address,
-                    cart_name="お得なセット",
-                    cart_description="価格を抑えた組み合わせのカートです"
-                )
-                if budget_cart:
-                    cart_candidates.append(budget_cart)
+        # 並列実行
+        cart_results = await asyncio.gather(*cart_creation_tasks, return_exceptions=True)
 
-            # 戦略3: プレミアム（高価格帯2商品、各1個ずつ）
-            if len(products) >= 3:
-                sorted_by_price_desc = sorted(products, key=lambda p: p.price, reverse=True)
-                premium_cart = await self._create_cart_from_products(
-                    intent_mandate_id=intent_mandate_id,
-                    products=sorted_by_price_desc[:2],
-                    quantities=[1] * min(2, len(sorted_by_price_desc)),
-                    shipping_address=shipping_address,
-                    cart_name="プレミアムセット",
-                    cart_description="高品質な商品を厳選したカートです"
-                )
-                if premium_cart:
-                    cart_candidates.append(premium_cart)
+        # 成功したカート候補のみを収集
+        cart_candidates = []
+        for i, result in enumerate(cart_results):
+            if isinstance(result, Exception):
+                logger.error(f"[_create_multiple_cart_candidates] Failed to create cart {i+1}: {result}")
+            elif result is not None:
+                cart_candidates.append(result)
 
         logger.info(f"[_create_multiple_cart_candidates] Created {len(cart_candidates)} cart candidates")
         return cart_candidates
@@ -852,11 +872,15 @@ class MerchantAgent(BaseAgent):
             # 手動署名モード：Merchantの承認を待機
             if result.get("status") == "pending_merchant_signature":
                 cart_mandate_id = result.get("cart_mandate_id")
-                logger.info(f"[_create_cart_from_products] CartMandate pending manual approval: {cart_mandate_id}")
-                logger.info(f"[_create_cart_from_products] Waiting for merchant signature (max 300s)...")
+                logger.info(f"[_create_cart_from_products] '{cart_name}' pending manual approval: {cart_mandate_id}")
+                logger.info(f"[_create_cart_from_products] Waiting for merchant signature for '{cart_name}' (max 300s)...")
 
                 # Merchantの承認を待機（ポーリング）
-                signed_cart_mandate = await self._wait_for_merchant_signature(cart_mandate_id, timeout=300)
+                signed_cart_mandate = await self._wait_for_merchant_signature(
+                    cart_mandate_id,
+                    cart_name=cart_name,  # ログ改善のためカート名を渡す
+                    timeout=300
+                )
 
                 if not signed_cart_mandate:
                     logger.error(f"[_create_cart_from_products] Failed to get merchant signature for cart: {cart_mandate_id}")
@@ -911,6 +935,7 @@ class MerchantAgent(BaseAgent):
     async def _wait_for_merchant_signature(
         self,
         cart_mandate_id: str,
+        cart_name: str = "",
         timeout: int = 300,
         poll_interval: float = 2.0
     ) -> Optional[Dict[str, Any]]:
@@ -922,13 +947,15 @@ class MerchantAgent(BaseAgent):
 
         Args:
             cart_mandate_id: CartMandate ID
+            cart_name: カート名（ログ表示用）
             timeout: タイムアウト（秒）
             poll_interval: ポーリング間隔（秒）
 
         Returns:
             署名済みCartMandate、または失敗時にNone
         """
-        logger.info(f"[MerchantAgent] Waiting for merchant signature for CartMandate: {cart_mandate_id}, timeout={timeout}s")
+        cart_label = f"'{cart_name}' ({cart_mandate_id})" if cart_name else cart_mandate_id
+        logger.info(f"[MerchantAgent] Waiting for merchant signature for {cart_label}, timeout={timeout}s")
 
         import asyncio
         start_time = asyncio.get_event_loop().time()
@@ -947,28 +974,28 @@ class MerchantAgent(BaseAgent):
                 status = result.get("status")
                 payload = result.get("payload")
 
-                logger.debug(f"[MerchantAgent] CartMandate {cart_mandate_id} status: {status}")
+                logger.debug(f"[MerchantAgent] {cart_label} status: {status}")
 
                 # 署名完了
                 if status == "signed":
-                    logger.info(f"[MerchantAgent] CartMandate {cart_mandate_id} has been signed by merchant")
+                    logger.info(f"[MerchantAgent] {cart_label} has been signed by merchant")
                     return payload
 
                 # 拒否された
                 elif status == "rejected":
-                    logger.warning(f"[MerchantAgent] CartMandate {cart_mandate_id} has been rejected by merchant")
+                    logger.warning(f"[MerchantAgent] {cart_label} has been rejected by merchant")
                     return None
 
                 # まだpending - 待機
                 elif status == "pending_merchant_signature":
-                    logger.debug(f"[MerchantAgent] CartMandate {cart_mandate_id} is still pending, waiting...")
+                    logger.debug(f"[MerchantAgent] {cart_label} is still pending, waiting...")
                     await asyncio.sleep(poll_interval)
                     elapsed_time = asyncio.get_event_loop().time() - start_time
                     continue
 
                 # 予期しないステータス
                 else:
-                    logger.warning(f"[MerchantAgent] Unexpected CartMandate status: {status}")
+                    logger.warning(f"[MerchantAgent] Unexpected status for {cart_label}: {status}")
                     await asyncio.sleep(poll_interval)
                     elapsed_time = asyncio.get_event_loop().time() - start_time
                     continue
@@ -984,5 +1011,5 @@ class MerchantAgent(BaseAgent):
                 return None
 
         # タイムアウト
-        logger.error(f"[MerchantAgent] Timeout waiting for merchant signature for CartMandate: {cart_mandate_id}")
+        logger.error(f"[MerchantAgent] Timeout waiting for merchant signature for {cart_label}")
         return None
