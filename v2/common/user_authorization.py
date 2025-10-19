@@ -52,25 +52,37 @@ def compute_mandate_hash(mandate: Dict[str, Any]) -> str:
     署名フィールド（merchant_signature、merchant_authorization、user_authorization）を
     自動的に除外してハッシュを計算します。
 
+    Note:
+        RFC 8785 (JSON Canonicalization Scheme) 準拠の正規化を使用。
+        rfc8785ライブラリが必要（pyproject.tomlで定義済み）。
+
     Args:
         mandate: CartMandate または PaymentMandate
 
     Returns:
         str: hex形式のハッシュ値
+
+    Raises:
+        ImportError: rfc8785ライブラリがインストールされていない場合
     """
     # 署名フィールドを除外（AP2仕様準拠）
     excluded_fields = {'merchant_signature', 'merchant_authorization', 'user_authorization'}
     mandate_for_hash = {k: v for k, v in mandate.items() if k not in excluded_fields}
 
     # RFC 8785準拠のJSON正規化
+    # Note: rfc8785は必須依存関係（pyproject.toml参照）
     try:
         import rfc8785
         canonical_bytes = rfc8785.dumps(mandate_for_hash)
-    except ImportError:
-        # フォールバック（警告）
-        logger.warning("rfc8785 not available, using json.dumps as fallback")
-        canonical_json = json.dumps(mandate_for_hash, sort_keys=True, separators=(',', ':'), ensure_ascii=False)
-        canonical_bytes = canonical_json.encode('utf-8')
+    except ImportError as e:
+        # rfc8785がインストールされていない場合はエラー
+        # フォールバックは使用せず、明示的にエラーを発生させる
+        error_msg = (
+            "rfc8785 library is required for RFC 8785 compliant JSON canonicalization. "
+            "Please install it: uv add rfc8785 or pip install rfc8785>=0.1.4"
+        )
+        logger.error(f"[compute_mandate_hash] {error_msg}")
+        raise ImportError(error_msg) from e
 
     return hashlib.sha256(canonical_bytes).hexdigest()
 

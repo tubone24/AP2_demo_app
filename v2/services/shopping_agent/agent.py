@@ -618,11 +618,15 @@ class ShoppingAgent(BaseAgent):
                 if not attestation:
                     raise HTTPException(status_code=400, detail="attestation is required")
 
-                # セッション取得
-                if session_id not in self.sessions:
-                    raise HTTPException(status_code=404, detail="Session not found")
+                # セッション取得（データベースから）
+                async with self.db_manager.get_session() as db_session:
+                    db_session_obj = await AgentSessionCRUD.get_by_session_id(db_session, session_id)
 
-                session = self.sessions[session_id]
+                    if not db_session_obj:
+                        raise HTTPException(status_code=404, detail="Session not found")
+
+                    # セッションデータを取得
+                    session = json.loads(db_session_obj.session_data)
 
                 # 現在のステップ確認
                 if session.get("step") != "webauthn_attestation_requested":
@@ -917,11 +921,31 @@ class ShoppingAgent(BaseAgent):
 
                     # トークン化された支払い方法をセッションに保存
                     # Step-up完了により、既に認証済みとみなす
+                    # 重要: step_up_resultからtokenとexpires_atを取得
+                    token = step_up_result.get("token")
+                    token_expires_at = step_up_result.get("token_expires_at")
+
+                    if not token:
+                        logger.error(f"[ShoppingAgent] Step-up verification did not return token: {step_up_result}")
+                        yield StreamEvent(
+                            type="agent_text",
+                            content="❌ 認証トークンが取得できませんでした。別の支払い方法を選択してください。"
+                        )
+                        session["step"] = "select_payment_method"
+                        return
+
                     session["tokenized_payment_method"] = {
                         **payment_method,
+                        "token": token,
+                        "token_expires_at": token_expires_at,
                         "step_up_completed": True,
                         "step_up_session_id": step_up_session_id
                     }
+
+                    logger.info(
+                        f"[ShoppingAgent] Tokenized payment method set after step-up: "
+                        f"token={token[:20]}..., expires_at={token_expires_at}"
+                    )
 
                     yield StreamEvent(
                         type="agent_text",

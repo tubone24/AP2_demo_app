@@ -24,13 +24,19 @@ from cryptography.exceptions import InvalidSignature
 
 from v2.common.models import Signature, DeviceAttestation, AttestationType
 
-# RFC8785 JSON Canonicalization Scheme
+# RFC8785 JSON Canonicalization Scheme (Required for AP2 compliance)
 try:
     import rfc8785
     RFC8785_AVAILABLE = True
 except ImportError:
     RFC8785_AVAILABLE = False
-    print("[Warning] rfc8785 library not available. Falling back to basic JSON canonicalization.")
+    import sys
+    print(
+        "[ERROR] rfc8785 library is required for RFC 8785 compliant JSON canonicalization.\n"
+        "AP2 Protocol requires strict RFC 8785 compliance for interoperability.\n"
+        "Please install it: uv add rfc8785 or pip install rfc8785>=0.1.4",
+        file=sys.stderr
+    )
 
 # WebAuthn COSE key parsing
 try:
@@ -95,18 +101,16 @@ def canonicalize_json(
     converted_data = convert_enums(data_copy)
 
     # 3. RFC 8785準拠のCanonical JSON文字列を生成
-    if RFC8785_AVAILABLE:
-        # rfc8785.dumps() はUTF-8バイト列を返すため、文字列にデコード
-        canonical_bytes = rfc8785.dumps(converted_data)
-        canonical_json = canonical_bytes.decode('utf-8')
-    else:
-        # フォールバック: 基本的な正規化（本番環境では非推奨）
-        canonical_json = json.dumps(
-            converted_data,
-            sort_keys=True,
-            separators=(',', ':'),
-            ensure_ascii=False
+    if not RFC8785_AVAILABLE:
+        raise ImportError(
+            "rfc8785 library is required for RFC 8785 compliant JSON canonicalization. "
+            "AP2 Protocol requires strict RFC 8785 compliance for interoperability. "
+            "Please install it: uv add rfc8785 or pip install rfc8785>=0.1.4"
         )
+
+    # rfc8785.dumps() はUTF-8バイト列を返すため、文字列にデコード
+    canonical_bytes = rfc8785.dumps(converted_data)
+    canonical_json = canonical_bytes.decode('utf-8')
 
     return canonical_json
 
