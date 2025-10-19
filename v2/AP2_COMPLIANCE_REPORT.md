@@ -11,13 +11,13 @@
 
 ## エグゼクティブサマリー
 
-v2実装に対する包括的な監査の結果、**AP2仕様v0.1-alphaに対して総合準拠率98%**を達成していることを確認しました。全32ステップのシーケンスが完全実装され、2025-10-20に実施したセキュリティ修正により、CRITICAL問題は0件となりました。
+v2実装に対する包括的な監査の結果、**AP2仕様v0.1-alphaに対して、32ステップ実装は100%完了**していますが、**型定義とJWT構造の欠落により、総合準拠率は78%**となっています。2025-10-20に実施したセキュリティ修正により、暗号化とハッシュアルゴリズムのCRITICAL問題は解消されましたが、**新たにAP2型定義とJWT構造に関する3つのCRITICAL問題**が特定されました。
 
 ### 主要な成果（2025-10-20セキュリティ修正完了）
 
 ✅ **完全準拠達成項目**:
 - 全32ステップの完全実装（100%）
-- セキュリティ修正完了（CRITICAL問題 3件→0件）
+- 暗号化セキュリティ修正完了（AES-GCM, PBKDF2 600k, Ed25519）
 - AES-GCM暗号化への移行（Padding Oracle対策）
 - PBKDF2イテレーション600,000回（OWASP 2023準拠）
 - Ed25519署名アルゴリズム実装（相互運用性向上）
@@ -25,18 +25,25 @@ v2実装に対する包括的な監査の結果、**AP2仕様v0.1-alphaに対し
 - RFC 8785必須化（JSON正規化）
 - cbor2必須化（WebAuthn検証強化）
 
+### 🔴 新たに特定されたCRITICAL問題（3件）
+
+| # | 問題 | 影響 | 優先度 |
+|---|------|------|--------|
+| 1 | **W3C Payment Request API型群の完全欠落**（11型） | すべてのMandateの基盤型が未実装。AP2プロトコル実装の基礎が欠落 | 🔴 **P0** |
+| 2 | **merchant_authorization JWTペイロードの欠落** | Merchant署名の真正性検証不可、cart_hash検証不可、リプレイ攻撃対策不完全 | 🔴 **P0** |
+| 3 | **user_authorization SD-JWT-VC構成の欠落** | User署名の真正性検証不可、トランザクション整合性検証不可、Key-binding JWT未実装 | 🔴 **P0** |
+
 ### 残存する改善推奨項目（本番環境移行前に対応すべき）
 
-⚠️ **本番環境対応が必要な項目（52件）**:
-1. URLハードコード（19件） → 環境変数化
-2. デバッグコード（21件） → ロギング整備
-3. エラーハンドリング不足（8件） → リトライ・サーキットブレーカー実装
-4. AP2仕様型定義の不足 → W3C Payment Request API準拠
-5. その他（タイムアウト、バリデーション、リソース管理）
+⚠️ **本番環境対応が必要な項目（77件 = 52件 + 新規25件）**:
+1. **AP2型定義の実装**（16型） → W3C Payment Request API + Mandate型の実装
+2. **JWTペイロード構造の実装**（merchant_authorization + user_authorization SD-JWT-VC）
+3. URLハードコード（19件） → 環境変数化
+4. デバッグコード（21件） → ロギング整備
+5. エラーハンドリング不足（8件） → リトライ・サーキットブレーカー実装
+6. その他（タイムアウト、バリデーション、リソース管理）
 
-🚨 **重大な問題**: なし（すべて改善推奨レベル）
-
-**本番環境デプロイ準備**: 95%完了
+**本番環境デプロイ準備**: 70%完了（型定義実装が必須）
 
 ---
 
@@ -69,13 +76,16 @@ v2実装に対する包括的な監査の結果、**AP2仕様v0.1-alphaに対し
 
 ### 1.2 修正前後の比較
 
-| 指標 | 修正前（2025-10-19） | 修正後（2025-10-20） | 改善 |
-|------|-------------------|-------------------|------|
-| **総合準拠率** | 94% | 98% | +4% |
-| **CRITICAL問題** | 3件 | 0件 | ✅ 解消 |
-| **HIGH問題** | 2件 | 0件 | ✅ 解消 |
-| **MEDIUM問題** | 2件 | 0件 | ✅ 解消 |
-| **本番環境準備** | 85% | 95% | +10% |
+| 指標 | 修正前（2025-10-19） | 修正後（2025-10-20） | 今回発見（2025-10-20詳細調査後） |
+|------|-------------------|-------------------|--------------------------|
+| **総合準拠率** | 94% | 98% | **78%**（型定義欠落を反映） |
+| **CRITICAL問題（暗号化）** | 3件 | 0件 ✅ | 0件 ✅ |
+| **CRITICAL問題（型定義・JWT）** | - | - | **3件** 🔴 |
+| **HIGH問題** | 2件 | 0件 ✅ | 0件 ✅ |
+| **MEDIUM問題** | 2件 | 0件 ✅ | 0件 ✅ |
+| **本番環境準備** | 85% | 95% | **70%**（型定義実装が必須） |
+
+**注記**: 今回の徹底的な調査により、AP2型定義とJWT構造の欠落という新たなCRITICAL問題が特定されました。これらは暗号化やハッシュアルゴリズムとは異なる、**プロトコル実装の基盤に関わる問題**です。
 
 ### 1.3 修正ファイル一覧
 
@@ -253,10 +263,12 @@ class IntentMandate(BaseModel):
 **v2実装状況**: ❌ **完全に欠落**
 
 **影響**:
-- Human-Not-Presentトランザクションフローが実装できない
-- `natural_language_description`フィールドがない
-- `intent_expiry`フィールドがない
-- Merchant制約（merchants, skus）がない
+- ❌ **Human-Not-Presentトランザクションフローが実装できない**（将来的なAI Agentの自律的な購買に必須）
+- ❌ **`natural_language_description`フィールドがない**（ユーザーへの意図説明ができない）
+- ❌ **`intent_expiry`フィールドがない**（意図の有効期限管理ができない）
+- ❌ **Merchant制約（merchants, skus）がない**（購買対象の制約ができない）
+
+**重要度**: 🟡 **MEDIUM**（Human-Not-Presentは将来仕様のため、現時点では必須ではないが、完全なAP2準拠には必要）
 
 #### 3.1.3 CartMandate型定義（AP2公式仕様）
 
@@ -287,6 +299,14 @@ class CartMandate(BaseModel):
 
 **v2実装状況**: ❌ **完全に欠落**
 
+**影響**:
+- ❌ **Merchantの正当性が検証できない**（なりすましリスク）
+- ❌ **CartContentsの改ざん検出ができない**（`cart_hash`検証不可）
+- ❌ **リプレイ攻撃対策が不完全**（`jti`, `exp`フィールド未実装）
+- ❌ **Payment Processorでの検証ができない**（`aud`クレーム未実装）
+
+**重要度**: 🔴 **CRITICAL**（セキュリティリスク：Merchant署名の真正性が保証されない）
+
 #### 3.1.4 PaymentMandate型定義（AP2公式仕様）
 
 ```python
@@ -316,37 +336,59 @@ class PaymentMandate(BaseModel):
 
 **v2実装状況**: ❌ **完全に欠落**
 
+**影響**:
+- ❌ **リプレイ攻撃対策が不完全**（`nonce`, `sd_hash`フィールド未実装）
+- ❌ **トランザクション整合性が検証できない**（`transaction_data`ハッシュ未実装）
+- ❌ **Key-binding JWTが実装されていない**（ユーザー認証の紐付けが不可能）
+- ❌ **SD-JWT-VC標準準拠ができない**（Issuer-signed JWT + Key-binding JWT構造が未実装）
+
+**重要度**: 🔴 **CRITICAL**（セキュリティリスク：User署名の真正性とトランザクション整合性が保証されない）
+
 #### 3.1.5 W3C Payment Request API型群
 
 **欠落している型（11個）**:
-- `PaymentCurrencyAmount`
-- `PaymentItem`
-- `PaymentShippingOption`
-- `PaymentOptions`
-- `PaymentMethodData`
-- `PaymentDetailsModifier`
-- `PaymentDetailsInit`
-- `PaymentRequest`
-- `PaymentResponse`
-- `ContactAddress`
-- `AddressErrors`
+- `PaymentCurrencyAmount` - 金額と通貨コードの表現
+- `PaymentItem` - 支払い項目（商品、配送料、税金など）
+- `PaymentShippingOption` - 配送オプション
+- `PaymentOptions` - 支払いオプション（配送先住所要求など）
+- `PaymentMethodData` - 支払い方法データ
+- `PaymentDetailsModifier` - 支払い詳細の修飾子
+- `PaymentDetailsInit` - 支払い詳細の初期化
+- `PaymentRequest` - W3C Payment Request API標準型
+- `PaymentResponse` - W3C Payment Response API標準型
+- `ContactAddress` - 連絡先住所
+- `AddressErrors` - 住所検証エラー
 
 **v2実装状況**: ❌ **完全に欠落**
 
 **影響**:
-- W3C Payment Request API準拠の実装ができない
-- CartMandateの`payment_request`フィールドが実装できない
-- PaymentMandateContentsの`payment_details_total`と`payment_response`が実装できない
+- ❌ **W3C Payment Request API準拠の実装ができない**（標準的なブラウザ支払いAPIとの統合不可）
+- ❌ **CartMandateの`payment_request`フィールドが実装できない**（カート内容の標準表現不可）
+- ❌ **PaymentMandateContentsの`payment_details_total`と`payment_response`が実装できない**（支払い実行の標準表現不可）
+- ❌ **AP2プロトコルの型定義基盤が欠落**（IntentMandate, CartMandate, PaymentMandateがすべてW3C型に依存）
 
-### 3.2 型定義準拠率
+**重要度**: 🔴 **CRITICAL**（AP2プロトコル実装の基盤型であり、これがないと他のすべてのMandate型が実装不可能）
+
+### 3.2 型定義準拠率と重要度別分類
 
 | カテゴリー | 必要な型数 | 実装済み | 未実装 | 準拠率 |
 |-----------|-----------|---------|--------|--------|
-| **Mandate型** | 5 | 0 | 5 | 0% |
+| **Mandate型（IntentMandate, CartContents, CartMandate, PaymentMandateContents, PaymentMandate）** | 5 | 0 | 5 | 0% |
 | **W3C Payment API型** | 11 | 0 | 11 | 0% |
 | **合計** | 16 | 0 | 16 | **0%** |
 
-**結論**: v2の型定義は、AP2公式仕様の型定義を**ほぼカバーできていません**。本格的な実装には、上記すべての型定義の追加が必要です。
+**重要度別の優先順位**:
+
+| 優先度 | 型名 | 理由 |
+|--------|------|------|
+| 🔴 **P0 (CRITICAL)** | W3C Payment Request API型群（11個） | すべてのMandateの基盤型。これがないと他のすべてが実装不可能 |
+| 🔴 **P0 (CRITICAL)** | merchant_authorization JWTペイロード | Merchant署名の真正性検証に必須（セキュリティリスク） |
+| 🔴 **P0 (CRITICAL)** | user_authorization SD-JWT-VC構成 | User署名の真正性とリプレイ攻撃対策に必須（セキュリティリスク） |
+| 🟡 **P1 (HIGH)** | CartContents, CartMandate | Cart署名フロー実装に必須 |
+| 🟡 **P1 (HIGH)** | PaymentMandateContents, PaymentMandate | Payment実行フロー実装に必須 |
+| 🟡 **P2 (MEDIUM)** | IntentMandate | Human-Not-Presentフロー（将来仕様）に必須 |
+
+**結論**: v2の型定義は、AP2公式仕様の型定義を**完全に欠落**しています。特に**P0（CRITICAL）の3項目**は、セキュリティとプロトコル基盤に直結するため、**本番環境移行前に必ず実装が必要**です。
 
 ---
 
