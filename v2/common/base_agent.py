@@ -6,6 +6,7 @@ v2/common/base_agent.py
 """
 
 import sys
+import os
 from pathlib import Path
 from abc import ABC, abstractmethod
 from typing import Dict, Any
@@ -17,6 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 # v2の暗号化モジュールをインポート
 from v2.common.crypto import KeyManager, SignatureManager
+from cryptography.hazmat.primitives import serialization
 
 from .models import A2AMessage
 from .a2a_handler import A2AMessageHandler
@@ -122,15 +124,15 @@ class BaseAgent(ABC):
         key_id = self.agent_id.split(":")[-1]
 
         try:
-            # 永続化ストレージから既存の鍵を読み込み（推奨）
-            self.key_manager.load_private_key_encrypted(key_id, self.passphrase)
+            # 永続化ストレージから既存のECDSA鍵を読み込み（JWT署名用）
+            self.key_manager.load_private_key_encrypted(key_id, self.passphrase, algorithm="ECDSA")
             logger.info(
-                f"[{self.agent_name}] ✓ 永続化ストレージから鍵を読み込みました: {key_id}"
+                f"[{self.agent_name}] ✓ ECDSA鍵を読み込みました: {key_id}"
             )
         except Exception as e:
             # 鍵が存在しない場合は生成（開発時のみ、本番環境では非推奨）
             logger.warning(
-                f"[{self.agent_name}] ⚠️  永続化された鍵が見つかりませんでした。新しく生成します。\n"
+                f"[{self.agent_name}] ⚠️  ECDSA鍵が見つかりませんでした。新しく生成します。\n"
                 f"   本番環境では v2/scripts/init_keys.py を実行してください。\n"
                 f"   Error: {e}"
             )
@@ -144,6 +146,41 @@ class BaseAgent(ABC):
             did_resolver = DIDResolver(self.key_manager)
             did_resolver.update_public_key(self.agent_id, key_id)
             logger.info(f"[{self.agent_name}] ✓ DIDドキュメントを更新しました: {self.agent_id}")
+
+        # Ed25519鍵を読み込み（A2A通信用）
+        try:
+            self.key_manager.load_private_key_encrypted(key_id, self.passphrase, algorithm="ED25519")
+            logger.info(
+                f"[{self.agent_name}] ✓ Ed25519鍵を読み込みました: {key_id}"
+            )
+        except Exception as e:
+            # Ed25519鍵が存在しない場合は生成
+            logger.warning(
+                f"[{self.agent_name}] ⚠️  Ed25519鍵が見つかりませんでした。新しく生成します。\n"
+                f"   本番環境では v2/scripts/init_keys.py を実行してください。\n"
+                f"   Error: {e}"
+            )
+            private_key, public_key = self.key_manager.generate_ed25519_key_pair(key_id)
+            # Ed25519鍵を保存（ファイル名に_ed25519サフィックスを付ける）
+            ed25519_private_file = Path(self.key_manager.keys_directory) / f"{key_id}_ed25519_private.pem"
+            encrypted_pem = private_key.private_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PrivateFormat.PKCS8,
+                encryption_algorithm=serialization.BestAvailableEncryption(self.passphrase.encode('utf-8'))
+            )
+            ed25519_private_file.write_bytes(encrypted_pem)
+            os.chmod(ed25519_private_file, 0o600)
+
+            ed25519_public_file = Path(self.key_manager.keys_directory) / f"{key_id}_ed25519_public.pem"
+            public_pem = public_key.public_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PublicFormat.SubjectPublicKeyInfo
+            )
+            ed25519_public_file.write_bytes(public_pem)
+
+            # メモリに保存
+            self.key_manager._active_keys[f"{key_id}_ED25519"] = private_key
+            logger.info(f"[{self.agent_name}] ✓ Ed25519鍵を生成しました: {key_id}")
 
     def _register_common_endpoints(self):
         """共通エンドポイントの登録"""

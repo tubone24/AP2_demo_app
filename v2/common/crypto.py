@@ -327,21 +327,25 @@ class KeyManager:
     def load_private_key_encrypted(
         self,
         key_id: str,
-        passphrase: str
-    ) -> ec.EllipticCurvePrivateKey:
+        passphrase: str,
+        algorithm: str = "ECDSA"
+    ):
         """
-        暗号化された秘密鍵を読み込み
+        暗号化された秘密鍵を読み込み（ECDSA/Ed25519両対応）
 
         Args:
             key_id: 鍵の識別子
             passphrase: パスフレーズ
+            algorithm: 鍵のアルゴリズム（ECDSA or ED25519）
 
         Returns:
-            ec.EllipticCurvePrivateKey: 秘密鍵
+            秘密鍵（EllipticCurvePrivateKey or Ed25519PrivateKey）
         """
-        logger.info(f"Loading private key: {key_id}")
+        algorithm_upper = algorithm.upper()
+        suffix = "_ed25519" if algorithm_upper == "ED25519" else ""
+        logger.info(f"Loading private key: {key_id} (algorithm: {algorithm})")
 
-        key_file = self.keys_directory / f"{key_id}_private.pem"
+        key_file = self.keys_directory / f"{key_id}{suffix}_private.pem"
 
         if not key_file.exists():
             raise CryptoError(f"秘密鍵ファイルが見つかりません: {key_file}")
@@ -357,8 +361,9 @@ class KeyManager:
                 backend=self.backend
             )
 
-            # メモリに保存
-            self._active_keys[key_id] = private_key
+            # メモリに保存（アルゴリズム別のkey_idを使用）
+            storage_key_id = f"{key_id}_{algorithm_upper}" if algorithm_upper == "ED25519" else key_id
+            self._active_keys[storage_key_id] = private_key
 
             logger.info("Private key loaded successfully")
             return private_key
@@ -415,9 +420,20 @@ class KeyManager:
 
         return public_key
 
-    def get_private_key(self, key_id: str) -> Optional[ec.EllipticCurvePrivateKey]:
-        """メモリ上の秘密鍵を取得"""
-        return self._active_keys.get(key_id)
+    def get_private_key(self, key_id: str, algorithm: str = "ECDSA"):
+        """
+        メモリ上の秘密鍵を取得（ECDSA/Ed25519両対応）
+
+        Args:
+            key_id: 鍵の識別子
+            algorithm: アルゴリズム（ECDSA or ED25519）
+
+        Returns:
+            秘密鍵（EllipticCurvePrivateKey or Ed25519PrivateKey）
+        """
+        algorithm_upper = algorithm.upper()
+        storage_key_id = f"{key_id}_{algorithm_upper}" if algorithm_upper == "ED25519" else key_id
+        return self._active_keys.get(storage_key_id)
 
     def public_key_to_pem(self, public_key: ec.EllipticCurvePublicKey) -> str:
         """公開鍵をPEM文字列に変換"""
@@ -582,10 +598,10 @@ class SignatureManager:
         """
         logger.debug(f"Signing data (key_id: {key_id}, algorithm: {algorithm})")
 
-        # 秘密鍵を取得
-        private_key = self.key_manager.get_private_key(key_id)
+        # 秘密鍵を取得（アルゴリズムに応じて適切な鍵を取得）
+        private_key = self.key_manager.get_private_key(key_id, algorithm=algorithm)
         if private_key is None:
-            raise CryptoError(f"秘密鍵が見つかりません: {key_id}")
+            raise CryptoError(f"秘密鍵が見つかりません: {key_id} (algorithm: {algorithm})")
 
         algorithm_upper = algorithm.upper()
 
@@ -605,8 +621,8 @@ class SignatureManager:
             elif isinstance(data, bytes):
                 message = data
             else:
-                # 辞書などの場合はJSON文字列化
-                message = json.dumps(data, ensure_ascii=False).encode('utf-8')
+                # 辞書などの場合はRFC 8785 JSON正規化を使用（AP2仕様準拠）
+                message = canonicalize_json(data).encode('utf-8')
 
             signature_bytes = private_key.sign(message)
         else:
@@ -652,31 +668,28 @@ class SignatureManager:
             # 署名をデコード
             signature_bytes = base64.b64decode(signature.value.encode('utf-8'))
 
-            # アルゴリズムに応じて検証方法を切り替え
-            algorithm = signature.algorithm.upper()
+            # 公開鍵の型に応じて検証方法を切り替え（型チェックが最も確実）
+            from cryptography.hazmat.primitives.asymmetric import ed25519
 
-            if algorithm in ["ECDSA", "ES256"]:
-                # ECDSA検証
-                data_hash = self._hash_data(data)
-                public_key.verify(
-                    signature_bytes,
-                    data_hash,
-                    ec.ECDSA(hashes.SHA256())
-                )
-            elif algorithm == "ED25519":
+            if isinstance(public_key, ed25519.Ed25519PublicKey):
                 # Ed25519検証（メッセージを直接検証、ハッシュ不要）
                 if isinstance(data, str):
                     message = data.encode('utf-8')
                 elif isinstance(data, bytes):
                     message = data
                 else:
-                    # 辞書などの場合はJSON文字列化
-                    message = json.dumps(data, ensure_ascii=False).encode('utf-8')
+                    # 辞書などの場合はRFC 8785 JSON正規化を使用（AP2仕様準拠）
+                    message = canonicalize_json(data).encode('utf-8')
 
                 public_key.verify(signature_bytes, message)
             else:
-                logger.error(f"Unsupported algorithm: {algorithm}")
-                return False
+                # ECDSA検証（デフォルト）
+                data_hash = self._hash_data(data)
+                public_key.verify(
+                    signature_bytes,
+                    data_hash,
+                    ec.ECDSA(hashes.SHA256())
+                )
 
             log_crypto_operation(logger, "verify", signature.algorithm, signature.key_id or "unknown", success=True)
             return True
@@ -715,10 +728,13 @@ class SignatureManager:
             return self.sign_data(signing_data, key_id)
 
         # 他のMandateタイプの場合は、署名対象からsignatureフィールドとmandate_metadataを除外
+        # AP2仕様準拠：merchant_authorizationは署名「後」に追加されるため、署名計算に含めない
         # mandate_metadataは署名後に追加されるため、署名計算に含めない
-        mandate_copy = mandate.copy()
+        import copy
+        mandate_copy = copy.deepcopy(mandate)  # Deep copyでネスト構造も複製
         mandate_copy.pop('user_signature', None)
         mandate_copy.pop('merchant_signature', None)
+        mandate_copy.pop('merchant_authorization', None)  # AP2仕様：署名後に追加されるJWT
         mandate_copy.pop('mandate_metadata', None)  # メタデータを除外（署名後に追加されるため）
 
         return self.sign_data(mandate_copy, key_id)
@@ -748,18 +764,22 @@ class SignatureManager:
             return self.verify_signature(verification_data, signature)
 
         # 他のMandateタイプの場合は、署名対象からsignatureフィールドとmandate_metadataを除外
+        # AP2仕様準拠：merchant_authorizationは署名「後」に追加されるため、検証時は除外
         # mandate_metadataは署名後に追加されるため、検証時も除外する
-        mandate_copy = mandate.copy()
+        import copy
+        mandate_copy = copy.deepcopy(mandate)  # Deep copyでネスト構造も複製
         mandate_copy.pop('user_signature', None)
         mandate_copy.pop('merchant_signature', None)
-        mandate_copy.pop('mandate_metadata', None)  # メタデータを除外（署名時と同じ状態にする）
+        mandate_copy.pop('merchant_authorization', None)  # AP2仕様：署名後に追加されるJWT
+        mandate_copy.pop('mandate_metadata', None)  # メタデータを除外（署名後に追加されるため）
 
         return self.verify_signature(mandate_copy, signature)
 
     def sign_a2a_message(
         self,
         a2a_message_dict: Dict[str, Any],
-        sender_key_id: str
+        sender_key_id: str,
+        algorithm: str = "ED25519"
     ) -> Signature:
         """
         A2Aメッセージ全体に署名（メッセージレベル署名）
@@ -767,21 +787,24 @@ class SignatureManager:
         A2A仕様準拠：
         - header.proof と header.signature を除外してCanonical JSONから署名を作成
         - canonicalize_a2a_message() 関数を使用
+        - Ed25519署名を使用（より高速で安全、ECDSA P-256より短い署名長）
 
         Args:
             a2a_message_dict: A2Aメッセージの辞書表現（headerを含む）
             sender_key_id: 送信者の秘密鍵ID
+            algorithm: 署名アルゴリズム（デフォルト: ED25519、後方互換性のためECDSAもサポート）
 
         Returns:
             Signature: メッセージ署名
         """
-        logger.debug(f"Signing A2A message (sender: {sender_key_id})")
+        logger.debug(f"Signing A2A message (sender: {sender_key_id}, algorithm: {algorithm})")
 
         # Canonical JSON文字列を生成（header.proof/signatureを除外）
         canonical_json = canonicalize_a2a_message(a2a_message_dict)
+        logger.debug(f"[SIGN] Canonical JSON length: {len(canonical_json)}, first 200 chars: {canonical_json[:200]}")
 
-        # 署名を作成
-        return self.sign_data(canonical_json, sender_key_id)
+        # 署名を作成（Ed25519を優先使用）
+        return self.sign_data(canonical_json, sender_key_id, algorithm=algorithm)
 
     def verify_a2a_message_signature(
         self,
@@ -806,6 +829,7 @@ class SignatureManager:
 
         # Canonical JSON文字列を生成（header.proof/signatureを除外）
         canonical_json = canonicalize_a2a_message(a2a_message_dict)
+        logger.debug(f"[VERIFY] Canonical JSON length: {len(canonical_json)}, first 200 chars: {canonical_json[:200]}")
 
         # 署名を検証
         return self.verify_signature(canonical_json, signature)
