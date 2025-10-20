@@ -629,31 +629,76 @@ class ShoppingAgent(BaseAgent):
                     f"session_id={session_id}"
                 )
 
-                # AP2完全準拠: CartMandateは変更せず、Merchant署名のままPayment Processorに送信
-                # User署名情報（WebAuthn assertion）はPaymentMandateのuser_authorizationに含める
-                # CartMandateの内容を変更すると、merchant_authorization JWTのcart_hashと一致しなくなる
+                # CartMandateにuser署名を追加
+                # AP2仕様: user_authorizationはPaymentMandateに追加されるため、
+                # CartMandateには署名フラグのみ設定
+                signed_cart_mandate = cart_mandate.copy()
+                signed_cart_mandate["user_signed"] = True
+                signed_cart_mandate["user_signed_at"] = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
 
-                # WebAuthn assertionをセッションに保存（PaymentMandate生成時にuser_authorization作成に使用）
+                # WebAuthn assertionをセッションに保存（PaymentMandate生成時に使用）
                 session["cart_webauthn_assertion"] = webauthn_assertion
-                # CartMandateは変更せずそのまま保持（Merchant署名時のハッシュを維持）
+                session["cart_mandate"] = signed_cart_mandate
 
-                # AP2完全準拠: CartMandate署名完了後、PaymentMandate作成へ進む
-                # Credential Provider選択と支払い方法選択はPaymentMandate作成時に行う
-                session["step"] = "payment_mandate_creation"
+                # AP2仕様準拠: CartMandate署名完了後、支払い方法選択へ進む
+                # Credential Providerから支払い方法リストを取得
+                selected_cp = session.get("selected_credential_provider")
+
+                logger.info(
+                    f"[submit_cart_signature] Session state check: "
+                    f"selected_credential_provider={selected_cp}, "
+                    f"session_keys={list(session.keys())}"
+                )
+
+                if not selected_cp:
+                    # Credential Providerが未選択の場合、デフォルトを使用
+                    # （通常のフローではCartMandate作成前に選択されているはず）
+                    if self.credential_providers:
+                        selected_cp = self.credential_providers[0]
+                        session["selected_credential_provider"] = selected_cp
+                        logger.warning(
+                            f"[submit_cart_signature] Credential Provider not selected, "
+                            f"using default: {selected_cp['id']}"
+                        )
+                    else:
+                        logger.error("[submit_cart_signature] No Credential Providers available")
+                        raise HTTPException(
+                            status_code=500,
+                            detail="No Credential Providers available"
+                        )
+
+                # Credential Providerから支払い方法を取得
+                cp_url = selected_cp.get("url", "http://localhost:8003")
+                logger.info(f"[submit_cart_signature] Fetching payment methods from: {cp_url}")
+
+                response = await self.http_client.get(
+                    f"{cp_url}/payment-methods",
+                    timeout=10.0
+                )
+                payment_methods_result = response.json()
+                payment_methods = payment_methods_result.get("payment_methods", [])
+
+                logger.info(
+                    f"[submit_cart_signature] Retrieved {len(payment_methods)} payment methods"
+                )
+
+                session["available_payment_methods"] = payment_methods
+                session["step"] = "select_payment_method"
 
                 # セッション保存
                 await self._update_session(session_id, session)
 
                 logger.info(
                     f"[submit_cart_signature] CartMandate signed by user: "
-                    f"cart_id={cart_mandate.get('id')}, next_step=payment_mandate_creation"
+                    f"cart_id={cart_mandate.get('id')}, next_step=select_payment_method"
                 )
 
-                # AP2完全準拠: CartMandate署名完了後、Credential Provider選択へ進む
+                # 自動的に次のステップ（支払い方法選択）に進む
                 return {
                     "status": "success",
                     "message": "CartMandate signed successfully",
-                    "next_step": "payment_mandate_creation"
+                    "next_step": "select_payment_method",
+                    "payment_methods": payment_methods
                 }
 
             except HTTPException:
@@ -1331,6 +1376,105 @@ class ShoppingAgent(BaseAgent):
             session["step"] = "shipping_address_input"
             return
 
+        # ステップ6: Credential Provider選択後、配送先入力（AP2仕様準拠）
+        elif current_step == "select_credential_provider":
+            # Credential Provider選択を処理（番号で選択）
+            user_input_clean = user_input.strip()
+            selected_provider = None
+
+            # 番号で選択
+            if user_input_clean.isdigit():
+                index = int(user_input_clean) - 1
+                if 0 <= index < len(self.credential_providers):
+                    selected_provider = self.credential_providers[index]
+
+            # IDで選択
+            if not selected_provider:
+                for provider in self.credential_providers:
+                    if provider["id"] in user_input:
+                        selected_provider = provider
+                        break
+
+            if not selected_provider:
+                yield StreamEvent(
+                    type="agent_text",
+                    content=f"Credential Providerが認識できませんでした。番号（1〜{len(self.credential_providers)}）を入力してください。"
+                )
+                return
+
+            # セッションに保存
+            session["selected_credential_provider"] = selected_provider
+            logger.info(
+                f"[ShoppingAgent] Credential Provider selected: "
+                f"{selected_provider['id']} ({selected_provider['name']})"
+            )
+
+            # AP2仕様：配送先はCartMandate作成「前」に確定する必要がある
+            # 配送先によって配送料が変わり、カート価格に影響するため
+
+            yield StreamEvent(
+                type="agent_text",
+                content=f"✅ {selected_provider['name']}を選択しました。次に商品の配送先を入力してください。"
+            )
+            await asyncio.sleep(0.3)
+
+            # 既存の配送先があればそれをデフォルト値として使用
+            existing_shipping = session.get("shipping_address", {})
+
+            yield StreamEvent(
+                type="shipping_form_request",
+                form_schema={
+                    "type": "shipping_address",
+                    "fields": [
+                        {
+                            "name": "recipient",
+                            "label": "受取人名",
+                            "type": "text",
+                            "placeholder": "山田太郎",
+                            "default": existing_shipping.get("recipient", ""),
+                            "required": True
+                        },
+                        {
+                            "name": "postal_code",
+                            "label": "郵便番号",
+                            "type": "text",
+                            "placeholder": "150-0001",
+                            "default": existing_shipping.get("postal_code", ""),
+                            "required": True
+                        },
+                        {
+                            "name": "address_line1",
+                            "label": "住所1（都道府県・市区町村・番地）",
+                            "type": "text",
+                            "placeholder": "東京都渋谷区神宮前1-1-1",
+                            "default": existing_shipping.get("address_line1", ""),
+                            "required": True
+                        },
+                        {
+                            "name": "address_line2",
+                            "label": "住所2（建物名・部屋番号など）",
+                            "type": "text",
+                            "placeholder": "サンプルマンション101",
+                            "default": existing_shipping.get("address_line2", ""),
+                            "required": False
+                        },
+                        {
+                            "name": "country",
+                            "label": "国",
+                            "type": "select",
+                            "options": [
+                                {"value": "JP", "label": "日本"},
+                                {"value": "US", "label": "アメリカ"}
+                            ],
+                            "default": existing_shipping.get("country", "JP") if existing_shipping else "JP",
+                            "required": True
+                        }
+                    ]
+                }
+            )
+
+            session["step"] = "shipping_address_input"
+            return
 
         # ステップ6.1: 配送先入力完了後、商品検索（Merchant AgentへA2A通信）
         elif current_step == "shipping_address_input":
@@ -1955,112 +2099,7 @@ class ShoppingAgent(BaseAgent):
                 session["step"] = "error"
                 return
 
-        # AP2完全準拠: ステップ7: PaymentMandate作成（Credential Provider選択 → 支払い方法選択）
-        elif current_step == "payment_mandate_creation":
-            # 特殊なトークン: CartMandate署名完了後の自動遷移
-            if user_input.startswith("_cart_signature_completed"):
-                # Credential Provider選択UIを表示
-                yield StreamEvent(
-                    type="agent_text",
-                    content="✅ CartMandate署名完了しました！次に決済に使用するCredential Providerを選択してください。"
-                )
-                await asyncio.sleep(0.2)
-
-                yield StreamEvent(
-                    type="credential_provider_selection",
-                    providers=self.credential_providers
-                )
-                session["step"] = "select_credential_provider_for_payment"
-                return
-            else:
-                # 予期しない入力
-                yield StreamEvent(
-                    type="agent_text",
-                    content="CartMandate署名を完了してください。"
-                )
-                return
-
-        # AP2完全準拠: Credential Provider選択（PaymentMandate作成用）
-        elif current_step == "select_credential_provider_for_payment":
-            # Credential Provider選択を処理（番号で選択）
-            user_input_clean = user_input.strip()
-            selected_provider = None
-
-            # 番号で選択
-            if user_input_clean.isdigit():
-                index = int(user_input_clean) - 1
-                if 0 <= index < len(self.credential_providers):
-                    selected_provider = self.credential_providers[index]
-
-            # IDで選択
-            if not selected_provider:
-                for provider in self.credential_providers:
-                    if provider["id"] in user_input:
-                        selected_provider = provider
-                        break
-
-            if not selected_provider:
-                yield StreamEvent(
-                    type="agent_text",
-                    content=f"Credential Providerが認識できませんでした。番号（1〜{len(self.credential_providers)}）を入力してください。"
-                )
-                return
-
-            # セッションに保存
-            session["selected_credential_provider"] = selected_provider
-            logger.info(
-                f"[ShoppingAgent] Credential Provider selected for payment: "
-                f"{selected_provider['id']} ({selected_provider['name']})"
-            )
-
-            # Credential Providerから支払い方法を取得
-            try:
-                cp_url = selected_provider.get("url", "http://localhost:8003")
-                user_id = session.get("user_id", "user_demo_001")  # AP2: ユーザーIDが必須
-
-                response = await self.http_client.get(
-                    f"{cp_url}/payment-methods",
-                    params={"user_id": user_id},  # AP2準拠: user_idをクエリパラメータで渡す
-                    timeout=10.0
-                )
-                payment_methods_result = response.json()
-                payment_methods = payment_methods_result.get("payment_methods", [])
-
-                if not payment_methods:
-                    yield StreamEvent(
-                        type="agent_text",
-                        content="申し訳ありません。利用可能な支払い方法が見つかりませんでした。"
-                    )
-                    session["step"] = "error"
-                    return
-
-                session["available_payment_methods"] = payment_methods
-
-                # 支払い方法選択UIを表示
-                yield StreamEvent(
-                    type="agent_text",
-                    content=f"✅ {selected_provider['name']}を選択しました。次に支払い方法を選択してください。"
-                )
-                await asyncio.sleep(0.2)
-
-                yield StreamEvent(
-                    type="payment_method_selection",
-                    payment_methods=payment_methods
-                )
-
-                session["step"] = "select_payment_method"
-                return
-
-            except Exception as e:
-                logger.error(f"[_generate_fixed_response] Payment methods retrieval failed: {e}")
-                yield StreamEvent(
-                    type="agent_text",
-                    content=f"申し訳ありません。支払い方法の取得に失敗しました: {str(e)}"
-                )
-                session["step"] = "error"
-                return
-
-        # ステップ8: 支払い方法選択 → PaymentMandate作成・決済実行
+        # ステップ7.5: 支払い方法選択 → CartMandate作成
         elif current_step == "select_payment_method":
             available_payment_methods = session.get("available_payment_methods", [])
             if not available_payment_methods:
@@ -2069,6 +2108,21 @@ class ShoppingAgent(BaseAgent):
                     content="申し訳ございません。支払い方法リストが見つかりません。"
                 )
                 session["step"] = "error"
+                return
+
+            # 特殊なトークン: CartMandate署名完了後の自動遷移
+            if user_input.startswith("_cart_signature_completed"):
+                # 支払い方法選択UIを表示
+                yield StreamEvent(
+                    type="agent_text",
+                    content="✅ CartMandate署名完了しました！次に支払い方法を選択してください。"
+                )
+                await asyncio.sleep(0.2)
+
+                yield StreamEvent(
+                    type="payment_method_selection",
+                    payment_methods=available_payment_methods
+                )
                 return
 
             # 支払い方法選択（番号）
