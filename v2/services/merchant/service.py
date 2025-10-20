@@ -155,15 +155,30 @@ class MerchantService(BaseAgent):
                     )
                     signed_cart_mandate["merchant_authorization"] = merchant_authorization_jwt
 
-                    # データベースに保存
-                    async with self.db_manager.get_session() as session:
-                        await MandateCRUD.create(session, {
-                            "id": cart_mandate["id"],
-                            "type": "Cart",
-                            "status": "signed",
-                            "payload": signed_cart_mandate,
-                            "issuer": self.agent_id
-                        })
+                    # データベースに保存（既存のものがあれば更新）
+                    async with self.db_manager.get_session() as db_session:
+                        # 既存のMandateをチェック
+                        existing_mandate = await MandateCRUD.get_by_id(db_session, cart_mandate["id"])
+
+                        if existing_mandate:
+                            # 既存のMandateを更新
+                            await MandateCRUD.update_status(
+                                db_session,
+                                cart_mandate["id"],
+                                "signed",
+                                signed_cart_mandate
+                            )
+                            logger.info(f"[Merchant] Updated existing CartMandate: {cart_mandate['id']}")
+                        else:
+                            # 新規作成
+                            await MandateCRUD.create(db_session, {
+                                "id": cart_mandate["id"],
+                                "type": "Cart",
+                                "status": "signed",
+                                "payload": signed_cart_mandate,
+                                "issuer": self.agent_id
+                            })
+                            logger.info(f"[Merchant] Created new CartMandate: {cart_mandate['id']}")
 
                     logger.info(
                         f"[Merchant] Auto-signed CartMandate: {cart_mandate['id']} "

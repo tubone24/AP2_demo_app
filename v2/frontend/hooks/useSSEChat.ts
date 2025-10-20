@@ -23,14 +23,19 @@ export function useSSEChat() {
   const sessionIdRef = useRef<string>(`session_${Date.now()}_${Math.random().toString(36).substring(7)}`);
 
   const sendMessage = useCallback(async (userInput: string) => {
-    // ユーザーメッセージを追加
-    const userMessage: ChatMessage = {
-      id: `user-${Date.now()}`,
-      role: "user",
-      content: userInput,
-      timestamp: new Date(),
-    };
-    setMessages((prev) => [...prev, userMessage]);
+    // 特殊なトークンの場合はユーザーメッセージを表示しない
+    const isInternalTrigger = userInput.startsWith("_");
+
+    // ユーザーメッセージを追加（内部トリガーの場合はスキップ）
+    if (!isInternalTrigger) {
+      const userMessage: ChatMessage = {
+        id: `user-${Date.now()}`,
+        role: "user",
+        content: userInput,
+        timestamp: new Date(),
+      };
+      setMessages((prev) => [...prev, userMessage]);
+    }
 
     // ストリーミング開始
     setIsStreaming(true);

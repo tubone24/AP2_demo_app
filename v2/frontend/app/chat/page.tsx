@@ -147,27 +147,70 @@ export default function ChatPage() {
     try {
       if (!signatureRequest) return;
 
-      // Credential Providerに署名を送信
-      const credentialProviderUrl = process.env.NEXT_PUBLIC_CREDENTIAL_PROVIDER_URL || "http://localhost:8003";
-      const verifyResponse = await fetch(`${credentialProviderUrl}/verify/attestation`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          payment_mandate: signatureRequest.mandate,
-          attestation: attestation,
-        }),
-      });
+      const shoppingAgentUrl = process.env.NEXT_PUBLIC_SHOPPING_AGENT_URL || "http://localhost:8000";
 
-      const verifyResult = await verifyResponse.json();
-      console.log("Verification result:", verifyResult);
+      // AP2仕様準拠: CartMandate署名とその他の署名を分ける
+      if (signatureRequest.mandate_type === "cart") {
+        // CartMandate署名: POST /cart/submit-signature
+        console.log("Submitting CartMandate signature to Shopping Agent:", {
+          session_id: sessionId,
+          cart_mandate: signatureRequest.mandate,
+          webauthn_assertion: attestation,
+        });
 
-      clearSignatureRequest();
+        const response = await fetch(`${shoppingAgentUrl}/cart/submit-signature`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            session_id: sessionId,
+            cart_mandate: signatureRequest.mandate,
+            webauthn_assertion: attestation,
+          }),
+        });
 
-      if (verifyResult.verified) {
-        // 署名完了を自動的にエージェントに通知
-        sendMessage("署名完了");
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const result = await response.json();
+        console.log("CartMandate signature result:", result);
+
+        clearSignatureRequest();
+
+        if (result.status === "success") {
+          // AP2仕様準拠: CartMandate署名完了後、自動的にCredential Provider選択へ進む
+          // 内部的に空メッセージを送信して次のステップをトリガー（ユーザーには表示されない）
+          console.log("CartMandate signature successful - triggering next step automatically");
+
+          // ユーザーメッセージを追加せずに、バックエンドに次のステップをトリガー
+          sendMessage("_cart_signature_completed");  // 特殊なトークン
+        } else {
+          sendMessage("CartMandate署名の処理に失敗しました。");
+        }
       } else {
-        sendMessage("署名の検証に失敗しました。もう一度お試しください。");
+        // 従来の署名フロー（IntentMandate等）
+        // Credential Providerに署名を送信
+        const credentialProviderUrl = process.env.NEXT_PUBLIC_CREDENTIAL_PROVIDER_URL || "http://localhost:8003";
+        const verifyResponse = await fetch(`${credentialProviderUrl}/verify/attestation`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            payment_mandate: signatureRequest.mandate,
+            attestation: attestation,
+          }),
+        });
+
+        const verifyResult = await verifyResponse.json();
+        console.log("Verification result:", verifyResult);
+
+        clearSignatureRequest();
+
+        if (verifyResult.verified) {
+          // 署名完了を自動的にエージェントに通知
+          sendMessage("署名完了");
+        } else {
+          sendMessage("署名の検証に失敗しました。もう一度お試しください。");
+        }
       }
     } catch (error: any) {
       console.error("Signature verification error:", error);
