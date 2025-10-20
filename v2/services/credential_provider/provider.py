@@ -13,7 +13,7 @@ import json
 import base64
 from pathlib import Path
 from typing import Dict, Any, List, Optional
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import logging
 import httpx
 
@@ -362,7 +362,16 @@ class CredentialProviderService(BaseAgent):
                             session, credential_id, new_counter
                         )
 
-                        logger.info(f"[verify_attestation] Signature counter updated: {passkey_credential.counter} → {new_counter}")
+                        if new_counter == 0:
+                            logger.info(
+                                f"[verify_attestation] Signature counter: {passkey_credential.counter} → {new_counter} "
+                                f"(AP2準拠: Authenticatorがcounterを実装していない場合でも、"
+                                f"user_authorizationのnonceによりリプレイ攻撃は防止されます)"
+                            )
+                        else:
+                            logger.info(
+                                f"[verify_attestation] Signature counter updated: {passkey_credential.counter} → {new_counter}"
+                            )
 
                         # トークン発行（Credential Provider内部の認証トークン）
                         token = self._generate_token(payment_mandate, attestation)
@@ -556,7 +565,7 @@ class CredentialProviderService(BaseAgent):
               "payment_method_id": "pm_003",
               "transaction_context": {
                 "amount": {"value": "10000.00", "currency": "JPY"},
-                "merchant_id": "did:ap2:merchant:demo_merchant"
+                "merchant_id": "did:ap2:merchant:mugibo_merchant"
               },
               "return_url": "http://localhost:3000/payment/step-up-callback"
             }
@@ -793,7 +802,11 @@ class CredentialProviderService(BaseAgent):
                                     
                                     if (result.status === 'completed') {{
                                         alert('認証が完了しました。元のページに戻ります。');
-                                        window.location.href = result.return_url + '?step_up_status=success&session_id={session_id}';
+                                        // AP2準拠：return_urlのクエリパラメータにstep_up_statusを追加
+                                        const returnUrl = new URL(result.return_url, window.location.origin);
+                                        returnUrl.searchParams.set('step_up_status', 'success');
+                                        returnUrl.searchParams.set('step_up_session_id', '{session_id}');
+                                        window.location.href = returnUrl.toString();
                                     }} else {{
                                         alert('認証に失敗しました: ' + result.message);
                                     }}
@@ -804,7 +817,11 @@ class CredentialProviderService(BaseAgent):
                             
                             function cancelStepUp() {{
                                 if (confirm('認証をキャンセルしますか？')) {{
-                                    window.location.href = '{session_data["return_url"]}?step_up_status=cancelled&session_id={session_id}';
+                                    // AP2準拠：return_urlのクエリパラメータにstep_up_statusを追加
+                                    const returnUrl = new URL('{session_data["return_url"]}', window.location.origin);
+                                    returnUrl.searchParams.set('step_up_status', 'cancelled');
+                                    returnUrl.searchParams.set('step_up_session_id', '{session_id}');
+                                    window.location.href = returnUrl.toString();
                                 }}
                             }}
                         </script>
@@ -915,6 +932,133 @@ class CredentialProviderService(BaseAgent):
                 raise
             except Exception as e:
                 logger.error(f"[complete_step_up] Error: {e}", exc_info=True)
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.post("/payment-methods/verify-step-up")
+        async def verify_step_up(request: Dict[str, Any]):
+            """
+            POST /payment-methods/verify-step-up - Step-up完了確認
+
+            Shopping Agentがstep-up認証完了後に呼び出して、
+            認証が成功したかを確認し、支払い方法情報を取得する
+
+            リクエスト:
+            {
+              "session_id": "stepup_abc123"
+            }
+
+            レスポンス:
+            {
+              "verified": true | false,
+              "payment_method": {...},  // verified=trueの場合のみ
+              "token": "...",  // verified=trueの場合のみ
+              "message": "..."
+            }
+            """
+            try:
+                session_id = request.get("session_id")
+
+                if not session_id:
+                    raise HTTPException(status_code=400, detail="session_id is required")
+
+                # Step-upセッション取得
+                session_data = self.step_up_sessions.get(session_id)
+
+                if not session_data:
+                    logger.warning(f"[verify_step_up] Session not found: {session_id}")
+                    return {
+                        "verified": False,
+                        "message": "Step-up session not found"
+                    }
+
+                # 有効期限チェック
+                expires_at = datetime.fromisoformat(session_data["expires_at"])
+                if datetime.now(timezone.utc) > expires_at:
+                    logger.warning(f"[verify_step_up] Session expired: {session_id}")
+                    return {
+                        "verified": False,
+                        "message": "Step-up session expired"
+                    }
+
+                # 完了状態チェック
+                status = session_data.get("status")
+                if status == "completed":
+                    logger.info(f"[verify_step_up] Step-up verified successfully: {session_id}")
+                    return {
+                        "verified": True,
+                        "payment_method": session_data["payment_method"],
+                        "token": session_data.get("token"),
+                        "message": "Step-up authentication verified successfully"
+                    }
+                elif status == "failed":
+                    logger.warning(f"[verify_step_up] Step-up failed: {session_id}")
+                    return {
+                        "verified": False,
+                        "message": "Step-up authentication failed"
+                    }
+                else:
+                    # まだ完了していない
+                    logger.info(f"[verify_step_up] Step-up not yet completed: {session_id}, status={status}")
+                    return {
+                        "verified": False,
+                        "message": "Step-up authentication not yet completed"
+                    }
+
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"[verify_step_up] Error: {e}", exc_info=True)
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.post("/passkey/get-public-key")
+        async def get_passkey_public_key(request: Dict[str, Any]):
+            """
+            POST /passkey/get-public-key - Passkey公開鍵取得
+
+            WebAuthn assertion時に、credential_idから公開鍵を取得する
+
+            リクエスト:
+            {
+              "credential_id": "base64url_credential_id",
+              "user_id": "user_demo_001"  // オプション
+            }
+
+            レスポンス:
+            {
+              "credential_id": "...",
+              "public_key_cose": "base64_encoded_cose_key",
+              "user_id": "..."
+            }
+            """
+            try:
+                credential_id = request.get("credential_id")
+
+                if not credential_id:
+                    raise HTTPException(status_code=400, detail="credential_id is required")
+
+                # データベースからPasskey認証情報を取得
+                async with self.db_manager.get_session() as db_session:
+                    passkey = await PasskeyCredentialCRUD.get_by_credential_id(db_session, credential_id)
+
+                    if not passkey:
+                        logger.warning(f"[get_passkey_public_key] Passkey not found: {credential_id}")
+                        raise HTTPException(status_code=404, detail="Passkey credential not found")
+
+                    logger.info(
+                        f"[get_passkey_public_key] Public key retrieved: "
+                        f"credential_id={credential_id[:16]}..., user_id={passkey.user_id}"
+                    )
+
+                    return {
+                        "credential_id": passkey.credential_id,
+                        "public_key_cose": passkey.public_key_cose,
+                        "user_id": passkey.user_id
+                    }
+
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"[get_passkey_public_key] Error: {e}", exc_info=True)
                 raise HTTPException(status_code=500, detail=str(e))
 
         @self.app.post("/receipts")

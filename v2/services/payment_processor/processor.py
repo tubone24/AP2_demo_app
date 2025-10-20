@@ -793,11 +793,13 @@ class PaymentProcessorService(BaseAgent):
 
                 logger.info(
                     f"[PaymentProcessor] ✓ SD-JWT-VC user_authorization verified: "
-                    f"cart_hash_match=True, payment_hash_match=True"
+                    f"cart_hash_match=True, payment_hash_match=True, "
+                    f"webauthn_signature_verified=True"
                 )
 
-                # TODO: WebAuthn署名の検証（公開鍵が必要）
-                # 公開鍵はVP内のcnf claimから取得可能、またはCredential Providerに問い合わせ
+                # WebAuthn署名の暗号学的検証は verify_user_authorization_vp() 内で完了
+                # - VP内のIssuer JWTのcnf claimから公開鍵を抽出
+                # - ECDSA署名検証（authenticatorData + SHA256(clientDataJSON)）
 
             except ValueError as e:
                 logger.error(f"[PaymentProcessor] user_authorization SD-JWT-VC verification failed: {e}")

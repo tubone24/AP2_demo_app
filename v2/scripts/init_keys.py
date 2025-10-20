@@ -59,7 +59,7 @@ AGENTS = [
     },
     {
         "agent_id": "merchant",
-        "did": "did:ap2:merchant:demo_merchant",
+        "did": "did:ap2:merchant:mugibo_merchant",
         "name": "Merchant",
         "env_var": "AP2_MERCHANT_PASSPHRASE"
     },

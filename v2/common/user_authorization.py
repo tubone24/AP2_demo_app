@@ -52,25 +52,37 @@ def compute_mandate_hash(mandate: Dict[str, Any]) -> str:
     署名フィールド（merchant_signature、merchant_authorization、user_authorization）を
     自動的に除外してハッシュを計算します。
 
+    Note:
+        RFC 8785 (JSON Canonicalization Scheme) 準拠の正規化を使用。
+        rfc8785ライブラリが必要（pyproject.tomlで定義済み）。
+
     Args:
         mandate: CartMandate または PaymentMandate
 
     Returns:
         str: hex形式のハッシュ値
+
+    Raises:
+        ImportError: rfc8785ライブラリがインストールされていない場合
     """
     # 署名フィールドを除外（AP2仕様準拠）
     excluded_fields = {'merchant_signature', 'merchant_authorization', 'user_authorization'}
     mandate_for_hash = {k: v for k, v in mandate.items() if k not in excluded_fields}
 
     # RFC 8785準拠のJSON正規化
+    # Note: rfc8785は必須依存関係（pyproject.toml参照）
     try:
         import rfc8785
         canonical_bytes = rfc8785.dumps(mandate_for_hash)
-    except ImportError:
-        # フォールバック（警告）
-        logger.warning("rfc8785 not available, using json.dumps as fallback")
-        canonical_json = json.dumps(mandate_for_hash, sort_keys=True, separators=(',', ':'), ensure_ascii=False)
-        canonical_bytes = canonical_json.encode('utf-8')
+    except ImportError as e:
+        # rfc8785がインストールされていない場合はエラー
+        # フォールバックは使用せず、明示的にエラーを発生させる
+        error_msg = (
+            "rfc8785 library is required for RFC 8785 compliant JSON canonicalization. "
+            "Please install it: uv add rfc8785 or pip install rfc8785>=0.1.4"
+        )
+        logger.error(f"[compute_mandate_hash] {error_msg}")
+        raise ImportError(error_msg) from e
 
     return hashlib.sha256(canonical_bytes).hexdigest()
 
@@ -153,7 +165,8 @@ def create_user_authorization_vp(
     cart_mandate: Dict[str, Any],
     payment_mandate_contents: Dict[str, Any],
     user_id: str,
-    payment_processor_id: str = "did:ap2:agent:payment_processor"
+    payment_processor_id: str = "did:ap2:agent:payment_processor",
+    public_key_cose: Optional[str] = None
 ) -> str:
     """
     WebAuthn assertionからSD-JWT-VC形式のuser_authorizationを生成（AP2仕様完全準拠）
@@ -201,15 +214,45 @@ def create_user_authorization_vp(
         logger.info(f"[create_user_authorization_vp] cart_hash: {cart_hash[:16]}...")
         logger.info(f"[create_user_authorization_vp] payment_hash: {payment_hash[:16]}...")
 
-        # Step 3: 公開鍵を抽出（attestationObjectから）
-        try:
-            public_key, public_pem = extract_public_key_from_webauthn_assertion(webauthn_assertion)
-            logger.info(f"[create_user_authorization_vp] Extracted public key from attestation")
-        except ValueError:
-            # attestationObjectがない場合（assertion時）、公開鍵を埋め込まずに進む
-            # この場合、Credential Providerが公開鍵を提供する必要がある
-            logger.warning("[create_user_authorization_vp] No attestationObject, public key will not be embedded in VP")
-            public_pem = None
+        # Step 3: 公開鍵を取得
+        public_key = None
+
+        # 優先順位1: public_key_coseパラメータから公開鍵を復元
+        if public_key_cose:
+            try:
+                from fido2.cose import ES256
+                import cbor2
+
+                # COSE形式の公開鍵をデコード
+                cose_key_bytes = base64.b64decode(public_key_cose)
+                cose_key = cbor2.loads(cose_key_bytes)
+
+                # COSE keyからECDSA公開鍵を復元
+                from cryptography.hazmat.primitives.asymmetric.ec import (
+                    EllipticCurvePublicNumbers, SECP256R1
+                )
+                from cryptography.hazmat.backends import default_backend
+
+                x_bytes = cose_key[-2]  # x coordinate
+                y_bytes = cose_key[-3]  # y coordinate
+                x_int = int.from_bytes(x_bytes, byteorder='big')
+                y_int = int.from_bytes(y_bytes, byteorder='big')
+
+                public_numbers = EllipticCurvePublicNumbers(x_int, y_int, SECP256R1())
+                public_key = public_numbers.public_key(default_backend())
+
+                logger.info(f"[create_user_authorization_vp] Restored public key from COSE format")
+            except Exception as e:
+                logger.warning(f"[create_user_authorization_vp] Failed to restore public key from COSE: {e}")
+
+        # 優先順位2: attestationObjectから公開鍵を抽出
+        if not public_key:
+            try:
+                public_key, public_pem = extract_public_key_from_webauthn_assertion(webauthn_assertion)
+                logger.info(f"[create_user_authorization_vp] Extracted public key from attestation")
+            except ValueError:
+                # attestationObjectがない場合（assertion時）
+                logger.warning("[create_user_authorization_vp] No attestationObject, and no public_key_cose provided")
 
         # Step 4: Issuer-signed JWT を生成（公開鍵の確認）
         now = datetime.now(timezone.utc)
@@ -229,7 +272,7 @@ def create_user_authorization_vp(
         }
 
         # cnf claim（Confirmation Claim）: 公開鍵を含む
-        if public_pem:
+        if public_key:
             issuer_jwt_payload["cnf"] = {
                 "jwk": {
                     "kty": "EC",
@@ -238,6 +281,9 @@ def create_user_authorization_vp(
                     "y": base64url_encode(public_key.public_numbers().y.to_bytes(32, byteorder='big'))
                 }
             }
+            logger.info("[create_user_authorization_vp] cnf claim with JWK added to Issuer JWT")
+        else:
+            logger.warning("[create_user_authorization_vp] No public key available, cnf claim not added")
 
         # Issuer JWTをエンコード（署名なし、デバイス鍵で署名するため）
         issuer_jwt_str = (
@@ -297,6 +343,52 @@ def create_user_authorization_vp(
         raise ValueError(f"Failed to create user_authorization VP: {e}")
 
 
+def convert_vp_to_standard_format(vp_json: Dict[str, Any]) -> str:
+    """
+    JSON形式のVPを標準SD-JWT-VC形式（~区切り）に変換
+
+    標準形式: <issuer-jwt>~<kb-jwt>~
+
+    Args:
+        vp_json: JSON形式のVP（issuer_jwt, kb_jwt含む）
+
+    Returns:
+        str: 標準SD-JWT-VC形式の文字列
+    """
+    issuer_jwt = vp_json.get("issuer_jwt", "")
+    kb_jwt = vp_json.get("kb_jwt", "")
+
+    # 標準形式: <issuer-jwt>~<kb-jwt>~
+    # 最後の~はSD-JWT-VCの標準に従う（Disclosuresが空の場合）
+    standard_format = f"{issuer_jwt}~{kb_jwt}~"
+
+    return standard_format
+
+
+def convert_standard_format_to_vp(standard_format: str) -> Dict[str, Any]:
+    """
+    標準SD-JWT-VC形式（~区切り）をJSON形式のVPに変換
+
+    Args:
+        standard_format: 標準SD-JWT-VC形式の文字列（~区切り）
+
+    Returns:
+        Dict[str, Any]: JSON形式のVP
+    """
+    parts = standard_format.split('~')
+
+    if len(parts) < 2:
+        raise ValueError(f"Invalid SD-JWT-VC format: expected at least 2 parts, got {len(parts)}")
+
+    vp = {
+        "issuer_jwt": parts[0],
+        "kb_jwt": parts[1] if len(parts) > 1 else "",
+        # parts[2]以降はDisclosures（現在は未使用）
+    }
+
+    return vp
+
+
 def verify_user_authorization_vp(
     user_authorization: str,
     expected_cart_hash: Optional[str] = None,
@@ -351,8 +443,81 @@ def verify_user_authorization_vp(
             f"cart_hash={cart_hash[:16]}..., payment_hash={payment_hash[:16]}..."
         )
 
-        # Step 4: WebAuthn assertionの署名を検証（公開鍵が必要）
-        # この検証は別途行う必要がある（Credential Providerまたは公開鍵レジストリから公開鍵を取得）
+        # Step 4: WebAuthn assertionの署名を検証（AP2仕様完全準拠）
+        # 公開鍵はIssuer JWTのcnf claimから取得
+        issuer_jwt_str = vp.get("issuer_jwt")
+        if issuer_jwt_str:
+            try:
+                # Issuer JWTをデコード（署名検証なし、公開鍵抽出のため）
+                issuer_jwt_parts = issuer_jwt_str.split(".")
+                if len(issuer_jwt_parts) >= 2:
+                    issuer_payload_bytes = base64url_decode(issuer_jwt_parts[1])
+                    issuer_payload = json.loads(issuer_payload_bytes.decode('utf-8'))
+
+                    # cnf claimから公開鍵（JWK形式）を取得
+                    cnf = issuer_payload.get("cnf", {})
+                    jwk = cnf.get("jwk", {})
+
+                    if jwk and jwk.get("kty") == "EC" and jwk.get("crv") == "P-256":
+                        # JWKから公開鍵を再構築
+                        from cryptography.hazmat.primitives.asymmetric.ec import (
+                            EllipticCurvePublicNumbers, SECP256R1
+                        )
+                        from cryptography.hazmat.backends import default_backend
+                        from cryptography.hazmat.primitives.asymmetric import ec
+                        from cryptography.hazmat.primitives import hashes
+
+                        # X, Y座標をデコード
+                        x_bytes = base64url_decode(jwk["x"])
+                        y_bytes = base64url_decode(jwk["y"])
+                        x_int = int.from_bytes(x_bytes, byteorder='big')
+                        y_int = int.from_bytes(y_bytes, byteorder='big')
+
+                        # 公開鍵オブジェクトを構築
+                        public_numbers = EllipticCurvePublicNumbers(x_int, y_int, SECP256R1())
+                        public_key = public_numbers.public_key(default_backend())
+
+                        # WebAuthn assertionの署名を検証
+                        response = webauthn_assertion.get("response", {})
+                        authenticator_data_b64 = response.get("authenticatorData")
+                        client_data_json_b64 = response.get("clientDataJSON")
+                        signature_b64 = response.get("signature")
+
+                        if authenticator_data_b64 and client_data_json_b64 and signature_b64:
+                            # 署名対象データ: authenticatorData + SHA256(clientDataJSON)
+                            authenticator_data_bytes = base64url_decode(authenticator_data_b64)
+                            client_data_json_bytes = base64url_decode(client_data_json_b64)
+                            client_data_hash = hashlib.sha256(client_data_json_bytes).digest()
+                            signed_data = authenticator_data_bytes + client_data_hash
+
+                            # 署名をデコード
+                            signature_bytes = base64url_decode(signature_b64)
+
+                            # ECDSA署名を検証（P-256 + SHA-256）
+                            try:
+                                public_key.verify(
+                                    signature_bytes,
+                                    signed_data,
+                                    ec.ECDSA(hashes.SHA256())
+                                )
+                                logger.info(
+                                    "[verify_user_authorization_vp] ✓ WebAuthn signature verified successfully"
+                                )
+                            except Exception as sig_error:
+                                raise ValueError(f"WebAuthn signature verification failed: {sig_error}")
+                        else:
+                            logger.warning(
+                                "[verify_user_authorization_vp] WebAuthn assertion missing signature fields, "
+                                "skipping cryptographic verification"
+                            )
+                    else:
+                        logger.warning(
+                            "[verify_user_authorization_vp] No valid public key in cnf claim, "
+                            "skipping WebAuthn signature verification"
+                        )
+            except Exception as e:
+                logger.error(f"[verify_user_authorization_vp] Failed to verify WebAuthn signature: {e}")
+                raise ValueError(f"WebAuthn signature verification failed: {e}")
 
         # Step 5: Key-binding JWTのペイロードを検証
         kb_jwt_str = vp.get("kb_jwt")

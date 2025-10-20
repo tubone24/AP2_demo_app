@@ -34,7 +34,7 @@ from v2.common.models import (
     StreamEvent,
     ProductSearchRequest,
 )
-from v2.common.database import DatabaseManager, MandateCRUD, TransactionCRUD
+from v2.common.database import DatabaseManager, MandateCRUD, TransactionCRUD, AgentSessionCRUD
 from v2.common.risk_assessment import RiskAssessmentEngine
 from v2.common.crypto import WebAuthnChallengeManager, CryptoError
 from v2.common.user_authorization import create_user_authorization_vp
@@ -429,26 +429,17 @@ class ShoppingAgent(BaseAgent):
 
             async def event_generator() -> AsyncGenerator[str, None]:
                 try:
-                    # セッション初期化
-                    if session_id not in self.sessions:
-                        self.sessions[session_id] = {
-                            "messages": [],
-                            "step": "initial",  # 対話フローのステップ
-                            "intent": None,
-                            "max_amount": None,
-                            "categories": [],
-                            "brands": [],
-                            "intent_mandate": None,
-                            "cart_mandate": None,
-                        }
-
-                    session = self.sessions[session_id]
+                    # データベースからセッション取得または作成
+                    session = await self._get_or_create_session(session_id)
                     session["messages"].append({"role": "user", "content": request.user_input})
 
                     # 固定応答フロー（LLM統合前）
-                    async for event in self._generate_fixed_response(request.user_input, session):
+                    async for event in self._generate_fixed_response(request.user_input, session, session_id):
                         yield f"data: {json.dumps(event.model_dump(exclude_none=True))}\n\n"
                         await asyncio.sleep(0.1)  # 少し遅延を入れて自然に
+
+                    # セッション保存（最終状態）
+                    await self._update_session(session_id, session)
 
                     # 完了イベント
                     yield f"data: {json.dumps({'type': 'done'})}\n\n"
@@ -627,11 +618,15 @@ class ShoppingAgent(BaseAgent):
                 if not attestation:
                     raise HTTPException(status_code=400, detail="attestation is required")
 
-                # セッション取得
-                if session_id not in self.sessions:
-                    raise HTTPException(status_code=404, detail="Session not found")
+                # セッション取得（データベースから）
+                async with self.db_manager.get_session() as db_session:
+                    db_session_obj = await AgentSessionCRUD.get_by_session_id(db_session, session_id)
 
-                session = self.sessions[session_id]
+                    if not db_session_obj:
+                        raise HTTPException(status_code=404, detail="Session not found")
+
+                    # セッションデータを取得
+                    session = json.loads(db_session_obj.session_data)
 
                 # 現在のステップ確認
                 if session.get("step") != "webauthn_attestation_requested":
@@ -692,6 +687,32 @@ class ShoppingAgent(BaseAgent):
                 user_id = session.get("user_id", "user_demo_001")
 
                 try:
+                    # credential_idを取得してCredential Providerから公開鍵を取得
+                    credential_id = attestation.get("id")
+                    public_key_cose = None
+
+                    if credential_id:
+                        try:
+                            # Credential Providerから公開鍵を取得
+                            selected_cp = session.get("selected_credential_provider", self.credential_providers[0])
+                            public_key_response = await self.http_client.post(
+                                f"{selected_cp['url']}/passkey/get-public-key",
+                                json={"credential_id": credential_id, "user_id": user_id},
+                                timeout=10.0
+                            )
+                            public_key_response.raise_for_status()
+                            public_key_data = public_key_response.json()
+                            public_key_cose = public_key_data.get("public_key_cose")
+
+                            logger.info(
+                                f"[submit_payment_attestation] Public key retrieved from Credential Provider: "
+                                f"credential_id={credential_id[:16]}..."
+                            )
+                        except Exception as pk_error:
+                            logger.warning(
+                                f"[submit_payment_attestation] Failed to retrieve public key from CP: {pk_error}"
+                            )
+
                     # VP生成時、PaymentMandateからuser_authorizationフィールドを除外
                     # （ハッシュ計算の一貫性を保つため）
                     payment_mandate_for_vp = {k: v for k, v in payment_mandate.items() if k != "user_authorization"}
@@ -701,7 +722,8 @@ class ShoppingAgent(BaseAgent):
                         cart_mandate=cart_mandate,
                         payment_mandate_contents=payment_mandate_for_vp,
                         user_id=user_id,
-                        payment_processor_id="did:ap2:agent:payment_processor"
+                        payment_processor_id="did:ap2:agent:payment_processor",
+                        public_key_cose=public_key_cose
                     )
 
                     payment_mandate["user_authorization"] = user_authorization
@@ -851,7 +873,8 @@ class ShoppingAgent(BaseAgent):
     async def _generate_fixed_response(
         self,
         user_input: str,
-        session: Dict[str, Any]
+        session: Dict[str, Any],
+        session_id: str
     ) -> AsyncGenerator[StreamEvent, None]:
         """
         固定応答を生成（LLM統合前の簡易版）
@@ -864,9 +887,171 @@ class ShoppingAgent(BaseAgent):
         5. ブランド入力 → IntentMandate生成 → 署名リクエスト
         6. 署名完了 → 商品検索 → CartMandate提案
         7. カート承認 → PaymentMandate生成 → 決済
+
+        Args:
+            user_input: ユーザー入力
+            session: セッションデータ
+            session_id: セッションID（データベース保存用）
         """
         user_input_lower = user_input.lower()
         current_step = session.get("step", "initial")
+
+        # Step-up認証完了の処理
+        if user_input.startswith("step-up-completed:"):
+            step_up_session_id = user_input.split(":", 1)[1].strip()
+            logger.info(f"[ShoppingAgent] Step-up completed: session_id={step_up_session_id}")
+
+            # Credential Providerにstep-up完了を確認
+            selected_cp = session.get("selected_credential_provider", self.credential_providers[0])
+
+            try:
+                # Step-upセッション情報を取得
+                verify_response = await self.http_client.post(
+                    f"{selected_cp['url']}/payment-methods/verify-step-up",
+                    json={"session_id": step_up_session_id},
+                    timeout=10.0
+                )
+                verify_response.raise_for_status()
+                step_up_result = verify_response.json()
+
+                if step_up_result.get("verified"):
+                    # 認証成功 - 決済フローを続行
+                    payment_method = step_up_result.get("payment_method")
+                    session["selected_payment_method"] = payment_method
+
+                    # トークン化された支払い方法をセッションに保存
+                    # Step-up完了により、既に認証済みとみなす
+                    # 重要: step_up_resultからtokenとexpires_atを取得
+                    token = step_up_result.get("token")
+                    token_expires_at = step_up_result.get("token_expires_at")
+
+                    if not token:
+                        logger.error(f"[ShoppingAgent] Step-up verification did not return token: {step_up_result}")
+                        yield StreamEvent(
+                            type="agent_text",
+                            content="❌ 認証トークンが取得できませんでした。別の支払い方法を選択してください。"
+                        )
+                        session["step"] = "select_payment_method"
+                        return
+
+                    session["tokenized_payment_method"] = {
+                        **payment_method,
+                        "token": token,
+                        "token_expires_at": token_expires_at,
+                        "step_up_completed": True,
+                        "step_up_session_id": step_up_session_id
+                    }
+
+                    logger.info(
+                        f"[ShoppingAgent] Tokenized payment method set after step-up: "
+                        f"token={token[:20]}..., expires_at={token_expires_at}"
+                    )
+
+                    yield StreamEvent(
+                        type="agent_text",
+                        content=f"✅ 追加認証が完了しました。\n\n{payment_method['brand'].upper()} ****{payment_method['last4']}で決済を続行します。"
+                    )
+                    await asyncio.sleep(0.5)
+
+                    # PaymentMandateを作成
+                    yield StreamEvent(
+                        type="agent_text",
+                        content="決済情報を準備中..."
+                    )
+                    await asyncio.sleep(0.3)
+
+                    # CartMandateの存在確認
+                    if not session.get("cart_mandate"):
+                        selected_cart_mandate = session.get("selected_cart_mandate")
+                        if selected_cart_mandate:
+                            session["cart_mandate"] = selected_cart_mandate
+                            logger.info("[ShoppingAgent] Set cart_mandate from selected_cart_mandate after step-up")
+                        else:
+                            # CartMandateが見つからない場合のエラー
+                            logger.error("[ShoppingAgent] No cart mandate found in session after step-up")
+                            yield StreamEvent(
+                                type="agent_text",
+                                content="❌ カート情報が見つかりません。最初からやり直してください。"
+                            )
+                            session["step"] = "error"
+                            # セッション保存（エラー状態）
+                            await self._update_session(session_id, session)
+                            return
+
+                    # PaymentMandate作成
+                    payment_mandate = self._create_payment_mandate(session)
+                    session["payment_mandate"] = payment_mandate
+                    session["step"] = "webauthn_attestation_requested"
+                    session["will_use_passkey"] = True
+
+                    yield StreamEvent(
+                        type="agent_text",
+                        content="決済準備が完了しました。セキュリティのため、デバイス認証（WebAuthn/Passkey）を実施します。"
+                    )
+                    await asyncio.sleep(0.5)
+
+                    # WebAuthn challengeを生成
+                    import secrets
+                    challenge = secrets.token_urlsafe(32)
+                    session["webauthn_challenge"] = challenge
+
+                    yield StreamEvent(
+                        type="webauthn_request",
+                        challenge=challenge,
+                        rp_id="localhost",
+                        timeout=60000
+                    )
+
+                    yield StreamEvent(
+                        type="agent_text",
+                        content="デバイス認証を完了してください。\n\n認証後、自動的に決済処理が開始されます。"
+                    )
+                    return
+                else:
+                    # 認証失敗
+                    yield StreamEvent(
+                        type="agent_text",
+                        content="❌ 追加認証に失敗しました。別の支払い方法を選択してください。"
+                    )
+                    session["step"] = "select_payment_method"
+
+                    # 支払い方法選択に戻る
+                    payment_methods = session.get("available_payment_methods", [])
+                    if payment_methods:
+                        await asyncio.sleep(0.3)
+                        yield StreamEvent(
+                            type="agent_text",
+                            content="以下の支払い方法から選択してください。"
+                        )
+                        await asyncio.sleep(0.2)
+                        yield StreamEvent(
+                            type="payment_method_selection",
+                            payment_methods=payment_methods
+                        )
+                    return
+
+            except Exception as e:
+                logger.error(f"[ShoppingAgent] Failed to verify step-up: {e}", exc_info=True)
+                yield StreamEvent(
+                    type="agent_text",
+                    content=f"認証確認中にエラーが発生しました: {e}\n\n別の支払い方法を選択してください。"
+                )
+                session["step"] = "select_payment_method"
+
+                # 支払い方法選択に戻る
+                payment_methods = session.get("available_payment_methods", [])
+                if payment_methods:
+                    await asyncio.sleep(0.3)
+                    yield StreamEvent(
+                        type="agent_text",
+                        content="以下の支払い方法から選択してください。"
+                    )
+                    await asyncio.sleep(0.2)
+                    yield StreamEvent(
+                        type="payment_method_selection",
+                        payment_methods=payment_methods
+                    )
+                return
 
         # ステップ1: 初回挨拶
         if current_step == "initial":
@@ -1006,55 +1191,74 @@ class ShoppingAgent(BaseAgent):
             )
             return
 
-        # ステップ6: 署名完了後、商品検索（Merchant AgentへA2A通信）
+        # ステップ6: 署名完了後、配送先入力（AP2仕様準拠）
         elif current_step == "intent_signature_requested":
             if "署名完了" in user_input or "signed" in user_input_lower or user_input_lower == "ok":
-                session["step"] = "intent_signed"
+                # AP2仕様：配送先はCartMandate作成「前」に確定する必要がある
+                # 配送先によって配送料が変わり、カート価格に影響するため
 
                 yield StreamEvent(
                     type="agent_text",
-                    content="署名ありがとうございます！Merchant Agentにカート候補を依頼中..."
+                    content="署名ありがとうございます！商品の配送先を入力してください。"
                 )
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(0.3)
 
-                # Merchant AgentにIntentMandateを送信してカート候補を取得（A2A通信）
-                try:
-                    cart_candidates = await self._search_products_via_merchant_agent(
-                        session["intent_mandate"],
-                        session  # intent_message_idを保存するためにsessionを渡す
-                    )
+                # 既存の配送先があればそれをデフォルト値として使用
+                existing_shipping = session.get("shipping_address", {})
 
-                    if not cart_candidates:
-                        yield StreamEvent(
-                            type="agent_text",
-                            content="申し訳ありません。条件に合うカート候補が見つかりませんでした。"
-                        )
-                        session["step"] = "error"
-                        return
+                yield StreamEvent(
+                    type="shipping_form_request",
+                    form_schema={
+                        "type": "shipping_address",
+                        "fields": [
+                            {
+                                "name": "recipient",
+                                "label": "受取人名",
+                                "type": "text",
+                                "placeholder": "山田太郎",
+                                "default": existing_shipping.get("recipient", ""),
+                                "required": True
+                            },
+                            {
+                                "name": "postal_code",
+                                "label": "郵便番号",
+                                "type": "text",
+                                "placeholder": "150-0001",
+                                "default": existing_shipping.get("postal_code", ""),
+                                "required": True
+                            },
+                            {
+                                "name": "address_line1",
+                                "label": "住所1（都道府県・市区町村・番地）",
+                                "type": "text",
+                                "placeholder": "東京都渋谷区神宮前1-1-1",
+                                "default": existing_shipping.get("address_line1", ""),
+                                "required": True
+                            },
+                            {
+                                "name": "address_line2",
+                                "label": "住所2（建物名・部屋番号など）",
+                                "type": "text",
+                                "placeholder": "サンプルマンション101",
+                                "default": existing_shipping.get("address_line2", ""),
+                                "required": False
+                            },
+                            {
+                                "name": "country",
+                                "label": "国",
+                                "type": "select",
+                                "options": [
+                                    {"value": "JP", "label": "日本"},
+                                    {"value": "US", "label": "アメリカ"}
+                                ],
+                                "default": existing_shipping.get("country", "JP") if existing_shipping else "JP",
+                                "required": True
+                            }
+                        ]
+                    }
+                )
 
-                    # カート候補をセッションに保存
-                    session["cart_candidates"] = cart_candidates
-
-                    # AP2/A2A仕様準拠：複数のカート候補をカルーセル表示
-                    yield StreamEvent(
-                        type="cart_options",
-                        items=cart_candidates
-                    )
-
-                    yield StreamEvent(
-                        type="agent_text",
-                        content=f"{len(cart_candidates)}つのカート候補が見つかりました。お好みのカートを選択してください。"
-                    )
-                except Exception as e:
-                    logger.error(f"[_generate_fixed_response] Cart candidates request via Merchant Agent failed: {e}")
-                    yield StreamEvent(
-                        type="agent_text",
-                        content=f"申し訳ありません。カート候補の取得に失敗しました: {str(e)}"
-                    )
-                    session["step"] = "error"
-                    return
-
-                session["step"] = "cart_selection"
+                session["step"] = "shipping_address_input"
                 return
             else:
                 yield StreamEvent(
@@ -1062,6 +1266,106 @@ class ShoppingAgent(BaseAgent):
                     content="署名を完了してから「署名完了」と入力してください。"
                 )
                 return
+
+        # ステップ6.1: 配送先入力完了後、商品検索（Merchant AgentへA2A通信）
+        elif current_step == "shipping_address_input":
+            # JSONとしてパース（フロントエンドからJSONで送信される想定）
+            shipping_address = None
+
+            try:
+                import json as json_lib
+
+                # デバッグ：受信したuser_inputをログ出力
+                logger.info(f"[shipping_address_input] Received user_input: {user_input[:200]}")
+
+                # JSONパースを試行
+                if user_input.strip().startswith("{"):
+                    shipping_address = json_lib.loads(user_input)
+                    logger.info(f"[shipping_address_input] Parsed JSON shipping address: {shipping_address}")
+                else:
+                    logger.warning(f"[shipping_address_input] user_input does not start with '{{', using demo address")
+
+            except json_lib.JSONDecodeError as e:
+                logger.error(f"[shipping_address_input] JSON parse error: {e}, input: {user_input[:200]}")
+            except Exception as e:
+                logger.error(f"[shipping_address_input] Unexpected error: {e}", exc_info=True)
+
+            # フォールバック：デモ用固定値を使用
+            if not shipping_address:
+                shipping_address = {
+                    "recipient": "デモユーザー",
+                    "postal_code": "150-0001",
+                    "address_line1": "東京都渋谷区渋谷1-1-1",
+                    "address_line2": "",
+                    "city": "渋谷区",
+                    "state": "東京都",
+                    "country": "JP"
+                }
+                logger.info("[shipping_address_input] Using demo default shipping address")
+
+                yield StreamEvent(
+                    type="agent_text",
+                    content="配送先を設定しました（デモ用固定値）。"
+                )
+            else:
+                yield StreamEvent(
+                    type="agent_text",
+                    content=f"配送先を設定しました：{shipping_address['recipient']} 様"
+                )
+
+            session["shipping_address"] = shipping_address
+            await asyncio.sleep(0.3)
+
+            # AP2仕様準拠：配送先が確定したので、Merchant Agentにカート候補を依頼
+            yield StreamEvent(
+                type="agent_text",
+                content="Merchant Agentにカート候補を依頼中..."
+            )
+            await asyncio.sleep(0.5)
+
+            # Merchant AgentにIntentMandateと配送先を送信してカート候補を取得（A2A通信）
+            try:
+                cart_candidates = await self._search_products_via_merchant_agent(
+                    session["intent_mandate"],
+                    session  # intent_message_idと shipping_addressを参照
+                )
+
+                if not cart_candidates:
+                    yield StreamEvent(
+                        type="agent_text",
+                        content="申し訳ありません。条件に合うカート候補が見つかりませんでした。"
+                    )
+                    session["step"] = "error"
+                    return
+
+                # AP2仕様準拠：Merchant AgentがMerchantの署名を待機してから返すため、
+                # ここに到達した時点で全てのCartMandateは署名済みである
+                logger.info(f"[ShoppingAgent] Received {len(cart_candidates)} signed cart candidates from Merchant Agent")
+
+                # カート候補をセッションに保存
+                session["cart_candidates"] = cart_candidates
+
+                # AP2/A2A仕様準拠：複数のカート候補をカルーセル表示
+                yield StreamEvent(
+                    type="cart_options",
+                    items=cart_candidates
+                )
+
+                yield StreamEvent(
+                    type="agent_text",
+                    content=f"{len(cart_candidates)}つのカート候補が見つかりました。お好みのカートを選択してください。"
+                )
+            except Exception as e:
+                logger.error(f"[_generate_fixed_response] Cart candidates request via Merchant Agent failed: {e}")
+                yield StreamEvent(
+                    type="agent_text",
+                    content=f"申し訳ありません。カート候補の取得に失敗しました: {str(e)}"
+                )
+                session["step"] = "error"
+                return
+
+            session["step"] = "cart_selection"
+            return
 
         # ステップ6.5: カート選択（AP2/A2A仕様準拠）
         elif current_step == "cart_selection":
@@ -1111,6 +1415,9 @@ class ShoppingAgent(BaseAgent):
             session["selected_cart_mandate"] = cart_mandate
             session["selected_cart_artifact"] = selected_cart
 
+            # セッション保存（カート選択は重要な状態変更）
+            await self._update_session(session_id, session)
+
             cart_name = cart_mandate.get("cart_metadata", {}).get("name", "カート")
             total_amount = float(cart_mandate.get("total", {}).get("value", 0))
 
@@ -1120,20 +1427,45 @@ class ShoppingAgent(BaseAgent):
             )
             await asyncio.sleep(0.3)
 
-            # AP2 Step 4: 配送先を確認・入力
-            # カートの最終価格を確定するために配送先が必要
-            existing_shipping = cart_mandate.get("shipping", {}).get("address")
+            # AP2仕様準拠：配送先は既に入力済み（CartMandate作成前に確定）
+            # このCartMandateには既に確定した配送先と配送料が含まれている
+            shipping_address = session.get("shipping_address", {})
+            if shipping_address:
+                yield StreamEvent(
+                    type="agent_text",
+                    content=f"配送先: {shipping_address.get('recipient', '')} 様"
+                )
+                await asyncio.sleep(0.2)
 
-            # AP2仕様準拠：必ず配送先確認ステップを表示
-            # CartMandateに配送先が含まれていても、ユーザーに確認・変更の機会を与える
+            # 次のステップ：Credential Provider選択
             yield StreamEvent(
                 type="agent_text",
-                content="配送先を入力してください。最終的な価格（送料込み）を確定するために必要です。"
+                content="決済に使用するCredential Providerを選択してください。"
             )
             await asyncio.sleep(0.2)
 
-            # 配送先フォームをリッチコンテンツで送信
-            # CartMandateに配送先がある場合は、それをデフォルト値として使用
+            # Credential Providerリストをリッチコンテンツで送信
+            yield StreamEvent(
+                type="credential_provider_selection",
+                providers=self.credential_providers
+            )
+
+            session["step"] = "select_credential_provider"
+            return
+
+        # ============ 以下の cart_selected_need_shipping ステップは削除 ============
+        # AP2仕様では、配送先はCartMandate作成「前」に確定済み
+
+        # 旧: cart_selected_need_shipping ステップ（削除予定）
+        # 新しいフローでは、配送先入力 → CartMandate作成 → カート選択 → Credential Provider選択
+
+        # ステップ6.6の旧コードを削除してジャンプ
+        elif current_step == "cart_selected_need_shipping_OLD_DEPRECATED":
+            # この分岐は使用されません
+            pass
+
+        # 以下、旧コードをスキップするためのダミー分岐
+        if False:  # 旧コードブロックの開始（削除予定）
             yield StreamEvent(
                 type="shipping_form_request",
                 form_schema={
@@ -1230,6 +1562,15 @@ class ShoppingAgent(BaseAgent):
                     content="配送先を設定しました（デモ用固定値）。"
                 )
                 await asyncio.sleep(0.3)
+
+            # AP2仕様準拠：配送先住所を保存
+            # 注意：配送先はCartMandate作成「前」に確定している必要がある
+            # この時点ではCartMandateはまだ作成されていないはず
+            logger.info(
+                f"[ShoppingAgent] Shipping address saved for CartMandate creation: "
+                f"recipient={shipping_address.get('recipient')}, "
+                f"postal_code={shipping_address.get('postal_code')}"
+            )
 
             # 次のステップ：Credential Provider選択
             session["step"] = "shipping_confirmed"
@@ -1467,6 +1808,13 @@ class ShoppingAgent(BaseAgent):
                 )
                 await asyncio.sleep(0.3)
 
+            # AP2仕様準拠：配送先住所を保存（旧フロー用）
+            logger.info(
+                f"[ShoppingAgent] Shipping address saved for CartMandate creation (old flow): "
+                f"recipient={shipping_address.get('recipient')}, "
+                f"postal_code={shipping_address.get('postal_code')}"
+            )
+
             # AP2 Step 6-7: Credential Providerから支払い方法を取得
             yield StreamEvent(
                 type="agent_text",
@@ -1547,13 +1895,37 @@ class ShoppingAgent(BaseAgent):
                     f"[ShoppingAgent] Payment method requires step-up: "
                     f"{selected_payment_method['id']}, brand={selected_payment_method['brand']}"
                 )
-                
+
                 try:
                     # Credential ProviderにStep-upセッション作成を依頼
                     selected_cp = session.get("selected_credential_provider", self.credential_providers[0])
-                    cart_mandate = session.get("cart_mandate", {})
-                    total_amount = cart_mandate.get("total", {})
-                    
+
+                    # CartMandateまたはIntentMandateから金額情報を取得
+                    # selected_cart_mandateがあればcart_mandateに設定（step-up後の処理で必要）
+                    selected_cart_mandate = session.get("selected_cart_mandate")
+                    if selected_cart_mandate and not session.get("cart_mandate"):
+                        session["cart_mandate"] = selected_cart_mandate
+                        logger.info("[ShoppingAgent] Set cart_mandate from selected_cart_mandate for step-up flow")
+
+                    cart_mandate = session.get("cart_mandate")
+                    intent_mandate = session.get("intent_mandate")
+
+                    if cart_mandate:
+                        total_amount = cart_mandate.get("total", {})
+                        merchant_id = cart_mandate.get("merchant_id")
+                    elif intent_mandate:
+                        # CartMandateがない場合、IntentMandateの最大金額を使用
+                        max_amount = intent_mandate.get("max_amount", {})
+                        total_amount = max_amount
+                        merchant_id = None  # この時点では未確定
+                    else:
+                        # フォールバック：空の金額情報
+                        total_amount = {"value": "0", "currency": "JPY"}
+                        merchant_id = None
+
+                    # AP2準拠：return_urlにセッションIDをクエリパラメータとして含める
+                    return_url = f"http://localhost:3000/chat?session_id={session_id}"
+
                     response = await self.http_client.post(
                         f"{selected_cp['url']}/payment-methods/initiate-step-up",
                         json={
@@ -1561,9 +1933,9 @@ class ShoppingAgent(BaseAgent):
                             "payment_method_id": selected_payment_method["id"],
                             "transaction_context": {
                                 "amount": total_amount,
-                                "merchant_id": cart_mandate.get("merchant_id")
+                                "merchant_id": merchant_id
                             },
-                            "return_url": "http://localhost:3000/chat"
+                            "return_url": return_url
                         },
                         timeout=10.0
                     )
@@ -1571,29 +1943,33 @@ class ShoppingAgent(BaseAgent):
                     step_up_result = response.json()
                     
                     step_up_url = step_up_result.get("step_up_url")
-                    session_id = step_up_result.get("session_id")
-                    
+                    step_up_session_id = step_up_result.get("session_id")
+
                     # Step-up情報をセッションに保存
-                    session["step_up_session_id"] = session_id
+                    session["step_up_session_id"] = step_up_session_id
                     session["step"] = "step_up_redirect"
-                    
+
+                    # 重要：Step-upリダイレクト前にセッションをデータベースに保存
+                    # これにより、Step-up完了後のリクエストでcart_mandateを復元できる
+                    await self._update_session(session_id, session)
+
                     logger.info(
-                        f"[ShoppingAgent] Step-up session created: "
-                        f"session_id={session_id}, step_up_url={step_up_url}"
+                        f"[ShoppingAgent] Step-up session created and saved to DB: "
+                        f"step_up_session_id={step_up_session_id}, step_up_url={step_up_url}"
                     )
-                    
+
                     # フロントエンドにStep-upリダイレクト指示を送信
                     yield StreamEvent(
                         type="agent_text",
                         content=f"{selected_payment_method['brand'].upper()} ****{selected_payment_method['last4']}を選択しました。\n\n追加認証が必要です。認証画面にリダイレクトします..."
                     )
                     await asyncio.sleep(0.5)
-                    
+
                     yield StreamEvent(
                         type="step_up_redirect",
                         step_up_url=step_up_url,
-                        session_id=session_id,
-                        reason=selected_payment_method.get("step_up_reason", "Additional authentication required")
+                        session_id=step_up_session_id,
+                        content=selected_payment_method.get("step_up_reason", "Additional authentication required")
                     )
                     return
                     
@@ -1839,7 +2215,7 @@ class ShoppingAgent(BaseAgent):
             "id": f"cart_{uuid.uuid4().hex[:8]}",
             "type": "CartMandate",
             "version": "0.2",
-            "merchant_id": "did:ap2:merchant:demo_merchant",
+            "merchant_id": "did:ap2:merchant:mugibo_merchant",
             "intent_mandate_id": session.get("intent_mandate", {}).get("id"),
             "items": [
                 {
@@ -1908,6 +2284,60 @@ class ShoppingAgent(BaseAgent):
         # RFC 8785準拠のcompute_mandate_hash関数を使用（より堅牢なハッシュ計算）
         from v2.common.user_authorization import compute_mandate_hash
         return compute_mandate_hash(payment_mandate_copy)
+
+    async def _get_or_create_session(self, session_id: str, user_id: str = "user_demo_001") -> Dict[str, Any]:
+        """
+        セッションをデータベースから取得、または新規作成
+
+        Args:
+            session_id: セッションID
+            user_id: ユーザーID
+
+        Returns:
+            Dict[str, Any]: セッションデータ
+        """
+        async with self.db_manager.get_session() as db_session:
+            agent_session = await AgentSessionCRUD.get_by_session_id(db_session, session_id)
+
+            if agent_session:
+                # 既存セッションを取得
+                session_data = json.loads(agent_session.session_data)
+                logger.info(f"[ShoppingAgent] Loaded session from DB: {session_id}, step={session_data.get('step')}")
+                return session_data
+            else:
+                # 新規セッション作成
+                session_data = {
+                    "messages": [],
+                    "step": "initial",
+                    "intent": None,
+                    "max_amount": None,
+                    "categories": [],
+                    "brands": [],
+                    "intent_mandate": None,
+                    "cart_mandate": None,
+                    "user_id": user_id
+                }
+
+                await AgentSessionCRUD.create(db_session, {
+                    "session_id": session_id,
+                    "user_id": user_id,
+                    "session_data": session_data
+                })
+
+                logger.info(f"[ShoppingAgent] Created new session in DB: {session_id}")
+                return session_data
+
+    async def _update_session(self, session_id: str, session_data: Dict[str, Any]) -> None:
+        """
+        セッションデータをデータベースに保存
+
+        Args:
+            session_id: セッションID
+            session_data: セッションデータ
+        """
+        async with self.db_manager.get_session() as db_session:
+            await AgentSessionCRUD.update_session_data(db_session, session_id, session_data)
+            logger.debug(f"[ShoppingAgent] Updated session in DB: {session_id}, step={session_data.get('step')}")
 
     def _determine_transaction_type(self, session: Dict[str, Any]) -> str:
         """
@@ -2022,7 +2452,7 @@ class ShoppingAgent(BaseAgent):
                 "payment_details_id": payment_details_id,
                 "payment_details_total": payment_details_total,
                 "payment_response": payment_response,
-                "merchant_agent": cart_mandate.get("merchant_id", "did:ap2:merchant:demo_merchant"),
+                "merchant_agent": cart_mandate.get("merchant_id", "did:ap2:merchant:mugibo_merchant"),
                 "timestamp": now.isoformat().replace('+00:00', 'Z')
             },
 
@@ -2035,7 +2465,7 @@ class ShoppingAgent(BaseAgent):
             "cart_mandate_id": cart_mandate.get("id"),
             "intent_mandate_id": session.get("intent_mandate", {}).get("id"),
             "payer_id": "user_demo_001",
-            "payee_id": cart_mandate.get("merchant_id", "did:ap2:merchant:demo_merchant"),
+            "payee_id": cart_mandate.get("merchant_id", "did:ap2:merchant:mugibo_merchant"),
             "amount": {
                 "value": total_amount.get("value", "0.00"),
                 "currency": total_amount.get("currency", "JPY")
@@ -2213,12 +2643,22 @@ class ShoppingAgent(BaseAgent):
         logger.info(f"[ShoppingAgent] Requesting cart candidates from Merchant Agent for IntentMandate: {intent_mandate['id']}")
 
         try:
+            # AP2仕様準拠：配送先情報を含めてMerchant Agentに送信
+            # 配送先によって配送料が変わるため、CartMandate作成前に必要
+            shipping_address = session.get("shipping_address")
+
+            # ペイロードにIntentMandateと配送先を含める
+            payload = {
+                "intent_mandate": intent_mandate,
+                "shipping_address": shipping_address  # AP2仕様：CartMandate作成前に配送先を提供
+            }
+
             # A2Aメッセージを作成（署名付き）
             message = self.a2a_handler.create_response_message(
                 recipient="did:ap2:agent:merchant_agent",
                 data_type="ap2.mandates.IntentMandate",
                 data_id=intent_mandate["id"],
-                payload=intent_mandate,
+                payload=payload,
                 sign=True
             )
 

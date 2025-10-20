@@ -5,6 +5,7 @@ import { useSSEChat } from "@/hooks/useSSEChat";
 import { ChatMessage } from "@/components/chat/ChatMessage";
 import { ChatInput } from "@/components/chat/ChatInput";
 import { SignaturePromptModal } from "@/components/chat/SignaturePromptModal";
+import { ShippingAddressForm } from "@/components/shipping/ShippingAddressForm";
 import { PasskeyRegistration } from "@/components/auth/PasskeyRegistration";
 import { PasskeyAuthentication } from "@/components/auth/PasskeyAuthentication";
 import { ProductCarousel } from "@/components/product/ProductCarousel";
@@ -34,6 +35,7 @@ export default function ChatPage() {
     clearSignatureRequest,
     clearWebauthnRequest,
     stopStreaming,
+    setSessionId,  // AP2 Step-up対応：セッションID設定関数
   } = useSSEChat();
 
   const scrollAreaRef = useRef<HTMLDivElement>(null);
@@ -55,6 +57,40 @@ export default function ChatPage() {
       setShowPasskeyRegistration(true);
     }
   }, []);
+
+  // Step-up認証完了のコールバックをチェック
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const stepUpStatus = urlParams.get("step_up_status");
+    const stepUpSessionId = urlParams.get("step_up_session_id");
+    const sessionId = urlParams.get("session_id");
+
+    if (stepUpStatus && stepUpSessionId && sessionId) {
+      console.log("[Step-up Callback] Detected:", { stepUpStatus, stepUpSessionId, sessionId });
+
+      // AP2準拠：return_urlから取得したsession_idを使用
+      // これにより、Step-up前のセッションに戻れる
+      setSessionId(sessionId);
+
+      // URLパラメータをクリーンアップ
+      const cleanUrl = window.location.pathname;
+      window.history.replaceState({}, document.title, cleanUrl);
+
+      if (stepUpStatus === "success") {
+        // Step-up成功 - Shopping Agentに完了を通知
+        console.log("[Step-up] Success - sending completion message to agent with session_id:", sessionId);
+        setTimeout(() => {
+          sendMessage(`step-up-completed:${stepUpSessionId}`);
+        }, 500);
+      } else if (stepUpStatus === "cancelled") {
+        // キャンセル - ユーザーに通知
+        console.log("[Step-up] Cancelled");
+        setTimeout(() => {
+          sendMessage("認証をキャンセルしました。別の支払い方法を選択してください。");
+        }, 500);
+      }
+    }
+  }, [sendMessage, setSessionId]);
 
   // メッセージが追加されたら自動スクロール
   useEffect(() => {
@@ -347,57 +383,13 @@ export default function ChatPage() {
 
               {/* 配送先フォーム（isStreamingの外） */}
               {shippingFormRequest && (
-                <div className="mb-4">
-                  <div className="flex gap-3">
-                    <Avatar className="w-8 h-8 flex-shrink-0">
-                      <AvatarFallback className="bg-green-500">
-                        <Bot className="w-4 h-4 text-white" />
-                      </AvatarFallback>
-                    </Avatar>
-                    <div className="w-full max-w-[600px]">
-                      <Card>
-                        <CardContent className="p-4 space-y-3">
-                          {shippingFormRequest.fields.map((field: any) => (
-                            <div key={field.name}>
-                              <label className="block text-sm font-medium mb-1">
-                                {field.label}
-                                {field.required && <span className="text-red-500 ml-1">*</span>}
-                              </label>
-                              {field.type === "select" ? (
-                                <select
-                                  className="w-full px-3 py-2 border rounded-md"
-                                  defaultValue={field.default}
-                                >
-                                  {field.options.map((opt: any) => (
-                                    <option key={opt.value} value={opt.value}>
-                                      {opt.label}
-                                    </option>
-                                  ))}
-                                </select>
-                              ) : (
-                                <input
-                                  type={field.type}
-                                  placeholder={field.placeholder}
-                                  className="w-full px-3 py-2 border rounded-md"
-                                  required={field.required}
-                                />
-                              )}
-                            </div>
-                          ))}
-                          <button
-                            onClick={() => {
-                              // デモ用：固定値を送信
-                              sendMessage("デモ配送先");
-                            }}
-                            className="w-full px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90"
-                          >
-                            配送先を確定
-                          </button>
-                        </CardContent>
-                      </Card>
-                    </div>
-                  </div>
-                </div>
+                <ShippingAddressForm
+                  fields={shippingFormRequest.fields}
+                  onSubmit={(shippingData) => {
+                    // フォーム入力値をJSON文字列に変換してShopping Agentに送信
+                    sendMessage(JSON.stringify(shippingData));
+                  }}
+                />
               )}
 
               {/* 支払い方法選択（isStreamingの外） */}
