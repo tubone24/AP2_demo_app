@@ -27,8 +27,9 @@ from v2.common.base_agent import BaseAgent, AgentPassphraseManager
 from v2.common.models import A2AMessage, AttestationVerifyRequest, AttestationVerifyResponse
 from v2.common.database import DatabaseManager, Attestation, PasskeyCredentialCRUD
 from v2.common.crypto import DeviceAttestationManager, KeyManager
+from v2.common.logger import get_logger, log_a2a_message, log_database_operation
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__, service_name='credential_provider')
 
 
 class CredentialProviderService(BaseAgent):

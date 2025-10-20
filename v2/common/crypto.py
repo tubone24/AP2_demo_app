@@ -24,8 +24,13 @@ from cryptography.exceptions import InvalidSignature
 
 try:
     from v2.common.models import Signature, DeviceAttestation, AttestationType
+    from v2.common.logger import get_logger, log_crypto_operation
 except ModuleNotFoundError:
     from common.models import Signature, DeviceAttestation, AttestationType
+    from common.logger import get_logger, log_crypto_operation
+
+# ロガーのセットアップ
+logger = get_logger(__name__, service_name='crypto')
 
 # RFC8785 JSON Canonicalization Scheme (Required for AP2 compliance)
 try:
@@ -33,12 +38,10 @@ try:
     RFC8785_AVAILABLE = True
 except ImportError:
     RFC8785_AVAILABLE = False
-    import sys
-    print(
-        "[ERROR] rfc8785 library is required for RFC 8785 compliant JSON canonicalization.\n"
-        "AP2 Protocol requires strict RFC 8785 compliance for interoperability.\n"
-        "Please install it: uv add rfc8785 or pip install rfc8785>=0.1.4",
-        file=sys.stderr
+    logger.error(
+        "rfc8785 library is required for RFC 8785 compliant JSON canonicalization. "
+        "AP2 Protocol requires strict RFC 8785 compliance for interoperability. "
+        "Please install it: uv add rfc8785 or pip install rfc8785>=0.1.4"
     )
 
 # WebAuthn COSE key parsing
@@ -47,7 +50,7 @@ try:
     CBOR2_AVAILABLE = True
 except ImportError:
     CBOR2_AVAILABLE = False
-    print("[Warning] cbor2 library not available. WebAuthn verification will be limited.")
+    logger.warning("cbor2 library not available. WebAuthn verification will be limited.")
 
 
 class CryptoError(Exception):
@@ -244,7 +247,7 @@ class KeyManager:
         Returns:
             Tuple[秘密鍵, 公開鍵]
         """
-        print(f"[KeyManager] 新しい鍵ペアを生成: {key_id}")
+        logger.info(f"Generating new key pair: {key_id}")
 
         # 秘密鍵を生成
         private_key = ec.generate_private_key(curve, self.backend)
@@ -253,7 +256,7 @@ class KeyManager:
         # メモリに保存
         self._active_keys[key_id] = private_key
 
-        print(f"  ✓ 鍵ペア生成完了（曲線: {curve.name}）")
+        logger.info(f"Key pair generated successfully (curve: {curve.name})")
         return private_key, public_key
 
     def generate_ed25519_key_pair(
@@ -269,7 +272,7 @@ class KeyManager:
         Returns:
             Tuple[秘密鍵, 公開鍵]
         """
-        print(f"[KeyManager] 新しいEd25519鍵ペアを生成: {key_id}")
+        logger.info(f"Generating new Ed25519 key pair: {key_id}")
 
         # Ed25519秘密鍵を生成
         private_key = ed25519.Ed25519PrivateKey.generate()
@@ -278,7 +281,7 @@ class KeyManager:
         # メモリに保存
         self._active_keys[key_id] = private_key
 
-        print(f"  ✓ Ed25519鍵ペア生成完了")
+        logger.info("Ed25519 key pair generated successfully")
         return private_key, public_key
 
     def save_private_key_encrypted(
@@ -298,7 +301,7 @@ class KeyManager:
         Returns:
             str: 保存先のファイルパス
         """
-        print(f"[KeyManager] 秘密鍵を暗号化して保存: {key_id}")
+        logger.info(f"Saving encrypted private key: {key_id}")
 
         # 秘密鍵をPEMフォーマットでシリアライズ（暗号化）
         encrypted_pem = private_key.private_bytes(
@@ -316,8 +319,8 @@ class KeyManager:
         # パーミッションを制限（所有者のみ読み書き可能）
         os.chmod(key_file, 0o600)
 
-        print(f"  ✓ 秘密鍵を保存: {key_file}")
-        print(f"  ✓ パーミッション: 0o600（所有者のみアクセス可能）")
+        logger.info(f"Private key saved: {key_file}")
+        logger.debug("File permissions set to 0o600 (owner only)")
 
         return str(key_file)
 
@@ -336,7 +339,7 @@ class KeyManager:
         Returns:
             ec.EllipticCurvePrivateKey: 秘密鍵
         """
-        print(f"[KeyManager] 秘密鍵を読み込み: {key_id}")
+        logger.info(f"Loading private key: {key_id}")
 
         key_file = self.keys_directory / f"{key_id}_private.pem"
 
@@ -357,7 +360,7 @@ class KeyManager:
             # メモリに保存
             self._active_keys[key_id] = private_key
 
-            print(f"  ✓ 秘密鍵の読み込み成功")
+            logger.info("Private key loaded successfully")
             return private_key
 
         except ValueError as e:
@@ -388,7 +391,7 @@ class KeyManager:
         key_file = self.keys_directory / f"{key_id}_public.pem"
         key_file.write_bytes(pem)
 
-        print(f"[KeyManager] 公開鍵を保存: {key_file}")
+        logger.info(f"Saving public key: {key_file}")
 
         return str(key_file)
 
@@ -550,14 +553,14 @@ class SignatureManager:
             tolerance = tolerance_seconds if tolerance_seconds is not None else self.timestamp_tolerance_seconds
 
             if time_diff > tolerance:
-                print(f"[SignatureManager] タイムスタンプ検証失敗: 時刻差={time_diff:.0f}秒（許容={tolerance}秒）")
+                logger.warning(f"Timestamp verification failed: time_diff={time_diff:.0f}s (tolerance={tolerance}s)")
                 return False
 
-            print(f"[SignatureManager] タイムスタンプ検証成功: 時刻差={time_diff:.0f}秒")
+            logger.debug(f"Timestamp verified: time_diff={time_diff:.0f}s")
             return True
 
         except ValueError as e:
-            print(f"[SignatureManager] タイムスタンプのパースエラー: {e}")
+            logger.error(f"Timestamp parse error: {e}")
             raise ValueError(f"Invalid timestamp format: {timestamp_str}")
 
     def sign_data(
@@ -577,7 +580,7 @@ class SignatureManager:
         Returns:
             Signature: 署名オブジェクト
         """
-        print(f"[SignatureManager] データに署名中（鍵ID: {key_id}, アルゴリズム: {algorithm}）")
+        logger.debug(f"Signing data (key_id: {key_id}, algorithm: {algorithm})")
 
         # 秘密鍵を取得
         private_key = self.key_manager.get_private_key(key_id)
@@ -618,10 +621,11 @@ class SignatureManager:
             algorithm=algorithm,
             value=base64.b64encode(signature_bytes).decode('utf-8'),
             public_key=public_key_base64,
-            signed_at=datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
+            signed_at=datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
+            key_id=key_id
         )
 
-        print(f"  ✓ 署名完了")
+        log_crypto_operation(logger, "sign", algorithm, key_id, success=True)
         return signature
 
     def verify_signature(
@@ -639,7 +643,7 @@ class SignatureManager:
         Returns:
             bool: 検証結果（True=有効、False=無効）
         """
-        print(f"[SignatureManager] 署名を検証中（アルゴリズム: {signature.algorithm}）...")
+        logger.debug(f"Verifying signature (algorithm: {signature.algorithm})")
 
         try:
             # 公開鍵を復元
@@ -671,17 +675,19 @@ class SignatureManager:
 
                 public_key.verify(signature_bytes, message)
             else:
-                print(f"  ✗ サポートされていないアルゴリズム: {algorithm}")
+                logger.error(f"Unsupported algorithm: {algorithm}")
                 return False
 
-            print(f"  ✓ 署名は有効です")
+            log_crypto_operation(logger, "verify", signature.algorithm, signature.key_id or "unknown", success=True)
             return True
 
         except InvalidSignature:
-            print(f"  ✗ 署名が無効です")
+            logger.warning("Signature is invalid")
+            log_crypto_operation(logger, "verify", signature.algorithm, signature.key_id or "unknown", success=False)
             return False
         except Exception as e:
-            print(f"  ✗ 検証エラー: {e}")
+            logger.error(f"Verification error: {e}")
+            log_crypto_operation(logger, "verify", signature.algorithm, signature.key_id or "unknown", success=False)
             return False
 
     def sign_mandate(
@@ -769,7 +775,7 @@ class SignatureManager:
         Returns:
             Signature: メッセージ署名
         """
-        print(f"[SignatureManager] A2Aメッセージに署名中（送信者: {sender_key_id}）")
+        logger.debug(f"Signing A2A message (sender: {sender_key_id})")
 
         # Canonical JSON文字列を生成（header.proof/signatureを除外）
         canonical_json = canonicalize_a2a_message(a2a_message_dict)
@@ -796,7 +802,7 @@ class SignatureManager:
         Returns:
             bool: 検証結果
         """
-        print(f"[SignatureManager] A2Aメッセージ署名を検証中...")
+        logger.debug("Verifying A2A message signature")
 
         # Canonical JSON文字列を生成（header.proof/signatureを除外）
         canonical_json = canonicalize_a2a_message(a2a_message_dict)
@@ -857,7 +863,7 @@ class SecureStorage:
         Returns:
             str: 保存先のファイルパス
         """
-        print(f"[SecureStorage] データを暗号化して保存: {filename}")
+        logger.debug(f"Encrypting and saving data: {filename}")
 
         # データをJSON文字列に変換
         json_data = json.dumps(data, ensure_ascii=False, indent=2)
@@ -894,7 +900,7 @@ class SecureStorage:
         # パーミッションを制限
         os.chmod(file_path, 0o600)
 
-        print(f"  ✓ 暗号化して保存完了: {file_path}")
+        logger.info(f"Data encrypted and saved: {file_path}")
 
         return str(file_path)
 
@@ -913,7 +919,7 @@ class SecureStorage:
         Returns:
             Dict[str, Any]: 復号化されたデータ
         """
-        print(f"[SecureStorage] データを読み込んで復号化: {filename}")
+        logger.debug(f"Loading and decrypting data: {filename}")
 
         file_path = self.storage_directory / filename
 
@@ -948,7 +954,7 @@ class SecureStorage:
             json_data = plaintext.decode('utf-8')
             data = json.loads(json_data)
 
-            print(f"  ✓ 復号化成功")
+            logger.debug("Decryption successful")
             return data
 
         except Exception as e:
@@ -1003,7 +1009,7 @@ class WebAuthnChallengeManager:
             "context": context
         }
 
-        print(f"[WebAuthnChallengeManager] Challenge生成: id={challenge_id}, user={user_id}, context={context}")
+        logger.debug(f"Generated challenge: id={challenge_id}, user={user_id}, context={context}")
 
         return {
             "challenge_id": challenge_id,
@@ -1030,36 +1036,36 @@ class WebAuthnChallengeManager:
         stored = self._challenges.get(challenge_id)
 
         if not stored:
-            print(f"[WebAuthnChallengeManager] Challenge not found: {challenge_id}")
+            logger.warning(f"Challenge not found: {challenge_id}")
             return False
 
         # 有効期限チェック
         now = datetime.now(timezone.utc)
         age = (now - stored["issued_at"]).total_seconds()
         if age > self.challenge_ttl_seconds:
-            print(f"[WebAuthnChallengeManager] Challenge expired: age={age:.0f}s")
+            logger.warning(f"Challenge expired: age={age:.0f}s")
             del self._challenges[challenge_id]
             return False
 
         # 使用済みチェック
         if stored["used"]:
-            print(f"[WebAuthnChallengeManager] Challenge already used: {challenge_id}")
+            logger.warning(f"Challenge already used: {challenge_id}")
             return False
 
         # challenge値チェック
         if stored["challenge"] != challenge:
-            print(f"[WebAuthnChallengeManager] Challenge mismatch")
+            logger.warning("Challenge mismatch")
             return False
 
         # ユーザーIDチェック
         if stored["user_id"] != user_id:
-            print(f"[WebAuthnChallengeManager] User ID mismatch")
+            logger.warning("User ID mismatch")
             return False
 
         # 使用済みマーク
         stored["used"] = True
 
-        print(f"[WebAuthnChallengeManager] Challenge verified and consumed: {challenge_id}")
+        logger.debug(f"Challenge verified and consumed: {challenge_id}")
         return True
 
     def cleanup_expired_challenges(self):
@@ -1074,7 +1080,7 @@ class WebAuthnChallengeManager:
             del self._challenges[cid]
 
         if expired:
-            print(f"[WebAuthnChallengeManager] Cleaned up {len(expired)} expired challenges")
+            logger.debug(f"Cleaned up {len(expired)} expired challenges")
 
 
 class DeviceAttestationManager:
@@ -1172,7 +1178,7 @@ class DeviceAttestationManager:
         Returns:
             Tuple[bool, int]: (検証結果, 新しいcounter値)
         """
-        print(f"[DeviceAttestationManager] WebAuthn認証結果を検証中...")
+        logger.debug("Verifying WebAuthn authentication result")
 
         try:
             # 1. clientDataJSONをデコードしてパース
@@ -1182,7 +1188,7 @@ class DeviceAttestationManager:
                 client_data_json_b64 = response.get('clientDataJSON')
 
             if not client_data_json_b64:
-                print(f"  ✗ clientDataJSONがありません")
+                logger.error("clientDataJSON is missing")
                 return (False, stored_counter)
 
             # Base64URLデコード
@@ -1193,27 +1199,27 @@ class DeviceAttestationManager:
             client_data_json_bytes = base64.urlsafe_b64decode(client_data_json_b64)
             client_data = json.loads(client_data_json_bytes)
 
-            print(f"  - Client Data Type: {client_data.get('type')}")
-            print(f"  - Origin: {client_data.get('origin')}")
+            logger.debug(f"Client Data Type: {client_data.get('type')}")
+            logger.debug(f"Origin: {client_data.get('origin')}")
 
             # 2. Challenge検証（リプレイ攻撃対策）
             received_challenge = client_data.get('challenge')
             if not received_challenge:
-                print(f"  ✗ clientDataJSONにchallengeがありません")
+                logger.error("clientDataJSON missing challenge")
                 return (False, stored_counter)
 
             if received_challenge != challenge:
-                print(f"  ✗ Challenge不一致")
+                logger.error("Challenge mismatch")
                 return (False, stored_counter)
 
-            print(f"  ✓ Challenge一致")
+            logger.debug("Challenge matched")
 
             # 3. タイプ検証
             if client_data.get('type') != 'webauthn.get':
-                print(f"  ✗ 認証タイプが正しくありません: {client_data.get('type')}")
+                logger.error(f"Invalid authentication type: {client_data.get('type')}")
                 return (False, stored_counter)
 
-            print(f"  ✓ 認証タイプ: webauthn.get")
+            logger.debug("Authentication type: webauthn.get")
 
             # 4. authenticatorDataをパース
             authenticator_data_b64 = webauthn_auth_result.get('authenticatorData')
@@ -1222,30 +1228,30 @@ class DeviceAttestationManager:
                 authenticator_data_b64 = response.get('authenticatorData')
 
             if not authenticator_data_b64:
-                print(f"  ✗ authenticatorDataがありません")
+                logger.error("authenticatorData is missing")
                 return (False, stored_counter)
 
             auth_data = self._parse_authenticator_data(authenticator_data_b64)
-            print(f"  ✓ AuthenticatorData parsed: counter={auth_data['sign_count']}")
+            logger.debug(f"AuthenticatorData parsed: counter={auth_data['sign_count']}")
 
             # 5. Signature counterの検証
             new_counter = auth_data['sign_count']
 
             if new_counter == 0 and stored_counter == 0:
-                print(f"  ℹ️  Signature counter: 0 (AP2準拠: user_authorizationのnonceによりリプレイ攻撃は防止されます)")
+                logger.info("Signature counter: 0 (AP2 compliant: replay attacks prevented by user_authorization nonce)")
             elif new_counter <= stored_counter:
-                print(f"  ✗ Signature counter異常（リプレイ攻撃の可能性）")
+                logger.error("Signature counter anomaly (possible replay attack)")
                 return (False, stored_counter)
             else:
-                print(f"  ✓ Signature counter検証OK: {stored_counter} → {new_counter}")
+                logger.debug(f"Signature counter verified: {stored_counter} → {new_counter}")
 
             # 6. RP ID Hash検証
             expected_rp_id_hash = hashlib.sha256(rp_id.encode('utf-8')).digest().hex()
             if auth_data['rp_id_hash'] != expected_rp_id_hash:
-                print(f"  ✗ RP ID Hash不一致")
+                logger.error("RP ID Hash mismatch")
                 return (False, stored_counter)
 
-            print(f"  ✓ RP ID Hash一致")
+            logger.debug("RP ID Hash matched")
 
             # 7. 署名検証データの構築
             client_data_hash = hashlib.sha256(client_data_json_bytes).digest()
@@ -1262,7 +1268,7 @@ class DeviceAttestationManager:
             cose_key = cbor2.loads(public_key_cose)
 
             if not isinstance(cose_key, dict):
-                print(f"  ✗ COSE key形式が不正です")
+                logger.error("Invalid COSE key format")
                 return (False, stored_counter)
 
             x_bytes = cose_key[-2]
@@ -1281,7 +1287,7 @@ class DeviceAttestationManager:
                 signature_b64 = response.get('signature')
 
             if not signature_b64:
-                print(f"  ✗ 署名データがありません")
+                logger.error("Signature data is missing")
                 return (False, stored_counter)
 
             padding_needed = len(signature_b64) % 4
@@ -1297,14 +1303,14 @@ class DeviceAttestationManager:
                 ec.ECDSA(hashes.SHA256())
             )
 
-            print(f"  ✓ WebAuthn署名検証成功")
+            logger.info("WebAuthn signature verified successfully")
             return (True, new_counter)
 
         except InvalidSignature:
-            print(f"  ✗ 署名が無効です")
+            logger.warning("Signature is invalid")
             return (False, stored_counter)
         except Exception as e:
-            print(f"  ✗ WebAuthn検証エラー: {e}")
+            logger.error(f"WebAuthn verification error: {e}")
             import traceback
             traceback.print_exc()
             return (False, stored_counter)
@@ -1344,7 +1350,7 @@ class DeviceAttestationManager:
         Returns:
             DeviceAttestation: デバイス証明
         """
-        print(f"[DeviceAttestationManager] デバイス証明を作成中...")
+        logger.debug("Creating device attestation")
 
         if challenge is None:
             challenge = self.generate_challenge()
@@ -1393,7 +1399,7 @@ class DeviceAttestationManager:
             webauthn_client_data_json=webauthn_client_data_json
         )
 
-        print(f"  ✓ デバイス証明を作成完了")
+        logger.info("Device attestation created successfully")
         return device_attestation
 
     def verify_device_attestation(
@@ -1413,7 +1419,7 @@ class DeviceAttestationManager:
         Returns:
             bool: 検証結果
         """
-        print(f"[DeviceAttestationManager] デバイス証明を検証中...")
+        logger.debug("Verifying device attestation")
 
         try:
             # 1. タイムスタンプを確認
@@ -1427,10 +1433,10 @@ class DeviceAttestationManager:
             age_seconds = (now - attestation_time).total_seconds()
 
             if age_seconds < 0 or age_seconds > max_age_seconds:
-                print(f"  ✗ タイムスタンプが無効です")
+                logger.error("Invalid timestamp")
                 return False
 
-            print(f"  ✓ タイムスタンプは有効（{age_seconds:.0f}秒前）")
+            logger.debug(f"Timestamp is valid ({age_seconds:.0f}s ago)")
 
             # 2. 署名対象データを再構築
             attestation_data = {
@@ -1458,12 +1464,12 @@ class DeviceAttestationManager:
                 ec.ECDSA(hashes.SHA256())
             )
 
-            print(f"  ✓ デバイス証明は有効です")
+            logger.info("Device attestation is valid")
             return True
 
         except InvalidSignature:
-            print(f"  ✗ デバイス署名が無効です")
+            logger.error("Device signature is invalid")
             return False
         except Exception as e:
-            print(f"  ✗ 検証エラー: {e}")
+            logger.error(f"Verification error: {e}")
             return False

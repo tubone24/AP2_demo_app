@@ -38,8 +38,15 @@ from v2.common.database import DatabaseManager, MandateCRUD, TransactionCRUD, Ag
 from v2.common.risk_assessment import RiskAssessmentEngine
 from v2.common.crypto import WebAuthnChallengeManager, CryptoError
 from v2.common.user_authorization import create_user_authorization_vp
+from v2.common.logger import (
+    get_logger,
+    log_http_request,
+    log_http_response,
+    log_a2a_message,
+    log_database_operation
+)
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__, service_name='shopping_agent')
 
 
 class ShoppingAgent(BaseAgent):

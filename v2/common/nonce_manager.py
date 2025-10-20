@@ -9,6 +9,14 @@ import time
 from typing import Dict, Optional
 from datetime import datetime, timedelta
 
+try:
+    from v2.common.logger import get_logger
+except ModuleNotFoundError:
+    from common.logger import get_logger
+
+# ロガーのセットアップ
+logger = get_logger(__name__, service_name='nonce')
+
 
 class NonceManager:
     """
@@ -88,7 +96,7 @@ class NonceManager:
         self._last_cleanup = current_time
 
         if expired_nonces:
-            print(f"[NonceManager] Cleaned up {len(expired_nonces)} expired nonces")
+            logger.debug(f"Cleaned up {len(expired_nonces)} expired nonces")
 
     def get_stats(self) -> Dict[str, any]:
         """
@@ -117,7 +125,7 @@ class NonceManager:
         with self._lock:
             count = len(self._used_nonces)
             self._used_nonces.clear()
-            print(f"[NonceManager] Cleared {count} nonces")
+            logger.info(f"Cleared {count} nonces")
 
 
 # シングルトンインスタンス（オプション）

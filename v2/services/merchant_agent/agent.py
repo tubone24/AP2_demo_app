@@ -25,8 +25,9 @@ from v2.common.base_agent import BaseAgent, AgentPassphraseManager
 from v2.common.models import A2AMessage
 from v2.common.database import DatabaseManager, ProductCRUD
 from v2.common.seed_data import seed_products, seed_users
+from v2.common.logger import get_logger, log_http_request, log_http_response, log_a2a_message
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__, service_name='merchant_agent')
 
 
 class MerchantAgent(BaseAgent):
