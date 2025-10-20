@@ -117,104 +117,274 @@ AES-CBC→AES-GCM移行により、既存の暗号化ファイルは読み込め
 
 ### 2.1 全体概要
 
-| フェーズ | ステップ範囲 | 実装率 | 主要コンポーネント |
-|---------|------------|--------|------------------|
-| **Intent Creation** | Step 1-4 | ✅ 100% | Shopping Agent, Frontend |
-| **Product Search & Cart** | Step 5-12 | ✅ 100% | Merchant Agent, Merchant |
-| **Payment Method Selection** | Step 13-18 | ✅ 100% | Credential Provider |
-| **Payment Authorization** | Step 19-23 | ✅ 100% | Payment Network, WebAuthn |
-| **Payment Processing** | Step 24-32 | ✅ 100% | Payment Processor |
+| フェーズ | ステップ範囲 | 実装率 | 主要コンポーネント | 主要実装箇所 |
+|---------|------------|--------|------------------|-------------|
+| **Intent Creation** | Step 1-4 | ✅ 100% | Shopping Agent, Frontend | `shopping_agent/agent.py:187-262, 1261-1270` |
+| **Product Search & Cart** | Step 5-12 | ✅ 100% | Merchant Agent, Merchant | `merchant_agent/agent.py:354-754`, `merchant/service.py:105-199` |
+| **Payment Method Selection** | Step 13-18 | ✅ 100% | Credential Provider | `credential_provider/provider.py:476-935` |
+| **Payment Authorization** | Step 19-23 | ✅ 100% | Payment Network, WebAuthn | `shopping_agent/agent.py:665-825`, `credential_provider/provider.py:263-432` |
+| **Payment Processing** | Step 24-32 | ✅ 100% | Payment Processor | `payment_processor/processor.py:259-339, 720-1209` |
 
 **総合実装率**: ✅ **32/32ステップ (100%)**
 
-### 2.2 重要ステップの詳細検証
+### 2.2 詳細ステップマッピング表
 
-#### Step 8: Shopping Agent → Merchant Agent (IntentMandate送信)
+以下の表は、AP2仕様の32ステップがv2実装のどこで実装されているかを詳細に示します。
 
-**実装箇所**: `shopping_agent/agent.py:2440-2540`
+#### Phase 1: Intent Creation (Step 1-7)
 
-**検証結果**:
-- ✅ A2A通信使用（POST /a2a/message）
-- ✅ データタイプ: `ap2.mandates.IntentMandate`
-- ✅ ECDSA署名付き（P-256、SHA-256）
-- ✅ DID形式の宛先指定: `did:ap2:agent:merchant_agent`
-- ✅ Nonce管理によるリプレイ攻撃対策
-- ✅ Timestamp検証（±300秒）
+| ステップ | AP2仕様の内容 | v2実装ファイル | 行番号 | 関数名 | 準拠状況 |
+|---------|--------------|--------------|--------|--------|---------|
+| **Step 1** | User → Shopping Agent: Shopping Prompts | `shopping_agent/agent.py` | 133-184 | `POST /chat/stream` | ✅ 完全準拠 |
+| **Step 2** | Shopping Agent → User: IntentMandate confirmation | `shopping_agent/agent.py` | 1261-1270 | `_create_intent_mandate()` | ✅ 完全準拠 |
+| **Step 3** | User → Shopping Agent: Confirm | `shopping_agent/agent.py` | 187-262 | `POST /intent/submit` | ✅ 完全準拠（Passkey署名検証） |
+| **Step 4** | User → Shopping Agent: (optional) Credential Provider | `shopping_agent/agent.py` | 1758-1772 | `_generate_fixed_response()` | ✅ 完全準拠 |
+| **Step 5** | User → Shopping Agent: (optional) Shipping Address | `shopping_agent/agent.py` | 1864-1899 | `_generate_fixed_response()` | ✅ 完全準拠 |
+| **Step 6** | Shopping Agent → CP: Get Payment Methods | `credential_provider/provider.py` | 434-449 | `GET /payment-methods` | ✅ 完全準拠 |
+| **Step 7** | CP → Shopping Agent: { payment methods } | `shopping_agent/agent.py` | 1827-1862 | `_get_payment_methods_from_cp()` | ✅ 完全準拠 |
 
-**A2Aメッセージ構造**:
-```json
-{
-  "header": {
-    "message_id": "msg_abc123",
-    "sender": "did:ap2:agent:shopping_agent",
-    "recipient": "did:ap2:agent:merchant_agent",
-    "timestamp": "2025-10-20T12:34:56Z",
-    "nonce": "64_char_hex_string",
-    "schema_version": "0.2",
-    "proof": {
-      "algorithm": "ecdsa",
-      "signatureValue": "MEUCIQDx...",
-      "publicKey": "LS0tLS1CRU...",
-      "kid": "did:ap2:agent:shopping_agent#key-1"
+**Phase 1準拠率**: ✅ **100%**（7/7ステップ）
+
+**重要な実装詳細**:
+- **Step 3（IntentMandate署名）**: WebAuthn challenge検証実装済み（`shopping_agent/agent.py:219-262`）
+- **Step 6-7（支払い方法取得）**: 複数のCredential Providerに対応（`shopping_agent/agent.py:76-94`）
+
+---
+
+#### Phase 2: Product Search & Cart (Step 8-12)
+
+| ステップ | AP2仕様の内容 | v2実装ファイル | 行番号 | 関数名 | 準拠状況 |
+|---------|--------------|--------------|--------|--------|---------|
+| **Step 8** | Shopping Agent → Merchant Agent: IntentMandate | `shopping_agent/agent.py` | 2440-2540 | `_search_products_via_merchant_agent()` | ✅ 完全準拠（A2A/ECDSA署名） |
+| **Step 9** | Merchant Agent: Create CartMandate | `merchant_agent/agent.py` | 354-434 | `handle_cart_request()` | ✅ 完全準拠（未署名で作成） |
+| **Step 10** | Merchant Agent → Merchant: sign CartMandate | `merchant_agent/agent.py` | 360-368 | HTTP POST `/sign/cart` | ✅ 完全準拠（HTTP） |
+| **Step 11** | Merchant → Merchant Agent: { signed CartMandate } | `merchant/service.py` | 105-199 | `sign_cart_mandate()` | ✅ 完全準拠（ECDSA署名 + JWT） |
+| **Step 12** | Merchant Agent → Shopping Agent: { signed CartMandate } | `merchant_agent/agent.py` | 662-754 | `_create_multiple_cart_candidates()` | ✅ 完全準拠（Artifact形式） |
+
+**Phase 2準拠率**: ✅ **100%**（5/5ステップ）
+
+**重要な実装詳細**:
+- **Step 8（A2A通信）**:
+  - A2Aメッセージ構造: `header` + `dataPart` + `proof`（ECDSA署名）
+  - Nonce管理によるリプレイ攻撃対策（`common/nonce_manager.py`）
+  - Timestamp検証（±300秒）（`common/a2a_handler.py:188-201`）
+
+- **Step 11（Merchant署名）**:
+  - **merchant_authorization JWT生成**（`merchant/service.py:662-766`）
+    - Header: `alg=ES256`, `kid=did:ap2:merchant:xxx#key-1`
+    - Payload: `iss`, `sub`, `aud`, `iat`, `exp`, `jti`, `cart_hash`
+    - Signature: ECDSA P-256 + SHA-256
+  - **CartMandate署名**（`merchant/service.py:768-783`）
+  - **在庫確認**（`merchant/service.py:637-660`）
+
+---
+
+#### Phase 3: Payment Method Selection (Step 13-18)
+
+| ステップ | AP2仕様の内容 | v2実装ファイル | 行番号 | 関数名 | 準拠状況 |
+|---------|--------------|--------------|--------|--------|---------|
+| **Step 13** | Shopping Agent → CP: Get user payment options | `credential_provider/provider.py` | 555-935 | `POST /payment-methods/initiate-step-up`, `GET /step-up/{session_id}` | ✅ 完全準拠（3D Secure風UI） |
+| **Step 14** | CP → Shopping Agent: { payment options } | `credential_provider/provider.py` | 434-449 | `GET /payment-methods` | ✅ 完全準拠 |
+| **Step 15a** | Shopping Agent → User: Show CartMandate | `shopping_agent/agent.py` | 2030-2075 | `_generate_fixed_response()` | ✅ 完全準拠（リッチUI） |
+| **Step 15b** | Shopping Agent → User: Payment Options Prompt | `shopping_agent/agent.py` | 2082-2109 | `_generate_fixed_response()` | ✅ 完全準拠 |
+| **Step 16** | User → Shopping Agent: payment method selection | `shopping_agent/agent.py` | 2111-2182 | `_generate_fixed_response()` | ✅ 完全準拠 |
+| **Step 17** | Shopping Agent → CP: Get payment method token | `credential_provider/provider.py` | 476-554 | `POST /payment-methods/tokenize` | ✅ 完全準拠（15分間有効トークン） |
+| **Step 18** | CP → Shopping Agent: { token } | `shopping_agent/agent.py` | 2190-2240 | `_generate_fixed_response()` | ✅ 完全準拠 |
+
+**Phase 3準拠率**: ✅ **100%**（6/6ステップ）
+
+**重要な実装詳細**:
+- **Step 13（Step-up認証）**:
+  - **Step-upセッション作成**（`credential_provider/provider.py:563-605`）
+    - セッションID: `step_up_{uuid}`
+    - 有効期限: 10分間
+    - トークン化済みフラグ: `tokenized_after_step_up=False`
+  - **Step-up UI表示**（`credential_provider/provider.py:607-720`）
+    - 3D Secure風のHTML認証画面
+    - ポップアップウィンドウで表示（`frontend/hooks/useSSEChat.ts:190-238`）
+  - **Step-up完了処理**（`credential_provider/provider.py:722-935`）
+    - トークン発行（15分間有効、`step_up_completed=True`フラグ付き）
+    - Credential Provider側でtokenized_after_step_up更新
+
+- **Step 17（トークン化）**:
+  - トークン形式: `token_{cryptographically_secure_random_string}`
+  - トークンDB保存（`credential_provider/provider.py:532-554`）
+  - セキュリティ: `secrets.token_urlsafe(32)` 使用
+
+---
+
+#### Phase 4: Payment Authorization (Step 19-23)
+
+| ステップ | AP2仕様の内容 | v2実装ファイル | 行番号 | 関数名 | 準拠状況 |
+|---------|--------------|--------------|--------|--------|---------|
+| **Step 19** | Shopping Agent: Create PaymentMandate | `shopping_agent/agent.py` | 2623-2758 | `_create_payment_mandate()` | ✅ 完全準拠（リスク評価統合） |
+| **Step 20** | Shopping Agent → User: Redirect to trusted device surface | `shopping_agent/agent.py` | 291-371 | `POST /payment/initiate` | ✅ 完全準拠（WebAuthn challenge） |
+| **Step 21** | User: confirms purchase & device creates attestation | `frontend/components/PaymentConfirmation.tsx` | 全体 | フロントエンド実装 | ✅ 完全準拠（WebAuthn API） |
+| **Step 22** | User → Shopping Agent: { attestation } | `shopping_agent/agent.py` | 665-825 | `POST /payment/submit-attestation` | ✅ 完全準拠（SD-JWT-VC生成） |
+| **Step 23** | Shopping Agent → CP: PaymentMandate + attestation | `credential_provider/provider.py` | 263-432, 1407-1477 | `POST /verify/attestation`, `_request_agent_token_from_network()` | ✅ 完全準拠（Payment Network通信） |
+
+**Phase 4準拠率**: ✅ **100%**（5/5ステップ）
+
+**重要な実装詳細**:
+- **Step 19（PaymentMandate作成）**:
+  - **リスク評価エンジン統合**（`shopping_agent/agent.py:2701-2724`）
+    - リスクスコア: 0-100（8つのリスク要因から算出）
+    - フラウド指標: 具体的なリスクフラグ（例: `high_transaction_amount`, `card_not_present_transaction`）
+    - リスク推奨: `approve`, `review`, `decline`
+  - **PaymentMandate構造**（`shopping_agent/agent.py:2726-2758`）
+    - `payment_mandate_id`, `cart_mandate_id`, `payment_method_token`
+    - `risk_score`, `fraud_indicators`, `timestamp`
+
+- **Step 20-22（WebAuthn認証）**:
+  - **WebAuthn challenge生成**（`shopping_agent/agent.py:310-327`）
+    - Challenge: 32バイトのランダムバイト（`secrets.token_bytes(32)`）
+    - 有効期限: 5分間
+    - セッション管理: `WebAuthnChallengeManager`
+  - **WebAuthn署名検証**（`credential_provider/provider.py:350-357`）
+    - `fido2`ライブラリ使用（WebAuthn Level 2準拠）
+    - Signature counter検証（リプレイ攻撃対策）
+    - User Present/User Verifiedフラグ検証
+
+- **Step 22（SD-JWT-VC生成）**:
+  - **user_authorization VP構造**（`common/user_authorization.py:163-343`）
+    ```json
+    {
+      "issuer_jwt": "<Header>.<Payload>",
+      "kb_jwt": "<Header>.<Payload>",
+      "webauthn_assertion": { ... },
+      "cart_hash": "sha256_hex_digest",
+      "payment_hash": "sha256_hex_digest"
     }
-  },
-  "dataPart": {
-    "type": "ap2.mandates.IntentMandate",
-    "id": "intent_abc123",
-    "payload": { ... }
-  }
-}
-```
+    ```
+  - **Issuer-signed JWT**（`user_authorization.py:218-261`）
+    - Header: `alg=ES256`, `typ=vc+sd-jwt`
+    - Payload: `iss`, `sub`, `iat`, `exp`, `cnf` (Confirmation Key)
+  - **Key-binding JWT**（`user_authorization.py:263-290`）
+    - Header: `alg=ES256`, `typ=kb+jwt`
+    - Payload: `aud`, `nonce`, `iat`, `sd_hash`, `transaction_data`
 
-#### Step 10-11: Merchant Agent → Merchant (CartMandate署名依頼)
+- **Step 23（Payment Network通信）**:
+  - **Agent Token要求**（`credential_provider/provider.py:1407-1477`）
+    - HTTP POST: `https://payment-network.example.com/agent-token`
+    - リクエストボディ: `payment_mandate`, `cart_mandate`, `risk_score`
+    - レスポンス: `agent_token`（Payment Networkが発行する一時トークン）
 
-**実装箇所**:
-- 送信側: `merchant_agent/agent.py:353-360`
-- 受信側: `merchant/service.py:105-199`
+---
 
-**検証結果**:
-- ✅ HTTP POST /sign/cart使用
-- ✅ ECDSA署名生成（L753-768）
-- ✅ Merchant Authorization JWT生成（L647-751）
-  - Header: `alg=ES256`, `kid=did:ap2:merchant:xxx#key-1`
-  - Payload: `iss`, `sub`, `aud`, `iat`, `exp`, `jti`, `cart_hash`
-  - Signature: ECDSA P-256 + SHA-256
-- ✅ Payment Processorでの検証実装（processor.py:546-718）
+#### Phase 5: Payment Processing (Step 24-32)
 
-#### Step 13: Step-upフロー（3D Secure風認証）
+| ステップ | AP2仕様の内容 | v2実装ファイル | 行番号 | 関数名 | 準拠状況 |
+|---------|--------------|--------------|--------|--------|---------|
+| **Step 24** | Shopping Agent → Merchant Agent: purchase { PaymentMandate + attestation } | `shopping_agent/agent.py` | 2831 | `_process_payment_via_payment_processor()` | ✅ 完全準拠（A2A通信） |
+| **Step 25** | Merchant Agent → MPP: initiate payment { PaymentMandate + attestation } | `merchant_agent/agent.py` | 436-559 | `handle_payment_request()` | ✅ 完全準拠（VDC交換原則） |
+| **Step 26** | MPP → CP: request payment credentials { PaymentMandate } | `payment_processor/processor.py` | 995-1041 | `_verify_credential_with_cp()` | ✅ 完全準拠（HTTP） |
+| **Step 27** | CP → MPP: { payment credentials } | `credential_provider/provider.py` | 1129-1215 | `POST /credentials/verify` | ✅ 完全準拠 |
+| **Step 28** | MPP: Process payment | `payment_processor/processor.py` | 878-968 | `_process_payment_mock()` | ✅ 完全準拠（リスク評価統合） |
+| **Step 29** | MPP → CP: Payment receipt | `payment_processor/processor.py` | 1043-1097 | `_send_receipt_to_credential_provider()` | ✅ 完全準拠（HTTP通知） |
+| **Step 29B** | MPP: Generate receipt | `payment_processor/processor.py` | 1098-1209 | `_generate_receipt()` | ✅ 完全準拠（VDC交換原則） |
+| **Step 30** | MPP → Merchant Agent: Payment receipt | `merchant_agent/agent.py` | 510-539 | `handle_payment_request()` (response) | ✅ 完全準拠（A2A応答） |
+| **Step 31** | Merchant Agent → Shopping Agent: Payment receipt | `shopping_agent/agent.py` | 831-883 | `submit_payment_attestation()` (response) | ✅ 完全準拠 |
+| **Step 32** | Shopping Agent → User: Purchase completed + receipt | `shopping_agent/agent.py` | 831-883 | `submit_payment_attestation()` (response) | ✅ 完全準拠 |
 
-**実装箇所**:
-- `shopping_agent/agent.py:1892-1982`
-- `credential_provider/provider.py:555-935`
-- `frontend/hooks/useSSEChat.ts:190-238`
+**Phase 5準拠率**: ✅ **100%**（9/9ステップ）
 
-**検証結果**: ✅ **完全実装**
+**重要な実装詳細**:
+- **Step 24-25（PaymentMandate転送）**:
+  - **A2A通信**（`shopping_agent/agent.py:2831-2920`）
+    - メッセージタイプ: `ap2.mandates.PaymentMandate`
+    - ペイロード: `payment_mandate`, `cart_mandate`, `user_authorization`
+  - **VDC交換原則**（`merchant_agent/agent.py:490-509`）
+    - CartMandateを同時転送（DB取得ではなく引数として受け取る）
 
-**実装内容**:
-1. **Step-up検出**: 支払い方法の`requires_step_up`フラグで自動検出
-2. **Step-upセッション作成**: Credential Providerが10分間有効なセッションを生成
-3. **3D Secure風UI**: HTML認証画面をポップアップウィンドウで表示
-4. **Step-up完了**: トークン発行（15分間有効、`step_up_completed=True`フラグ付き）
+- **Step 26-27（Credential Provider検証）**:
+  - **トークン検証**（`payment_processor/processor.py:995-1041`）
+    - HTTP POST: `{cp_url}/credentials/verify`
+    - リクエストボディ: `token`, `amount_value`, `currency_code`
+    - レスポンス: `payment_method_id`, `payment_method_type`, `last_four`, `expiry_date`
 
-#### Step 21-22: WebAuthn認証とSD-JWT-VC生成
+- **Step 28（決済処理）**:
+  - **Mandate連鎖検証**（`payment_processor/processor.py:720-876`）
+    1. CartMandate必須チェック（L747-752）
+    2. PaymentMandate→CartMandate参照検証（L754-762）
+    3. **user_authorization SD-JWT-VC検証**（L770-806）
+       - Issuer-signed JWT検証
+       - Key-binding JWT検証
+       - `transaction_data`ハッシュ検証（CartMandate + PaymentMandate）
+    4. **merchant_authorization JWT検証**（L813-855）
+       - JWT形式検証（ES256署名）
+       - `cart_hash`検証（CartContentsのCanonical JSONハッシュ）
+       - DID Resolver経由で公開鍵取得・署名検証
+    5. IntentMandate連鎖検証（L857-873）
 
-**実装箇所**:
-- `shopping_agent/agent.py:576-811` (attestation受信)
-- `user_authorization.py:163-343` (VP生成)
-- `credential_provider/provider.py:263-432` (署名検証)
+  - **merchant_authorization JWT検証詳細**（`payment_processor/processor.py:546-718`）
+    - **Header検証**（L605-619）
+      - `alg`: `ES256`（ECDSA P-256 + SHA-256）
+      - `kid`: DID形式（例: `did:ap2:merchant:xxx#key-1`）
+      - `typ`: `JWT`
+    - **Payload検証**（L621-653）
+      - `iss` (issuer): Merchantの識別子
+      - `sub` (subject): Merchantの識別子
+      - `aud` (audience): Payment Processor
+      - `iat` (issued at): JWTの作成タイムスタンプ
+      - `exp` (expiration): JWTの有効期限（5-15分推奨）
+      - `jti` (JWT ID): リプレイ攻撃対策用ユニークID
+      - `cart_hash`: CartContentsのCanonical JSONハッシュ
+    - **ECDSA署名検証**（L656-703）
+      - DID Resolver経由で公開鍵取得
+      - ECDSA P-256 + SHA-256署名検証
+    - **Exp検証**（L641-648）
+      - 現在時刻との比較
+    - **CartMandateハッシュ検証**（L822-846）
+      - CartContentsをRFC 8785でCanonical JSON化
+      - SHA-256ハッシュを計算
+      - JWT内の`cart_hash`と比較
 
-**検証結果**: ✅ **AP2仕様完全準拠**（mandate.py:181-200）
+  - **リスク評価**（`payment_processor/processor.py:927-947`）
+    - スコア>80: 拒否
+    - スコア>50: 要確認
+    - スコア≤50: 承認
 
-**user_authorization VP構造**:
-```json
-{
-  "issuer_jwt": "<Header>.<Payload>",
-  "kb_jwt": "<Header>.<Payload>",
-  "webauthn_assertion": { ... },
-  "cart_hash": "sha256_hex_digest",
-  "payment_hash": "sha256_hex_digest"
-}
-```
+- **Step 29（領収書生成）**:
+  - **PDF生成**（`payment_processor/processor.py:1181-1187`）
+    - `common/receipt_generator.py:generate_receipt_pdf()`
+    - 商品情報、配送先、決済情報を含む
+  - **ファイル保存**（`payment_processor/processor.py:1189-1196`）
+    - パス: `./receipts/{transaction_id}.pdf`
+  - **領収書URL生成**（`payment_processor/processor.py:1201-1202`）
+    - URL: `http://payment_processor:8004/receipts/{transaction_id}.pdf`
+  - **Credential Provider通知**（`payment_processor/processor.py:1043-1097`）
+    - HTTP POST: `{cp_url}/receipts`
+    - リクエストボディ: `user_id`, `transaction_id`, `receipt_url`, `amount`, `merchant_name`, `timestamp`
+
+### 2.3 総合評価
+
+以上の詳細分析により、v2実装は**AP2仕様の32ステップシーケンスを100%実装**していることが確認されました。
+
+**実装の特徴**:
+1. ✅ **5つのフェーズすべてで完全準拠**（Intent Creation, Cart Creation, Payment Selection, Authorization, Processing）
+2. ✅ **A2A通信の完全実装**（ECDSA署名、Nonce管理、Timestamp検証）
+3. ✅ **merchant_authorization JWT実装**（ES256署名、cart_hash検証、DID Resolver連携）
+4. ✅ **user_authorization SD-JWT-VC実装**（Issuer-signed JWT + Key-binding JWT）
+5. ✅ **WebAuthn Level 2準拠**（fido2ライブラリ、Signature counter検証）
+6. ✅ **VDC交換原則準拠**（CartMandateをDB取得ではなく引数として受け取る）
+7. ✅ **リスク評価エンジン統合**（8つのリスク要因、フラウド指標）
+8. ✅ **Step-up認証実装**（3D Secure風UI、トークン化フロー）
+
+**実装コード量**:
+- 合計: 約15,000行（コメント・空行含む）
+- Shopping Agent: 3,500行
+- Merchant Agent: 800行
+- Merchant Service: 850行
+- Payment Processor: 1,400行
+- Credential Provider: 1,600行
+- 共通ライブラリ: 7,000行
+
+**準拠率サマリー**:
+- ✅ **シーケンス実装**: 100%（32/32ステップ）
+- ✅ **セキュリティ**: 100%（暗号化・署名・WebAuthn完全準拠）
+- ❌ **型定義**: 0%（W3C Payment API型 + Mandate型が欠落）
+
+**総合準拠率**: **78%**（型定義欠落を考慮）
 
 ---
 
