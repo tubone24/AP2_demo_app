@@ -38,8 +38,15 @@ from v2.common.database import DatabaseManager, MandateCRUD, TransactionCRUD, Ag
 from v2.common.risk_assessment import RiskAssessmentEngine
 from v2.common.crypto import WebAuthnChallengeManager, CryptoError
 from v2.common.user_authorization import create_user_authorization_vp
+from v2.common.logger import (
+    get_logger,
+    log_http_request,
+    log_http_response,
+    log_a2a_message,
+    log_database_operation
+)
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__, service_name='shopping_agent')
 
 
 class ShoppingAgent(BaseAgent):
@@ -1489,64 +1496,97 @@ class ShoppingAgent(BaseAgent):
             )
             await asyncio.sleep(0.3)
 
-            # AP2仕様準拠：CartMandateをMerchantに送って署名を取得
-            yield StreamEvent(
-                type="agent_text",
-                content="Merchantに署名を依頼しています..."
-            )
-            await asyncio.sleep(0.3)
+            # AP2仕様準拠（specification.md:629-632）：
+            # Cart MandateはMerchant Agentがカート候補作成時に既にMerchantから署名を取得済み
+            # "ma ->> m: 10. sign CartMandate"
+            # "m --) ma: 11. { signed CartMandate }"
+            # "ma --) sa: 12. { signed CartMandate }"
+            #
+            # Shopping Agentは署名済みCart Mandateをそのまま使用する（再署名依頼不要）
 
-            try:
-                # Merchantに署名依頼
-                merchant_url = self.merchant_url
-                response = await self.http_client.post(
-                    f"{merchant_url}/sign/cart",
-                    json={"cart_mandate": cart_mandate},
-                    timeout=10.0
+            # Merchant署名の存在確認
+            merchant_signature = cart_mandate.get("merchant_signature")
+            merchant_authorization = cart_mandate.get("merchant_authorization")
+
+            if not merchant_signature or not merchant_authorization:
+                logger.error(
+                    f"[ShoppingAgent] Cart Mandate missing required signatures: "
+                    f"cart_id={cart_mandate.get('id')}"
                 )
-                response.raise_for_status()
-                sign_result = response.json()
-
-                # Merchant署名済みCartMandateを取得
-                signed_cart_mandate = sign_result.get("signed_cart_mandate")
-                if not signed_cart_mandate:
-                    raise ValueError("Merchant signature failed")
-
-                session["cart_mandate"] = signed_cart_mandate
-                await self._update_session(session_id, session)
-
-                logger.info(
-                    f"[ShoppingAgent] CartMandate signed by Merchant: "
-                    f"cart_id={signed_cart_mandate.get('id')}"
-                )
-
                 yield StreamEvent(
                     type="agent_text",
-                    content="✅ Merchant署名完了。カート内容を確認して署名してください。"
-                )
-                await asyncio.sleep(0.3)
-
-                # AP2仕様準拠：ユーザーにCartMandate署名を要求
-                # AP2仕様準拠: ユーザーにCartMandate署名をリクエスト
-                # フロントエンドがWebAuthn署名を完了し、/cart/submit-signatureを呼び出すと
-                # step="select_payment_method"に遷移する
-                yield StreamEvent(
-                    type="signature_request",
-                    mandate=signed_cart_mandate,
-                    mandate_type="cart"
-                )
-
-                session["step"] = "cart_signature_pending"
-                return
-
-            except Exception as e:
-                logger.error(f"[_generate_fixed_response] Merchant signature failed: {e}", exc_info=True)
-                yield StreamEvent(
-                    type="agent_text",
-                    content=f"申し訳ありません。Merchant署名に失敗しました: {str(e)}"
+                    content="申し訳ありません。このカートにはMerchant署名がありません。"
                 )
                 session["step"] = "error"
                 return
+
+            # AP2仕様準拠：Merchant署名を暗号学的に検証
+            from common.models import Signature
+
+            # merchant_signatureをSignatureオブジェクトに変換
+            try:
+                if isinstance(merchant_signature, dict):
+                    sig_obj = Signature(**merchant_signature)
+                else:
+                    sig_obj = merchant_signature
+
+                # SignatureManagerでMerchant署名を検証
+                is_valid = self.signature_manager.verify_mandate_signature(
+                    cart_mandate,
+                    sig_obj
+                )
+
+                if not is_valid:
+                    logger.error(
+                        f"[ShoppingAgent] Merchant signature verification FAILED: "
+                        f"cart_id={cart_mandate.get('id')}"
+                    )
+                    yield StreamEvent(
+                        type="agent_text",
+                        content="申し訳ありません。Merchant署名の検証に失敗しました。"
+                    )
+                    session["step"] = "error"
+                    return
+
+                logger.info(
+                    f"[ShoppingAgent] Merchant signature verified successfully: "
+                    f"cart_id={cart_mandate.get('id')}, "
+                    f"algorithm={sig_obj.algorithm}"
+                )
+
+            except Exception as e:
+                logger.error(
+                    f"[ShoppingAgent] Error during merchant signature verification: {e}",
+                    exc_info=True
+                )
+                yield StreamEvent(
+                    type="agent_text",
+                    content="申し訳ありません。Merchant署名の検証中にエラーが発生しました。"
+                )
+                session["step"] = "error"
+                return
+
+            # 署名済みCart Mandateをセッションに保存
+            session["cart_mandate"] = cart_mandate
+            await self._update_session(session_id, session)
+
+            yield StreamEvent(
+                type="agent_text",
+                content="✅ Merchant署名確認完了。カート内容を確認して署名してください。"
+            )
+            await asyncio.sleep(0.3)
+
+            # AP2仕様準拠：ユーザーにCartMandate署名を要求
+            # フロントエンドがWebAuthn署名を完了し、/cart/submit-signatureを呼び出すと
+            # step="select_payment_method"に遷移する
+            yield StreamEvent(
+                type="signature_request",
+                mandate=cart_mandate,
+                mandate_type="cart"
+            )
+
+            session["step"] = "cart_signature_pending"
+            return
 
         # ============ 以下の cart_selected_need_shipping ステップは削除 ============
         # AP2仕様では、配送先はCartMandate作成「前」に確定済み

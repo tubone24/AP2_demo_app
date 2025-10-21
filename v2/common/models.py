@@ -113,6 +113,7 @@ class Signature(BaseModel):
     value: str = Field(..., description="BASE64エンコードされた署名値")
     public_key: str = Field(..., description="BASE64エンコードされた公開鍵（PEM形式）")
     signed_at: str = Field(..., description="署名日時（ISO 8601）")
+    key_id: Optional[str] = Field(None, description="署名に使用した鍵のID（後方互換性のためOptional）")
 
     class Config:
         json_schema_extra = {
@@ -120,7 +121,8 @@ class Signature(BaseModel):
                 "algorithm": "ECDSA",
                 "value": "MEUCIQDx...",
                 "public_key": "LS0tLS1CRU...",
-                "signed_at": "2025-10-16T12:34:56Z"
+                "signed_at": "2025-10-16T12:34:56Z",
+                "key_id": "shopping_agent"
             }
         }
 

@@ -36,7 +36,7 @@ from typing import Dict, Any, List
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.asymmetric import ec, ed25519
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
 
@@ -105,12 +105,23 @@ class KeyInitializer:
         public_key = private_key.public_key()
         return private_key, public_key
 
-    def encrypt_private_key(self, private_key: ec.EllipticCurvePrivateKey, passphrase: str) -> bytes:
+    def generate_ed25519_keypair(self) -> tuple:
         """
-        秘密鍵をAES-256-CBCで暗号化（crypto.py互換）
+        Ed25519キーペアを生成（A2A通信用）
+
+        Returns:
+            (private_key, public_key): Ed25519秘密鍵と公開鍵のタプル
+        """
+        private_key = ed25519.Ed25519PrivateKey.generate()
+        public_key = private_key.public_key()
+        return private_key, public_key
+
+    def encrypt_private_key(self, private_key, passphrase: str) -> bytes:
+        """
+        秘密鍵をAES-256-CBCで暗号化（crypto.py互換、ECDSA/Ed25519両対応）
 
         Args:
-            private_key: ECDSA秘密鍵
+            private_key: ECDSA or Ed25519秘密鍵
             passphrase: 暗号化パスフレーズ
 
         Returns:
@@ -143,36 +154,46 @@ class KeyInitializer:
 
         print(f"  ✓ 秘密鍵を保存: {key_file}")
 
-    def save_public_key(self, agent_id: str, public_key: ec.EllipticCurvePublicKey):
+    def save_public_key(self, agent_id: str, public_key, suffix: str = ""):
         """
-        公開鍵をPEM形式でファイルに保存（crypto.py互換）
+        公開鍵をPEM形式でファイルに保存（crypto.py互換、ECDSA/Ed25519両対応）
 
         Args:
             agent_id: エージェントID
-            public_key: ECDSA公開鍵
+            public_key: ECDSA or Ed25519公開鍵
+            suffix: ファイル名サフィックス（例: "_ed25519"）
         """
         public_pem = public_key.public_bytes(
             encoding=serialization.Encoding.PEM,
             format=serialization.PublicFormat.SubjectPublicKeyInfo
         )
 
-        key_file = KEYS_DIR / f"{agent_id}_public.pem"
+        key_file = KEYS_DIR / f"{agent_id}{suffix}_public.pem"
         key_file.write_bytes(public_pem)
         print(f"  ✓ 公開鍵を保存: {key_file}")
 
-    def create_did_document(self, agent_info: Dict[str, Any], public_key: ec.EllipticCurvePublicKey) -> Dict[str, Any]:
+    def create_did_document(self, agent_info: Dict[str, Any], ecdsa_public_key: ec.EllipticCurvePublicKey, ed25519_public_key) -> Dict[str, Any]:
         """
-        W3C DID準拠のDID Documentを生成
+        W3C DID準拠のDID Documentを生成（ECDSA + Ed25519の両方の鍵を含む）
 
         Args:
             agent_info: エージェント情報
-            public_key: Ed25519公開鍵
+            ecdsa_public_key: ECDSA公開鍵（JWT署名用）
+            ed25519_public_key: Ed25519公開鍵（A2A通信用）
 
         Returns:
             DID Document
         """
         did = agent_info["did"]
-        public_pem = public_key.public_bytes(
+
+        # ECDSA公開鍵のPEM
+        ecdsa_pem = ecdsa_public_key.public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo
+        ).decode('utf-8')
+
+        # Ed25519公開鍵のPEM
+        ed25519_pem = ed25519_public_key.public_bytes(
             encoding=serialization.Encoding.PEM,
             format=serialization.PublicFormat.SubjectPublicKeyInfo
         ).decode('utf-8')
@@ -180,7 +201,8 @@ class KeyInitializer:
         did_doc = {
             "@context": [
                 "https://www.w3.org/ns/did/v1",
-                "https://w3id.org/security/suites/jws-2020/v1"
+                "https://w3id.org/security/suites/jws-2020/v1",
+                "https://w3id.org/security/suites/ed25519-2020/v1"
             ],
             "id": did,
             "verificationMethod": [
@@ -188,11 +210,17 @@ class KeyInitializer:
                     "id": f"{did}#key-1",
                     "type": "EcdsaSecp256r1VerificationKey2019",
                     "controller": did,
-                    "publicKeyPem": public_pem
+                    "publicKeyPem": ecdsa_pem
+                },
+                {
+                    "id": f"{did}#key-2",
+                    "type": "Ed25519VerificationKey2020",
+                    "controller": did,
+                    "publicKeyPem": ed25519_pem
                 }
             ],
-            "authentication": [f"{did}#key-1"],
-            "assertionMethod": [f"{did}#key-1"],
+            "authentication": [f"{did}#key-1", f"{did}#key-2"],
+            "assertionMethod": [f"{did}#key-1", f"{did}#key-2"],
             "created": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
             "updated": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
         }
@@ -241,21 +269,37 @@ class KeyInitializer:
             print(f"     DID: {agent_info['did']}")
             return
 
-        # 新規にキーペアを生成
-        print(f"  🔑 ECDSA SECP256R1キーペアを生成中...")
-        private_key, public_key = self.generate_ecdsa_keypair()
+        # 新規にECDSAキーペアを生成（JWT署名用）
+        print(f"  🔑 ECDSA SECP256R1キーペアを生成中（JWT用）...")
+        ecdsa_private_key, ecdsa_public_key = self.generate_ecdsa_keypair()
 
-        # 秘密鍵を暗号化
-        print(f"  🔒 秘密鍵をAES-256-CBCで暗号化中...")
-        encrypted_key = self.encrypt_private_key(private_key, passphrase)
+        # ECDSA秘密鍵を暗号化
+        print(f"  🔒 ECDSA秘密鍵をAES-256-CBCで暗号化中...")
+        ecdsa_encrypted_key = self.encrypt_private_key(ecdsa_private_key, passphrase)
 
-        # ファイルに保存
-        self.save_private_key(agent_id, encrypted_key)
-        self.save_public_key(agent_id, public_key)
+        # ECDSAファイルに保存
+        self.save_private_key(agent_id, ecdsa_encrypted_key)
+        self.save_public_key(agent_id, ecdsa_public_key)
 
-        # DID Documentを生成
-        print(f"  📄 W3C準拠のDID Documentを生成中...")
-        did_doc = self.create_did_document(agent_info, public_key)
+        # 新規にEd25519キーペアを生成（A2A通信用）
+        print(f"  🔑 Ed25519キーペアを生成中（A2A通信用）...")
+        ed25519_private_key, ed25519_public_key = self.generate_ed25519_keypair()
+
+        # Ed25519秘密鍵を暗号化
+        print(f"  🔒 Ed25519秘密鍵をAES-256-CBCで暗号化中...")
+        ed25519_encrypted_key = self.encrypt_private_key(ed25519_private_key, passphrase)
+
+        # Ed25519ファイルに保存（crypto.pyと互換性のあるファイル名）
+        ed25519_private_file = KEYS_DIR / f"{agent_id}_ed25519_private.pem"
+        ed25519_private_file.write_bytes(ed25519_encrypted_key)
+        os.chmod(ed25519_private_file, 0o600)
+        print(f"  ✓ Ed25519秘密鍵を保存: {ed25519_private_file}")
+
+        self.save_public_key(agent_id, ed25519_public_key, suffix="_ed25519")
+
+        # DID Documentを生成（ECDSA + Ed25519両方の公開鍵を含む）
+        print(f"  📄 W3C準拠のDID Documentを生成中（ECDSA + Ed25519）...")
+        did_doc = self.create_did_document(agent_info, ecdsa_public_key, ed25519_public_key)
         self.save_did_document(agent_id, did_doc)
 
         print(f"  ✅ 初期化完了: DID = {agent_info['did']}")

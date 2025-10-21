@@ -24,8 +24,9 @@ from v2.common.base_agent import BaseAgent, AgentPassphraseManager
 from v2.common.models import A2AMessage, ProcessPaymentRequest, ProcessPaymentResponse
 from v2.common.database import DatabaseManager, TransactionCRUD
 from v2.common.user_authorization import verify_user_authorization_vp, compute_mandate_hash
+from v2.common.logger import get_logger, log_a2a_message, log_database_operation
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__, service_name='payment_processor')
 
 
 class PaymentProcessorService(BaseAgent):

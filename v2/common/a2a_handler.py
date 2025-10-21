@@ -192,14 +192,16 @@ class A2AMessageHandler:
                     )
 
                 # Pydanticモデルを辞書に変換（署名検証用）
-                message_dict = message.model_dump(by_alias=True)
+                # AP2/A2A仕様準拠：Noneフィールドを除外して署名時と同じ状態にする
+                message_dict = message.model_dump(by_alias=True, exclude_none=True)
 
                 # Signatureオブジェクトに変換（ap2_crypto用）
                 signature_obj = Signature(
                     algorithm=proof.algorithm.upper(),
                     value=proof.signatureValue,
                     public_key=public_key_to_verify,  # DID解決した公開鍵を使用
-                    signed_at=proof.created
+                    signed_at=proof.created,
+                    key_id=proof.kid  # KIDを設定
                 )
 
                 # 署名検証（ap2_crypto.SignatureManagerを使用）
@@ -229,7 +231,8 @@ class A2AMessageHandler:
 
             try:
                 # Pydanticモデルを辞書に変換（署名検証用）
-                message_dict = message.model_dump(by_alias=True)
+                # AP2/A2A仕様準拠：Noneフィールドを除外
+                message_dict = message.model_dump(by_alias=True, exclude_none=True)
 
                 # Signatureオブジェクトに変換（ap2_crypto用）
                 sig = message.header.signature
@@ -385,7 +388,9 @@ class A2AMessageHandler:
 
         # 署名（A2A仕様準拠：proof構造を使用）
         if sign:
-            message_dict = message.model_dump(by_alias=True)
+            # AP2/A2A仕様準拠：署名対象データ作成時にNoneフィールドを除外
+            # これにより、署名時と検証時で同じcanonical JSONが生成される
+            message_dict = message.model_dump(by_alias=True, exclude_none=True)
 
             # agent_idから鍵IDを抽出（例: did:ap2:agent:shopping_agent -> shopping_agent）
             key_id = self.agent_id.split(":")[-1]
@@ -395,7 +400,9 @@ class A2AMessageHandler:
 
             # A2AProof構造に変換（A2A仕様準拠）
             # 専門家の指摘対応：kidフィールドを追加してDIDベースの鍵解決を可能に
-            kid = f"{self.agent_id}#key-1"  # DIDフラグメント形式
+            # Ed25519署名の場合は#key-2、ECDSA署名の場合は#key-1を使用
+            key_fragment = "#key-2" if signature_obj.algorithm.upper() == "ED25519" else "#key-1"
+            kid = f"{self.agent_id}{key_fragment}"  # DIDフラグメント形式
 
             message.header.proof = A2AProof(
                 algorithm=signature_obj.algorithm.lower(),
@@ -487,7 +494,8 @@ class A2AMessageHandler:
 
         # 署名（A2A仕様準拠：proof構造を使用）
         if sign:
-            message_dict = message.model_dump(by_alias=True)
+            # AP2/A2A仕様準拠：署名対象データ作成時にNoneフィールドを除外
+            message_dict = message.model_dump(by_alias=True, exclude_none=True)
 
             # agent_idから鍵IDを抽出
             key_id = self.agent_id.split(":")[-1]
@@ -496,7 +504,9 @@ class A2AMessageHandler:
             signature_obj = self.signature_manager.sign_a2a_message(message_dict, key_id)
 
             # A2AProof構造に変換
-            kid = f"{self.agent_id}#key-1"
+            # Ed25519署名の場合は#key-2、ECDSA署名の場合は#key-1を使用
+            key_fragment = "#key-2" if signature_obj.algorithm.upper() == "ED25519" else "#key-1"
+            kid = f"{self.agent_id}{key_fragment}"
 
             message.header.proof = A2AProof(
                 algorithm=signature_obj.algorithm.lower(),

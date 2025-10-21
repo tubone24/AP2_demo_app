@@ -24,8 +24,9 @@ from v2.common.base_agent import BaseAgent, AgentPassphraseManager
 from v2.common.models import A2AMessage, Signature
 from v2.common.database import DatabaseManager, ProductCRUD, MandateCRUD
 from v2.common.crypto import SignatureManager, KeyManager
+from v2.common.logger import get_logger, log_a2a_message, log_crypto_operation
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__, service_name='merchant')
 
 
 class MerchantService(BaseAgent):
@@ -191,15 +192,34 @@ class MerchantService(BaseAgent):
                         "merchant_authorization": merchant_authorization_jwt
                     }
                 else:
-                    # 手動署名モード：承認待ちとして保存
+                    # 手動署名モード：承認待ちとして保存（既存がある場合は更新）
+                    # AP2仕様準拠：Cart Mandateは冪等であり、同じIDで複数回リクエスト可能
                     async with self.db_manager.get_session() as session:
-                        await MandateCRUD.create(session, {
-                            "id": cart_mandate["id"],
-                            "type": "Cart",
-                            "status": "pending_merchant_signature",
-                            "payload": cart_mandate,
-                            "issuer": self.agent_id
-                        })
+                        # 既存のCart Mandateをチェック
+                        existing = await MandateCRUD.get_by_id(session, cart_mandate["id"])
+
+                        if existing:
+                            # 既存のMandateを更新（update_statusメソッドを使用）
+                            await MandateCRUD.update_status(
+                                session,
+                                cart_mandate["id"],
+                                status="pending_merchant_signature",
+                                payload=cart_mandate
+                            )
+                            logger.info(
+                                f"[Merchant] Updated existing CartMandate: {cart_mandate['id']} "
+                                f"(AP2 idempotency)"
+                            )
+                        else:
+                            # 新規作成
+                            await MandateCRUD.create(session, {
+                                "id": cart_mandate["id"],
+                                "type": "Cart",
+                                "status": "pending_merchant_signature",
+                                "payload": cart_mandate,
+                                "issuer": self.agent_id
+                            })
+                            logger.info(f"[Merchant] Created new CartMandate: {cart_mandate['id']}")
 
                     logger.info(f"[Merchant] CartMandate pending manual approval: {cart_mandate['id']}")
 

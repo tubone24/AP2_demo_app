@@ -396,6 +396,52 @@ curl -X POST http://localhost:8000/a2a/message \
 - `a2a_handler.py`で自動的に署名検証
 - 署名検証失敗時は400エラー
 
+### ロギング設定
+
+統一ロギングシステムを使用しており、環境変数で制御可能です。
+
+**環境変数:**
+```bash
+# ログレベル（DEBUG/INFO/WARNING/ERROR/CRITICAL）
+LOG_LEVEL=INFO  # デフォルト: INFO
+
+# ログフォーマット（text/json）
+LOG_FORMAT=text  # デフォルト: text
+```
+
+**ログレベルの説明:**
+- `DEBUG`: 詳細なデバッグ情報（HTTPペイロード、A2Aメッセージ、署名操作等）
+- `INFO`: 一般的な情報メッセージ（鍵生成、トランザクション開始等）
+- `WARNING`: 警告メッセージ（チャレンジ失敗、タイムスタンプずれ等）
+- `ERROR`: エラーメッセージ（検証失敗、データベースエラー等）
+- `CRITICAL`: 致命的なエラー（サービス起動失敗等）
+
+**フォーマットの説明:**
+- `text`: 人間が読みやすい形式（開発環境向け）
+  ```
+  [2025-10-21 12:34:56] INFO     common.crypto                  | Generating new key pair: shopping_agent
+  ```
+- `json`: 構造化JSON形式（本番環境向け、ログ集約ツールと連携）
+  ```json
+  {"timestamp":"2025-10-21T12:34:56Z","level":"INFO","logger":"common.crypto","message":"Generating new key pair: shopping_agent"}
+  ```
+
+**使用例:**
+```bash
+# デバッグモードで起動（すべてのHTTPペイロードを表示）
+LOG_LEVEL=DEBUG docker compose up
+
+# 本番環境（JSON形式、WARNINGレベル以上のみ）
+LOG_LEVEL=WARNING LOG_FORMAT=json docker compose up
+```
+
+**機能:**
+- 機密データの自動マスキング（password, token, private_key等）
+- HTTPリクエスト/レスポンスの自動ログ（DEBUGレベル）
+- A2Aメッセージペイロードの自動ログ（DEBUGレベル）
+- 暗号化操作の詳細ログ（署名、検証、鍵生成）
+- サービス別ログタグ（shopping_agent, merchant等）
+
 ## 🚧 次のステップ
 
 ### Phase 1: バックエンド（✅ 完了！）
