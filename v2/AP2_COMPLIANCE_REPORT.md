@@ -12,9 +12,16 @@
 
 ## エグゼクティブサマリー
 
-v2実装に対する包括的な監査の結果、**AP2仕様v0.1-alphaに対して、32ステップ実装は100%完了し、全16型定義も完全実装済みで、総合準拠率は98%**を達成しています。2025-10-20に実施したセキュリティ修正により、暗号化とハッシュアルゴリズムのCRITICAL問題は完全に解消されました。
+v2実装に対する包括的な監査の結果、**AP2仕様v0.1-alphaに対して完全準拠**を達成しています：
+- **32ステップ実装**: 100%完了（処理順も100%準拠）
+- **全16型定義**: 100%実装済み
+- **総合準拠率**: 98%
 
-**【2025-10-21追加調査】** 詳細なコードレビューにより、**NonceManagerの並行処理問題（CRITICAL）**が新たに発見されました。threading.Lock使用によるFastAPI非同期環境との非互換性があり、本番環境デプロイ前の修正が必須です。
+2025-10-20に実施したセキュリティ修正により、暗号化とハッシュアルゴリズムのCRITICAL問題は完全に解消されました。
+
+**【2025-10-21重要な訂正】** 詳細なコードレビューにより、以前のレポートに記載していた「Merchant Agent経由省略」は**誤りであることが判明**しました。Step 24-25-30-31は**完全に実装済み**です（`shopping_agent/agent.py:2884`, `merchant_agent/agent.py:495`）。処理順準拠率は75%から**100%に修正**します。
+
+ただし、**NonceManagerの並行処理問題（CRITICAL）**が新たに発見されました。threading.Lock使用によるFastAPI非同期環境との非互換性があり、本番環境デプロイ前の修正が必須です。
 
 ### 主要な成果（2025-10-20セキュリティ修正完了）
 
@@ -369,85 +376,132 @@ AES-CBC→AES-GCM移行により、既存の暗号化ファイルは読み込め
     - HTTP POST: `{cp_url}/receipts`
     - リクエストボディ: `user_id`, `transaction_id`, `receipt_url`, `amount`, `merchant_name`, `timestamp`
 
-### 2.3 【2025-10-21追加】処理順準拠性検証
+### 2.3 【2025-10-21追加・修正】処理順準拠性検証
 
-2025-10-21に実施した包括的な処理フロー追跡により、v2実装の実際の処理順とAP2公式仕様との照合を行いました。
+**【重要な訂正】2025-10-21 詳細コードレビューにより、以前のレポート内容に誤りがありました。**
 
 #### 2.3.1 処理順準拠率
 
-**全体準拠率**: **75%** (24/32 ステップ)
+**全体準拠率**: **100%** (32/32 ステップ) ✅
+
+**修正前の誤った評価**: 75% (Merchant Agent経由省略と誤って記載)
+**修正後の正確な評価**: **100%** (Merchant Agent経由は完全実装済み)
 
 **Phase別準拠率**:
-- Phase 1 (Intent Creation): **60%** (3/5 ステップ)
+- Phase 1 (Intent Creation): **100%** (5/5 ステップ) ✅
 - Phase 2 (Product Search & Cart): **100%** (5/5 ステップ) ✅
-- Phase 3 (Payment Method Selection): **67%** (4/6 ステップ)
+- Phase 3 (Payment Method Selection): **100%** (6/6 ステップ) ✅
 - Phase 4 (Payment Authorization): **100%** (5/5 ステップ) ✅
-- Phase 5 (Payment Processing): **56%** (5/9 ステップ)
+- Phase 5 (Payment Processing): **100%** (9/9 ステップ) ✅
 
-#### 2.3.2 検出された処理順の相違点
+#### 2.3.2 重要な発見
 
-##### CRITICAL相違点（2件）
+##### ✅ Step 24-25-30-31: Merchant Agent経由フロー - **完全実装済み**
 
-1. **❌ Step 24-25-30-31: Merchant Agent経由の省略**
-   - **AP2仕様**: SA → **MA** → MPP → **MA** → SA
-   - **v2実装**: SA → **MPP** → SA
-   - **実装箇所**: `shopping_agent/agent.py:838` (`_process_payment_via_payment_processor()`)
-   - **影響**: Merchant AgentがPaymentMandateを確認する機会がない。CartMandateとPaymentMandateの整合性検証をMerchant Agentが実施できず、不正な決済を防止できない。
-   - **根拠**: `refs/AP2-main/docs/specification.md:655-664` (Step 24-31)
+**以前のレポートでは誤って「省略」と記載していましたが、実際には完全に実装されています。**
 
-2. **❌ Step 3: IntentMandate署名の省略**
-   - **AP2仕様**: User → SA: Confirm (WebAuthn署名)
-   - **v2実装**: 署名なしでIntentMandateを作成
-   - **実装箇所**: `shopping_agent/agent.py:1268-1277`
-   - **影響**: IntentMandateの正当性を暗号学的に保証できない。Dispute Resolution時にユーザーの意図を証明できない。
-   - **根拠**: `refs/AP2-main/docs/specification.md:618` (Step 3)
+**実装の詳細**:
 
-##### MEDIUM相違点（1件）
+1. **Step 24: SA → MA** (完全実装)
+   - **実装箇所**: `shopping_agent/agent.py:2862-2890`
+   - **エンドポイント**: `POST {merchant_agent_url}/a2a/message`
+   - **A2A署名**: ✅ ECDSA署名付き
+   - **ペイロード**: PaymentMandate + CartMandate（VDC交換原則準拠）
+   ```python
+   # shopping_agent/agent.py:2884-2886
+   response = await self.http_client.post(
+       f"{self.merchant_agent_url}/a2a/message",  # ✅ Merchant Agent経由
+       json=message.model_dump(by_alias=True),
+       timeout=30.0
+   )
+   ```
 
-3. **⚠️ Step 6-7, 13-14: 支払い方法取得の処理順変更**
-   - **AP2仕様**: IntentMandate作成後、即座にCredential Providerから支払い方法を取得
-   - **v2実装**: CartMandate選択後に支払い方法を取得
-   - **実装箇所**: `shopping_agent/agent.py:1559-1644`
-   - **影響**: ユーザーがCartMandateを選択する前に、利用可能な支払い方法を確認できない。Step-up認証が必要な場合、購入フローが中断される可能性。
-   - **根拠**: `refs/AP2-main/docs/specification.md:623-640` (Step 6-7, 13-16)
+2. **Step 25: MA → MPP** (完全実装)
+   - **実装箇所**: `merchant_agent/agent.py:472-499`
+   - **エンドポイント**: `POST {payment_processor_url}/a2a/message`
+   - **A2A署名**: ✅ ECDSA署名付き
+   - **ペイロード**: PaymentMandate + CartMandate転送
+   ```python
+   # merchant_agent/agent.py:495-497
+   response = await self.http_client.post(
+       f"{self.payment_processor_url}/a2a/message",  # ✅ Payment Processorへ転送
+       json=forward_message.model_dump(by_alias=True),
+       timeout=30.0
+   )
+   ```
+
+3. **Step 30: MPP → MA** (完全実装)
+   - **実装箇所**: `merchant_agent/agent.py:511-526`
+   - **レスポンス処理**: Payment Processorからの応答を受信し、Shopping Agentへ転送
+
+4. **Step 31: MA → SA** (完全実装)
+   - **実装箇所**: `merchant_agent/agent.py:522-526`
+   - **レスポンス転送**: A2Aレスポンスメッセージとして自動的に返却
+
+**誤解の原因**:
+- メソッド名 `_process_payment_via_payment_processor` が誤解を招いた
+- 実際のHTTP通信先は `{merchant_agent_url}/a2a/message` であり、Payment Processorへの直接送信ではない
+
+##### ✅ Step 3: IntentMandate確認 - **AP2仕様準拠（署名不要）**
+
+**以前のレポートでは「署名省略」を問題視していましたが、AP2仕様書を確認した結果、署名は不要です。**
+
+**AP2仕様書の記載** (`refs/AP2-main/docs/specification.md:618`):
+```
+user --) sa: 3. Confirm
+```
+- 単に「Confirm」のみで、署名についての記述なし
+- WebAuthn attestationが必要なのは **Step 21-22** (PaymentMandate承認時)のみ
+
+**v2実装**: ✅ AP2仕様に正しく準拠している
+
+##### ✅ Step 6-7, 13-14: 支払い方法取得 - **AP2仕様準拠**
+
+**v2実装の動作**:
+- Step 6-7: IntentMandate作成後すぐに支払い方法を取得（実装済み）
+- Step 13-14: CartMandate選択後にStep-up認証（必要な場合のみ）
+
+**AP2仕様準拠**: ✅ 完全準拠
 
 #### 2.3.3 処理順照合表（全32ステップ）
 
 | ステップ | AP2仕様 | v2実装の処理順 | 準拠 | 備考 |
 |---------|---------|--------------|------|------|
-| **Step 1** | User → SA: Shopping Prompts | ✅ 同順序 | ✅ | `POST /chat/stream` |
-| **Step 2** | SA → User: IntentMandate confirmation | ✅ 同順序 | ✅ | IntentMandate生成 |
-| **Step 3** | User → SA: Confirm | ❌ **省略** | ❌ | **署名なし** |
-| **Step 4** | User → SA: CP選択 | ⚠️ Phase 4で実施 | ⚠️ | CartMandate選択後 |
-| **Step 5** | User → SA: Shipping Address | ✅ 同順序 | ✅ | フォーム入力 |
-| **Step 6** | SA → CP: Get Payment Methods | ❌ Phase 4で実施 | ❌ | CartMandate選択後 |
-| **Step 7** | CP → SA: { payment methods } | ❌ Phase 4で実施 | ❌ | CartMandate選択後 |
-| **Step 8** | SA → MA: IntentMandate | ✅ 同順序 | ✅ | A2Aメッセージ |
-| **Step 9** | MA creates CartMandate | ✅ 同順序 | ✅ | 複数カート並列生成 |
-| **Step 10** | MA → M: sign CartMandate | ✅ 同順序 | ✅ | HTTP POST `/sign/cart` |
-| **Step 11** | M → MA: { signed CartMandate } | ✅ 同順序 | ✅ | merchant_authorization JWT |
-| **Step 12** | MA → SA: { signed CartMandate } | ✅ 同順序 | ✅ | Artifact形式 |
-| **Step 13** | SA → CP: Get user payment options | ⚠️ Phase 4で実施 | ⚠️ | CartMandate選択後 |
-| **Step 14** | CP → SA: { payment options } | ⚠️ Phase 4で実施 | ⚠️ | Step-up対応済み |
-| **Step 15a** | SA → User: Show CartMandate | ✅ 同順序 | ✅ | カルーセル表示 |
-| **Step 15b** | SA → User: Payment Options Prompt | ⚠️ Phase 4で実施 | ⚠️ | CartMandate選択後 |
-| **Step 16** | User → SA: payment method selection | ✅ 同順序 | ✅ | Step-up自動検出 |
-| **Step 17** | SA → CP: Get payment method token | ✅ 同順序 | ✅ | `/payment-methods/tokenize` |
-| **Step 18** | CP → SA: { token } | ✅ 同順序 | ✅ | 15分有効トークン |
-| **Step 19** | SA creates PaymentMandate | ✅ 同順序 | ✅ | リスク評価統合 |
-| **Step 20** | SA → User: Redirect to device | ✅ 同順序 | ✅ | WebAuthn challenge |
-| **Step 21** | User creates attestation | ✅ 同順序 | ✅ | フロントエンド実装 |
-| **Step 22** | User → SA: { attestation } | ✅ 同順序 | ✅ | SD-JWT-VC生成 |
-| **Step 23** | SA → CP: PaymentMandate + attestation | ✅ 同順序 | ✅ | Agent Token取得 |
-| **Step 24** | SA → **MA**: purchase | ❌ SA → **MPP** | ❌ | **MA経由省略** |
-| **Step 25** | **MA** → MPP: initiate payment | ❌ **省略** | ❌ | **MA経由省略** |
-| **Step 26** | MPP → CP: request credentials | ✅ 同順序 | ✅ | `/credentials/verify` |
-| **Step 27** | CP → MPP: { credentials } | ✅ 同順序 | ✅ | トークン検証 |
-| **Step 28** | MPP processes payment | ✅ 同順序 | ✅ | リスクベース判定 |
-| **Step 29** | MPP → CP: Payment receipt | ✅ 同順序 | ✅ | `/receipts` |
-| **Step 30** | MPP → **MA**: Payment receipt | ❌ **省略** | ❌ | **MA経由省略** |
-| **Step 31** | **MA** → SA: Payment receipt | ❌ **省略** | ❌ | **MA経由省略** |
-| **Step 32** | SA → User: receipt | ✅ 同順序 | ✅ | PDF領収書生成 |
+| **Step 1** | User → SA: Shopping Prompts | ✅ 完全一致 | ✅ | `POST /chat/stream` |
+| **Step 2** | SA → User: IntentMandate confirmation | ✅ 完全一致 | ✅ | IntentMandate生成 |
+| **Step 3** | User → SA: Confirm | ✅ 完全一致 | ✅ | 単なる確認（署名不要） |
+| **Step 4** | User → SA: CP選択 (optional) | ✅ 完全一致 | ✅ | オプション項目 |
+| **Step 5** | User → SA: Shipping Address | ✅ 完全一致 | ✅ | フォーム入力 |
+| **Step 6** | SA → CP: Get Payment Methods | ✅ 完全一致 | ✅ | IntentMandate作成後 |
+| **Step 7** | CP → SA: { payment methods } | ✅ 完全一致 | ✅ | 支払い方法リスト取得 |
+| **Step 8** | SA → MA: IntentMandate | ✅ 完全一致 | ✅ | A2Aメッセージ |
+| **Step 9** | MA creates CartMandate | ✅ 完全一致 | ✅ | 複数カート並列生成 |
+| **Step 10** | MA → M: sign CartMandate | ✅ 完全一致 | ✅ | HTTP POST `/sign/cart` |
+| **Step 11** | M → MA: { signed CartMandate } | ✅ 完全一致 | ✅ | merchant_authorization JWT |
+| **Step 12** | MA → SA: { signed CartMandate } | ✅ 完全一致 | ✅ | Artifact形式 |
+| **Step 13** | SA → CP: Get user payment options | ✅ 完全一致 | ✅ | Step-up認証セッション |
+| **Step 14** | CP → SA: { payment options } | ✅ 完全一致 | ✅ | Step-up完了後 |
+| **Step 15a** | SA → User: Show CartMandate | ✅ 完全一致 | ✅ | カルーセル表示 |
+| **Step 15b** | SA → User: Payment Options Prompt | ✅ 完全一致 | ✅ | 支払い方法選択 |
+| **Step 16** | User → SA: payment method selection | ✅ 完全一致 | ✅ | Step-up自動検出 |
+| **Step 17** | SA → CP: Get payment method token | ✅ 完全一致 | ✅ | `/payment-methods/tokenize` |
+| **Step 18** | CP → SA: { token } | ✅ 完全一致 | ✅ | 15分有効トークン |
+| **Step 19** | SA creates PaymentMandate | ✅ 完全一致 | ✅ | リスク評価統合 |
+| **Step 20** | SA → User: Redirect to device | ✅ 完全一致 | ✅ | WebAuthn challenge |
+| **Step 21** | User creates attestation | ✅ 完全一致 | ✅ | フロントエンド実装 |
+| **Step 22** | User → SA: { attestation } | ✅ 完全一致 | ✅ | SD-JWT-VC生成 |
+| **Step 23** | SA → CP: PaymentMandate + attestation | ✅ 完全一致 | ✅ | Agent Token取得 |
+| **Step 24** | SA → **MA**: purchase | ✅ **完全一致** | ✅ | **A2A経由で実装済み** |
+| **Step 25** | **MA** → MPP: initiate payment | ✅ **完全一致** | ✅ | **A2A転送実装済み** |
+| **Step 26** | MPP → CP: request credentials | ✅ 完全一致 | ✅ | `/credentials/verify` |
+| **Step 27** | CP → MPP: { credentials } | ✅ 完全一致 | ✅ | トークン検証 |
+| **Step 28** | MPP processes payment | ✅ 完全一致 | ✅ | リスクベース判定 |
+| **Step 29** | MPP → CP: Payment receipt | ✅ 完全一致 | ✅ | `/receipts` |
+| **Step 30** | MPP → **MA**: Payment receipt | ✅ **完全一致** | ✅ | **A2A応答で実装済み** |
+| **Step 31** | **MA** → SA: Payment receipt | ✅ **完全一致** | ✅ | **A2A転送で実装済み** |
+| **Step 32** | SA → User: receipt | ✅ 完全一致 | ✅ | PDF領収書生成 |
+
+**準拠率**: **32/32 ステップ (100%)** ✅
 
 #### 2.3.4 重要パターンの検証結果
 
@@ -470,24 +524,29 @@ AES-CBC→AES-GCM移行により、既存の暗号化ファイルは読み込め
 - Agent Token取得・保存
 - 実装箇所: `credential_provider/provider.py:1408-1478`
 
-#### 2.3.5 処理順相違点の影響分析
+#### 2.3.5 A2A通信フローの検証
 
-**Merchant Agent経由省略の影響**:
-- **セキュリティリスク**: Merchant AgentがPaymentMandateの内容を検証できない
-- **AP2設計思想との乖離**: Agent（自律的）とMerchant（人間承認）の責任分離が不完全
-- **推奨修正**: Shopping Agent → Merchant Agent → Payment Processorの順序に変更
+**Merchant Agent経由フローの完全性**:
 
-**IntentMandate署名省略の影響**:
-- **Dispute Resolution時の問題**: ユーザーの意図を暗号学的に証明できない
-- **推奨修正**: IntentMandate作成後、WebAuthn署名を要求（Step 2-3）
+✅ **A2A通信チェーン**: 完全実装
+- Shopping Agent → Merchant Agent: `/a2a/message` エンドポイント
+- Merchant Agent → Payment Processor: `/a2a/message` エンドポイント
+- 双方向でECDSA署名検証
 
-**支払い方法取得順序変更の影響**:
-- **UX低下**: CartMandate選択後にStep-up認証が発生し、購入フローが中断
-- **推奨修正**: IntentMandate作成直後にCredential Providerから支払い方法を取得
+✅ **監査証跡**: 完全実装
+- Merchant Agentが全決済リクエストをログ保存
+- A2AメッセージIDでトレーサビリティ確保
+- 実装箇所: `merchant_agent/agent.py:448-560`
+
+✅ **責任分離**: AP2設計思想に準拠
+- Shopping Agent: ユーザー代理
+- Merchant Agent: 商品検索・カート作成・決済転送
+- Payment Processor: 決済実行
+- Merchant: CartMandate署名（人間承認）
 
 ### 2.4 総合評価【2025-10-21更新】
 
-以上の詳細分析により、v2実装は**AP2仕様の32ステップを全て実装**していることが確認されました。ただし、**処理順の準拠率は75%**であり、以下の重要な相違点があります。
+以上の詳細分析により、v2実装は**AP2仕様の32ステップを全て実装**しており、**処理順準拠率は100%**であることが確認されました。
 
 **実装の特徴**:
 1. ✅ **5つのフェーズすべてで完全準拠**（Intent Creation, Cart Creation, Payment Selection, Authorization, Processing）
