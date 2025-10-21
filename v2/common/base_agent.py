@@ -128,7 +128,7 @@ class BaseAgent(ABC):
                 f"[{self.agent_name}] ✓ ECDSA鍵を読み込みました: {key_id}"
             )
         except Exception as e:
-            # 鍵が存在しない場合はエラー（本番環境の安全性のため）
+            # 鍵が存在しない場合はエラー
             logger.error(
                 f"[{self.agent_name}] ❌ ECDSA鍵が見つかりません。\n"
                 f"   鍵を生成するには以下のコマンドを実行してください:\n"
@@ -152,7 +152,7 @@ class BaseAgent(ABC):
                 f"[{self.agent_name}] ✓ Ed25519鍵を読み込みました: {key_id}"
             )
         except Exception as e:
-            # Ed25519鍵が存在しない場合はエラー（本番環境の安全性のため）
+            # Ed25519鍵が存在しない場合はエラー
             logger.error(
                 f"[{self.agent_name}] ❌ Ed25519鍵が見つかりません。\n"
                 f"   鍵を生成するには以下のコマンドを実行してください:\n"
