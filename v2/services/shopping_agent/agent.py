@@ -10,6 +10,7 @@ Shopping Agent実装
 """
 
 import sys
+import os
 import uuid
 import json
 import hashlib
@@ -441,20 +442,22 @@ class ShoppingAgent(BaseAgent):
                     session["messages"].append({"role": "user", "content": request.user_input})
 
                     # 固定応答フロー（LLM統合前）
+                    # EventSourceResponseはJSON文字列を期待するため、
+                    # 辞書をJSON文字列に変換して返す
                     async for event in self._generate_fixed_response(request.user_input, session, session_id):
-                        yield f"data: {json.dumps(event.model_dump(exclude_none=True))}\n\n"
+                        yield json.dumps(event.model_dump(exclude_none=True))
                         await asyncio.sleep(0.1)  # 少し遅延を入れて自然に
 
                     # セッション保存（最終状態）
                     await self._update_session(session_id, session)
 
                     # 完了イベント
-                    yield f"data: {json.dumps({'type': 'done'})}\n\n"
+                    yield json.dumps({'type': 'done'})
 
                 except Exception as e:
                     logger.error(f"[chat_stream] Error: {e}", exc_info=True)
                     error_event = StreamEvent(type="error", error=str(e))
-                    yield f"data: {json.dumps(error_event.model_dump(exclude_none=True))}\n\n"
+                    yield json.dumps(error_event.model_dump(exclude_none=True))
 
             return EventSourceResponse(event_generator())
 
@@ -628,13 +631,86 @@ class ShoppingAgent(BaseAgent):
                 # セッション取得
                 session = await self._get_or_create_session(session_id)
 
-                # WebAuthn署名を検証（簡易版: 本番環境では完全な検証が必要）
-                # TODO: WebAuthn署名の完全な検証を実装
                 logger.info(
                     f"[submit_cart_signature] Received CartMandate signature: "
                     f"cart_id={cart_mandate.get('id')}, "
                     f"session_id={session_id}"
                 )
+
+                # ✅ AP2仕様準拠: WebAuthn署名の完全な検証（Credential Provider経由）
+                # Step 21-22: User confirms purchase & device creates attestation
+                # Credential ProviderのWebAuthn検証エンドポイントを呼び出す
+                try:
+                    # Credential ProviderのURLを取得（セッションまたはデフォルト）
+                    credential_provider_url = session.get(
+                        "credential_provider_url",
+                        os.getenv("CREDENTIAL_PROVIDER_URL", "http://credential_provider:8004")
+                    )
+
+                    logger.info(
+                        f"[submit_cart_signature] Verifying WebAuthn signature via Credential Provider: "
+                        f"{credential_provider_url}/verify/attestation"
+                    )
+
+                    # WebAuthn検証リクエスト
+                    # AP2仕様: attestationにはCartMandateのコンテキストを含める
+                    verification_response = await self.http_client.post(
+                        f"{credential_provider_url}/verify/attestation",
+                        json={
+                            "payment_mandate": cart_mandate,  # CartMandateをコンテキストとして送信
+                            "attestation": webauthn_assertion
+                        },
+                        timeout=10.0
+                    )
+
+                    if verification_response.status_code != 200:
+                        logger.error(
+                            f"[submit_cart_signature] WebAuthn verification failed: "
+                            f"status={verification_response.status_code}"
+                        )
+                        raise HTTPException(
+                            status_code=400,
+                            detail="WebAuthn signature verification failed"
+                        )
+
+                    verification_result = verification_response.json()
+
+                    if not verification_result.get("verified"):
+                        logger.error(
+                            f"[submit_cart_signature] WebAuthn verification returned false: "
+                            f"{verification_result.get('details')}"
+                        )
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Invalid WebAuthn signature: {verification_result.get('details', {}).get('error')}"
+                        )
+
+                    logger.info(
+                        f"[submit_cart_signature] ✅ WebAuthn signature verified successfully: "
+                        f"counter={verification_result.get('details', {}).get('counter')}, "
+                        f"attestation_type={verification_result.get('details', {}).get('attestation_type')}"
+                    )
+
+                except httpx.HTTPError as e:
+                    logger.error(
+                        f"[submit_cart_signature] Failed to communicate with Credential Provider: {e}",
+                        exc_info=True
+                    )
+                    raise HTTPException(
+                        status_code=503,
+                        detail=f"Credential Provider unavailable: {e}"
+                    )
+                except HTTPException:
+                    raise
+                except Exception as e:
+                    logger.error(
+                        f"[submit_cart_signature] WebAuthn verification error: {e}",
+                        exc_info=True
+                    )
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"WebAuthn verification failed: {e}"
+                    )
 
                 # AP2完全準拠: CartMandateは変更せず、Merchant署名のままPayment Processorに送信
                 # User署名情報（WebAuthn assertion）はPaymentMandateのuser_authorizationに含める
