@@ -116,7 +116,7 @@ graph TB
 
 ## 主要フロー
 
-### 1. 購買フロー全体
+### 1. 購買フロー全体（実装ベース）
 
 ```mermaid
 sequenceDiagram
@@ -127,78 +127,181 @@ sequenceDiagram
     participant M as Merchant<br/>:8002
     participant CP as Credential Provider<br/>:8003
     participant PP as Payment Processor<br/>:8004
+    participant DB as Database
 
-    Note over User,PP: Phase 1: 購買意図の確立
+    Note over User,PP: Phase 1: チャット開始と購買意図確立
 
-    User->>UI: 1. チャット開始<br/>"ランニングシューズが欲しい"
-    UI->>+SA: POST /chat/stream<br/>{user_input: "..."}
+    User->>UI: 1. チャット開始<br/>"むぎぼーのグッズが欲しい"
+    UI->>+SA: POST /chat/stream<br/>{user_input: "むぎぼーのグッズが欲しい"}
 
-    SA->>SA: 2. セッション作成
-    SA-->>UI: SSE: "何をお探しですか？"
+    SA->>SA: 2. セッション作成<br/>step: "initial"
+    SA-->>UI: 3. SSE: agent_text<br/>"こんにちは！AP2 Shopping Agentです"
+    SA-->>UI: 4. SSE: agent_text<br/>"「むぎぼーのグッズが欲しい」ですね！"
+    SA->>SA: 5. step = "ask_max_amount"
+    SA-->>UI: 6. SSE: agent_text<br/>"最大金額を教えてください"
+    UI-->>User: 7. 応答表示
 
-    User->>UI: 3. 条件を入力<br/>"ナイキで15000円以下"
-    UI->>SA: POST /chat/stream
+    User->>UI: 8. 金額入力<br/>"50000円"
+    UI->>SA: POST /chat/stream<br/>{user_input: "50000"}
 
-    SA->>SA: 4. Intent Mandateを作成<br/>(max_amount: ¥15,000)
-    SA->>SA: 5. ECDSA署名
-    SA->>DB: Intent保存
+    SA->>SA: 9. 金額パース: ¥50,000
+    SA->>SA: 10. step = "ask_categories"
+    SA-->>UI: 11. SSE: agent_text<br/>"最大金額を50,000円に設定しました"
+    SA-->>UI: 12. SSE: agent_text<br/>"カテゴリーを指定しますか？"
 
-    Note over User,PP: Phase 2: 商品検索とCart作成
+    User->>UI: 13. カテゴリー入力<br/>"カレンダー"
+    UI->>SA: POST /chat/stream<br/>{user_input: "カレンダー"}
 
-    SA->>+MA: 6. A2A: 商品検索リクエスト<br/>POST /a2a/message
-    MA->>MA: 7. 署名検証
-    MA->>DB: 8. 商品検索 (Nike, ≤¥15,000)
-    MA-->>-SA: 9. A2A: 商品リスト返却
+    SA->>SA: 14. step = "ask_shipping"
+    SA-->>UI: 15. SSE: agent_text<br/>"配送先住所を入力してください"
+    SA-->>UI: 16. SSE: shipping_form_request<br/>{fields: [...]}
 
-    SA-->>UI: 10. SSE: 商品カルーセル表示
-    UI-->>User: 11. 商品表示
+    User->>UI: 17. 配送先入力<br/>{recipient: "山田太郎", ...}
+    UI->>SA: POST /chat/stream<br/>{shipping_address: {...}}
 
-    User->>UI: 12. 商品選択 (SKU: nike_001)
-    UI->>SA: POST /chat/stream<br/>{selected_sku: "nike_001"}
+    SA->>SA: 18. Intent Mandate作成<br/>(max: ¥50,000, cat: calendar)
+    SA->>SA: 19. ECDSA署名
+    SA->>DB: 20. Intent保存
+    SA->>SA: 21. step = "search_products"
 
-    SA->>+MA: 13. A2A: Cart作成リクエスト<br/>POST /a2a/message
-    MA->>MA: 14. Cart Mandate作成<br/>(未署名)
-    MA-->>-SA: 15. A2A: Cart Mandate返却
+    Note over User,PP: Phase 2: 商品検索とCart候補作成
 
-    Note over User,PP: Phase 3: Cart署名とユーザー承認
+    SA->>+MA: 22. A2A: 商品検索<br/>POST /a2a/message<br/>@type: "ap2/ProductSearchRequest"
+    MA->>MA: 23. 署名検証<br/>(Nonce, Timestamp, ECDSA)
+    MA->>DB: 24. 商品検索<br/>(query: "むぎぼー", cat: "calendar")
+    MA-->>-SA: 25. A2A: 商品リスト<br/>@type: "ap2/ProductList"
 
-    SA->>+M: 16. A2A: Cart署名リクエスト<br/>POST /a2a/message
-    M->>M: 17. 在庫確認
-    M->>M: 18. Merchant署名 (ECDSA)
-    M-->>-SA: 19. A2A: 署名済みCart返却
+    SA-->>UI: 26. SSE: product_list<br/>[{sku, name, price, image}, ...]
+    UI-->>User: 27. 商品カルーセル表示
 
-    SA-->>UI: 20. SSE: 購入確認プロンプト
-    UI-->>User: 21. "¥14,800で購入しますか？"
+    User->>UI: 28. 商品選択<br/>"1"（カレンダーを選択）
+    UI->>SA: POST /chat/stream<br/>{user_input: "1"}
 
-    User->>UI: 22. 購入確認 + Passkey署名
-    UI->>UI: 23. WebAuthn署名生成
-    UI->>SA: 24. {attestation, cart_mandate}
+    SA->>SA: 29. 選択商品をセッションに保存
+    SA->>SA: 30. step = "request_cart_candidates"
 
-    SA->>+CP: 25. A2A: WebAuthn検証<br/>POST /a2a/message
-    CP->>CP: 26. FIDO2署名検証
-    CP->>CP: 27. Credential Token発行
-    CP-->>-SA: 28. A2A: {verified: true, token}
+    SA->>+MA: 31. A2A: Cart候補リクエスト<br/>POST /a2a/message<br/>@type: "ap2/CartCandidatesRequest"
+    MA->>MA: 32. 署名検証
+    MA->>MA: 33. Cart候補生成<br/>(3つのバリエーション)
 
-    Note over User,PP: Phase 4: 決済処理
+    loop 各Cart候補
+        MA->>+M: 34. A2A: Cart署名リクエスト<br/>POST /a2a/message<br/>@type: "ap2/SignCartRequest"
+        M->>M: 35. 署名検証
+        M->>DB: 36. 在庫確認
+        M->>M: 37. Cart Mandate署名<br/>(ECDSA)
+        M-->>-MA: 38. A2A: 署名済みCart<br/>merchant_signature付き
+    end
 
-    SA->>SA: 29. Payment Mandate作成<br/>+ リスク評価
-    SA->>SA: 30. Shopping Agent署名
+    MA-->>-SA: 39. A2A: Cart候補リスト<br/>@type: "ap2/Artifact"<br/>(3つの署名済みCart)
 
-    SA->>+MA: 31. A2A: Payment処理依頼<br/>POST /a2a/message
-    MA->>+PP: 32. A2A: Payment転送<br/>POST /a2a/message
+    SA->>SA: 40. Merchant署名を検証
+    SA-->>UI: 41. SSE: cart_options<br/>[{name, items, total}, ...]
+    SA->>SA: 42. step = "cart_selection"
+    UI-->>User: 43. Cart選択UI表示
 
-    PP->>PP: 33. 署名検証 (3層)
-    PP->>PP: 34. リスク評価
-    PP->>PP: 35. Authorize
-    PP->>PP: 36. Capture
-    PP->>DB: 37. Transaction保存
+    Note over User,PP: Phase 3: Cart選択とユーザー署名
 
-    PP-->>-MA: 38. A2A: 決済結果
-    MA-->>-SA: 39. A2A: 決済結果転送
+    User->>UI: 44. Cart選択<br/>"2"（スタンダードを選択）
+    UI->>SA: POST /chat/stream<br/>{user_input: "2"}
 
-    SA->>DB: 40. Transaction保存
-    SA-->>UI: 41. SSE: "決済完了！"
-    UI-->>User: 42. 領収書表示
+    SA->>SA: 45. 選択されたCart Mandateを保存
+    SA->>SA: 46. Merchant署名を暗号学的に検証
+    SA-->>UI: 47. SSE: agent_text<br/>"✅ Merchant署名確認完了"
+    SA-->>UI: 48. SSE: signature_request<br/>{mandate: cart, type: "cart"}
+    SA->>SA: 49. step = "cart_signature_pending"
+    UI-->>User: 50. WebAuthn署名プロンプト表示
+
+    User->>UI: 51. Passkey署名<br/>(TouchID/FaceID)
+    UI->>UI: 52. navigator.credentials.get()
+    UI->>UI: 53. WebAuthn Assertion取得
+
+    UI->>SA: 54. POST /cart/submit-signature<br/>{cart_mandate, webauthn_assertion}
+
+    SA->>SA: 55. Challenge検証
+    SA->>+CP: 56. A2A: WebAuthn検証<br/>POST /a2a/message<br/>@type: "ap2/VerifyAttestationRequest"
+    CP->>CP: 57. 署名検証
+    CP->>DB: 58. Challenge照合
+    CP->>CP: 59. FIDO2検証<br/>(RP ID, UV, Counter, COSE署名)
+    CP->>CP: 60. Credential Token発行
+    CP->>DB: 61. Counter更新
+    CP-->>-SA: 62. A2A: {verified: true, token}
+
+    SA->>SA: 63. User署名をCart Mandateに追加
+    SA->>SA: 64. step = "shipping_confirmed"
+
+    Note over User,PP: Phase 4: Credential Provider選択
+
+    SA-->>UI: 65. SSE: agent_text<br/>"Credential Providerを選択してください"
+    SA-->>UI: 66. SSE: credential_provider_selection<br/>[{id, name, logo}, ...]
+    SA->>SA: 67. step = "select_credential_provider"
+
+    User->>UI: 68. CP選択<br/>"1"（Demo CP）
+    UI->>SA: POST /chat/stream<br/>{user_input: "1"}
+
+    SA->>SA: 69. CPをセッションに保存
+    SA->>+CP: 70. A2A: 支払い方法取得<br/>POST /a2a/message<br/>@type: "ap2/GetPaymentMethodsRequest"
+    CP->>CP: 71. 署名検証
+    CP->>DB: 72. user_idから支払い方法取得
+    CP-->>-SA: 73. A2A: 支払い方法リスト
+
+    SA-->>UI: 74. SSE: payment_method_selection<br/>[{brand, last4, type}, ...]
+    SA->>SA: 75. step = "select_payment_method"
+
+    Note over User,PP: Phase 5: 支払い方法選択と決済処理
+
+    User->>UI: 76. 支払い方法選択<br/>"Visa ****1234"
+    UI->>SA: POST /chat/stream<br/>{payment_method_id: "pm_123"}
+
+    alt Step-up認証が必要
+        SA->>+CP: 77. A2A: Step-up開始<br/>POST /a2a/message<br/>@type: "ap2/InitiateStepUpRequest"
+        CP->>CP: 78. Step-upセッション作成
+        CP-->>-SA: 79. A2A: {step_up_url, session_id}
+        SA-->>UI: 80. SSE: step_up_required<br/>{url: "..."}
+        UI->>UI: 81. 別ウィンドウでStep-up開始
+        User->>CP: 82. 3DS/OTP認証完了
+        CP->>SA: 83. Callback: /payment/step-up-callback
+        SA->>SA: 84. トークン保存
+    end
+
+    SA->>SA: 85. Payment Mandate作成
+    SA->>SA: 86. リスク評価<br/>(8要素, 0-100点)
+    SA->>SA: 87. Shopping Agent署名<br/>(ECDSA)
+    SA->>SA: 88. step = "webauthn_attestation_requested"
+
+    SA-->>UI: 89. SSE: agent_text<br/>"デバイス認証を実施します"
+    SA-->>UI: 90. SSE: webauthn_request<br/>{challenge, rp_id}
+
+    User->>UI: 91. Passkey署名<br/>(TouchID/FaceID)
+    UI->>UI: 92. WebAuthn Assertion取得
+
+    UI->>SA: 93. POST /payment/submit-webauthn<br/>{payment_mandate, attestation}
+
+    SA->>+CP: 94. A2A: WebAuthn検証<br/>POST /a2a/message
+    CP->>CP: 95. FIDO2検証
+    CP-->>-SA: 96. A2A: {verified: true}
+
+    SA->>SA: 97. step = "payment_processing"
+    SA-->>UI: 98. SSE: agent_text<br/>"決済処理中..."
+
+    SA->>+MA: 99. A2A: Payment処理依頼<br/>POST /a2a/message<br/>@type: "ap2/ProcessPaymentRequest"
+    MA->>MA: 100. 署名検証
+    MA->>+PP: 101. A2A: Payment転送<br/>POST /a2a/message
+
+    PP->>PP: 102. 3層署名検証<br/>(Shopping Agent, Merchant, User)
+    PP->>PP: 103. リスク評価確認
+    PP->>PP: 104. Authorize<br/>(txn_id生成)
+    PP->>PP: 105. Capture
+    PP->>DB: 106. Transaction保存
+
+    PP-->>-MA: 107. A2A: 決済結果<br/>{status: "captured", txn_id}
+    MA-->>-SA: 108. A2A: 決済結果転送
+
+    SA->>DB: 109. Transaction保存
+    SA->>SA: 110. step = "payment_completed"
+    SA-->>UI: 111. SSE: payment_complete<br/>{txn_id, receipt_url}
+    SA-->>UI: 112. SSE: done
+
+    UI-->>User: 113. 決済完了画面<br/>領収書ダウンロード
 ```
 
 ### 2. A2A通信の詳細
