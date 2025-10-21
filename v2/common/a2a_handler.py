@@ -145,7 +145,7 @@ class A2AMessageHandler:
                     return False
 
                 # NonceManagerで再利用攻撃をチェック
-                if not self.nonce_manager.is_valid_nonce(message.header.nonce):
+                if not await self.nonce_manager.is_valid_nonce(message.header.nonce):
                     logger.error(
                         f"[A2AHandler] Nonce reuse detected (replay attack): "
                         f"nonce={message.header.nonce}, sender={message.header.sender}"

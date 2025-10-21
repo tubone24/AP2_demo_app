@@ -10,6 +10,7 @@ Shopping Agent実装
 """
 
 import sys
+import os
 import uuid
 import json
 import hashlib
@@ -441,20 +442,22 @@ class ShoppingAgent(BaseAgent):
                     session["messages"].append({"role": "user", "content": request.user_input})
 
                     # 固定応答フロー（LLM統合前）
+                    # EventSourceResponseはJSON文字列を期待するため、
+                    # 辞書をJSON文字列に変換して返す
                     async for event in self._generate_fixed_response(request.user_input, session, session_id):
-                        yield f"data: {json.dumps(event.model_dump(exclude_none=True))}\n\n"
+                        yield json.dumps(event.model_dump(exclude_none=True))
                         await asyncio.sleep(0.1)  # 少し遅延を入れて自然に
 
                     # セッション保存（最終状態）
                     await self._update_session(session_id, session)
 
                     # 完了イベント
-                    yield f"data: {json.dumps({'type': 'done'})}\n\n"
+                    yield json.dumps({'type': 'done'})
 
                 except Exception as e:
                     logger.error(f"[chat_stream] Error: {e}", exc_info=True)
                     error_event = StreamEvent(type="error", error=str(e))
-                    yield f"data: {json.dumps(error_event.model_dump(exclude_none=True))}\n\n"
+                    yield json.dumps(error_event.model_dump(exclude_none=True))
 
             return EventSourceResponse(event_generator())
 
@@ -628,13 +631,86 @@ class ShoppingAgent(BaseAgent):
                 # セッション取得
                 session = await self._get_or_create_session(session_id)
 
-                # WebAuthn署名を検証（簡易版: 本番環境では完全な検証が必要）
-                # TODO: WebAuthn署名の完全な検証を実装
                 logger.info(
                     f"[submit_cart_signature] Received CartMandate signature: "
                     f"cart_id={cart_mandate.get('id')}, "
                     f"session_id={session_id}"
                 )
+
+                # ✅ AP2仕様準拠: WebAuthn署名の完全な検証（Credential Provider経由）
+                # Step 21-22: User confirms purchase & device creates attestation
+                # Credential ProviderのWebAuthn検証エンドポイントを呼び出す
+                try:
+                    # Credential ProviderのURLを取得（セッションまたはデフォルト）
+                    credential_provider_url = session.get(
+                        "credential_provider_url",
+                        os.getenv("CREDENTIAL_PROVIDER_URL", "http://credential_provider:8004")
+                    )
+
+                    logger.info(
+                        f"[submit_cart_signature] Verifying WebAuthn signature via Credential Provider: "
+                        f"{credential_provider_url}/verify/attestation"
+                    )
+
+                    # WebAuthn検証リクエスト
+                    # AP2仕様: attestationにはCartMandateのコンテキストを含める
+                    verification_response = await self.http_client.post(
+                        f"{credential_provider_url}/verify/attestation",
+                        json={
+                            "payment_mandate": cart_mandate,  # CartMandateをコンテキストとして送信
+                            "attestation": webauthn_assertion
+                        },
+                        timeout=10.0
+                    )
+
+                    if verification_response.status_code != 200:
+                        logger.error(
+                            f"[submit_cart_signature] WebAuthn verification failed: "
+                            f"status={verification_response.status_code}"
+                        )
+                        raise HTTPException(
+                            status_code=400,
+                            detail="WebAuthn signature verification failed"
+                        )
+
+                    verification_result = verification_response.json()
+
+                    if not verification_result.get("verified"):
+                        logger.error(
+                            f"[submit_cart_signature] WebAuthn verification returned false: "
+                            f"{verification_result.get('details')}"
+                        )
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Invalid WebAuthn signature: {verification_result.get('details', {}).get('error')}"
+                        )
+
+                    logger.info(
+                        f"[submit_cart_signature] ✅ WebAuthn signature verified successfully: "
+                        f"counter={verification_result.get('details', {}).get('counter')}, "
+                        f"attestation_type={verification_result.get('details', {}).get('attestation_type')}"
+                    )
+
+                except httpx.HTTPError as e:
+                    logger.error(
+                        f"[submit_cart_signature] Failed to communicate with Credential Provider: {e}",
+                        exc_info=True
+                    )
+                    raise HTTPException(
+                        status_code=503,
+                        detail=f"Credential Provider unavailable: {e}"
+                    )
+                except HTTPException:
+                    raise
+                except Exception as e:
+                    logger.error(
+                        f"[submit_cart_signature] WebAuthn verification error: {e}",
+                        exc_info=True
+                    )
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"WebAuthn verification failed: {e}"
+                    )
 
                 # AP2完全準拠: CartMandateは変更せず、Merchant署名のままPayment Processorに送信
                 # User署名情報（WebAuthn assertion）はPaymentMandateのuser_authorizationに含める
@@ -835,7 +911,8 @@ class ShoppingAgent(BaseAgent):
                         detail=f"Failed to generate user_authorization: {e}"
                     )
 
-                payment_result = await self._process_payment_via_payment_processor(payment_mandate, cart_mandate)
+                # AP2 Step 24-31: Merchant Agent経由で決済処理
+                payment_result = await self._process_payment_via_merchant_agent(payment_mandate, cart_mandate)
 
                 if payment_result.get("status") == "captured":
                     # 決済成功
@@ -2833,23 +2910,30 @@ class ShoppingAgent(BaseAgent):
 
         return payment_mandate
 
-    async def _process_payment_via_payment_processor(self, payment_mandate: Dict[str, Any], cart_mandate: Dict[str, Any]) -> Dict[str, Any]:
+    async def _process_payment_via_merchant_agent(self, payment_mandate: Dict[str, Any], cart_mandate: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Merchant Agent経由でPayment ProcessorにPaymentMandateを送信して決済処理を依頼
+        AP2仕様準拠: Merchant Agent経由でPayment Processorに決済処理を依頼
 
-        AP2仕様準拠（Step 24, 30-31）：
-        1. Shopping AgentがPaymentMandateをMerchant Agentに送信（A2A通信）
-        2. Merchant AgentがPayment Processorに転送（A2A通信）
-        3. VDC交換の原則に従い、CartMandateも含めて送信（領収書生成に必要）
-        4. Payment Processorが決済処理を実行
-        5. Payment ProcessorがMerchant Agentに決済結果を返却
-        6. Merchant AgentがShopping Agentに決済結果を返却
+        AP2 Step 24-25-30-31の完全実装:
+        Step 24: Shopping Agent → Merchant Agent (A2A通信)
+        Step 25: Merchant Agent → Payment Processor (A2A転送)
+        Step 30: Payment Processor → Merchant Agent (決済結果)
+        Step 31: Merchant Agent → Shopping Agent (決済結果転送)
+
+        このメソッド名は実装の正確性を反映:
+        - Payment Processorに「直接」送信するのではなく
+        - Merchant Agent「経由」で送信する
+
+        VDC交換の原則に従い、CartMandateも含めて送信（領収書生成に必要）
 
         Args:
             payment_mandate: PaymentMandate（最小限のペイロード）
             cart_mandate: CartMandate（注文詳細、領収書生成に必要）
+
+        Returns:
+            決済結果（Merchant Agent経由で受信）
         """
-        logger.info(f"[ShoppingAgent] Requesting payment processing for PaymentMandate: {payment_mandate['id']}")
+        logger.info(f"[ShoppingAgent] Requesting payment processing via Merchant Agent for PaymentMandate: {payment_mandate['id']}")
 
         try:
             # A2Aメッセージのペイロード：PaymentMandateとCartMandateを含める
@@ -2916,10 +3000,10 @@ class ShoppingAgent(BaseAgent):
                 raise ValueError("Invalid response format from Merchant Agent")
 
         except httpx.HTTPError as e:
-            logger.error(f"[_process_payment_via_payment_processor] HTTP error: {e}")
+            logger.error(f"[_process_payment_via_merchant_agent] HTTP error: {e}")
             raise ValueError(f"Failed to process payment via Merchant Agent: {e}")
         except Exception as e:
-            logger.error(f"[_process_payment_via_payment_processor] Error: {e}", exc_info=True)
+            logger.error(f"[_process_payment_via_merchant_agent] Error: {e}", exc_info=True)
             raise
 
     async def _search_products_via_merchant_agent(
