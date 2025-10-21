@@ -476,7 +476,10 @@ user --) sa: 3. Confirm
 
 ### 4.2 Step 24-25-30-31: Merchant Agent経由フロー - ✅ 完全実装済み
 
-**誤解の原因**: メソッド名 `_process_payment_via_payment_processor` が誤解を招いた
+**メソッド名の修正 (2025-10-21完了)**:
+- **修正前**: `_process_payment_via_payment_processor` （誤解を招く名前）
+- **修正後**: `_process_payment_via_merchant_agent` （実装を正確に反映）
+- 実際の通信先は `{merchant_agent_url}/a2a/message` で、Merchant Agent経由
 
 **実際の実装**:
 

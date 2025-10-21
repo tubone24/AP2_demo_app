@@ -911,7 +911,8 @@ class ShoppingAgent(BaseAgent):
                         detail=f"Failed to generate user_authorization: {e}"
                     )
 
-                payment_result = await self._process_payment_via_payment_processor(payment_mandate, cart_mandate)
+                # AP2 Step 24-31: Merchant Agent経由で決済処理
+                payment_result = await self._process_payment_via_merchant_agent(payment_mandate, cart_mandate)
 
                 if payment_result.get("status") == "captured":
                     # 決済成功
@@ -2909,23 +2910,30 @@ class ShoppingAgent(BaseAgent):
 
         return payment_mandate
 
-    async def _process_payment_via_payment_processor(self, payment_mandate: Dict[str, Any], cart_mandate: Dict[str, Any]) -> Dict[str, Any]:
+    async def _process_payment_via_merchant_agent(self, payment_mandate: Dict[str, Any], cart_mandate: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Merchant Agent経由でPayment ProcessorにPaymentMandateを送信して決済処理を依頼
+        AP2仕様準拠: Merchant Agent経由でPayment Processorに決済処理を依頼
 
-        AP2仕様準拠（Step 24, 30-31）：
-        1. Shopping AgentがPaymentMandateをMerchant Agentに送信（A2A通信）
-        2. Merchant AgentがPayment Processorに転送（A2A通信）
-        3. VDC交換の原則に従い、CartMandateも含めて送信（領収書生成に必要）
-        4. Payment Processorが決済処理を実行
-        5. Payment ProcessorがMerchant Agentに決済結果を返却
-        6. Merchant AgentがShopping Agentに決済結果を返却
+        AP2 Step 24-25-30-31の完全実装:
+        Step 24: Shopping Agent → Merchant Agent (A2A通信)
+        Step 25: Merchant Agent → Payment Processor (A2A転送)
+        Step 30: Payment Processor → Merchant Agent (決済結果)
+        Step 31: Merchant Agent → Shopping Agent (決済結果転送)
+
+        このメソッド名は実装の正確性を反映:
+        - Payment Processorに「直接」送信するのではなく
+        - Merchant Agent「経由」で送信する
+
+        VDC交換の原則に従い、CartMandateも含めて送信（領収書生成に必要）
 
         Args:
             payment_mandate: PaymentMandate（最小限のペイロード）
             cart_mandate: CartMandate（注文詳細、領収書生成に必要）
+
+        Returns:
+            決済結果（Merchant Agent経由で受信）
         """
-        logger.info(f"[ShoppingAgent] Requesting payment processing for PaymentMandate: {payment_mandate['id']}")
+        logger.info(f"[ShoppingAgent] Requesting payment processing via Merchant Agent for PaymentMandate: {payment_mandate['id']}")
 
         try:
             # A2Aメッセージのペイロード：PaymentMandateとCartMandateを含める
@@ -2992,10 +3000,10 @@ class ShoppingAgent(BaseAgent):
                 raise ValueError("Invalid response format from Merchant Agent")
 
         except httpx.HTTPError as e:
-            logger.error(f"[_process_payment_via_payment_processor] HTTP error: {e}")
+            logger.error(f"[_process_payment_via_merchant_agent] HTTP error: {e}")
             raise ValueError(f"Failed to process payment via Merchant Agent: {e}")
         except Exception as e:
-            logger.error(f"[_process_payment_via_payment_processor] Error: {e}", exc_info=True)
+            logger.error(f"[_process_payment_via_merchant_agent] Error: {e}", exc_info=True)
             raise
 
     async def _search_products_via_merchant_agent(
