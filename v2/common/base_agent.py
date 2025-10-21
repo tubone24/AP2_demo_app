@@ -7,7 +7,6 @@ v2/common/base_agent.py
 
 import sys
 import os
-from pathlib import Path
 from abc import ABC, abstractmethod
 from typing import Dict, Any
 import logging
@@ -18,7 +17,6 @@ from fastapi.middleware.cors import CORSMiddleware
 
 # v2の暗号化モジュールをインポート
 from v2.common.crypto import KeyManager, SignatureManager
-from cryptography.hazmat.primitives import serialization
 
 from .models import A2AMessage
 from .a2a_handler import A2AMessageHandler
@@ -130,22 +128,22 @@ class BaseAgent(ABC):
                 f"[{self.agent_name}] ✓ ECDSA鍵を読み込みました: {key_id}"
             )
         except Exception as e:
-            # 鍵が存在しない場合は生成（開発時のみ、本番環境では非推奨）
-            logger.warning(
-                f"[{self.agent_name}] ⚠️  ECDSA鍵が見つかりませんでした。新しく生成します。\n"
-                f"   本番環境では v2/scripts/init_keys.py を実行してください。\n"
+            # 鍵が存在しない場合はエラー（本番環境の安全性のため）
+            logger.error(
+                f"[{self.agent_name}] ❌ ECDSA鍵が見つかりません。\n"
+                f"   鍵を生成するには以下のコマンドを実行してください:\n"
+                f"   \n"
+                f"   cd /app/v2 && python scripts/init_keys.py\n"
+                f"   \n"
+                f"   または Docker環境では:\n"
+                f"   \n"
+                f"   docker compose exec {self.agent_name.lower().replace(' ', '_')} python /app/v2/scripts/init_keys.py\n"
+                f"   \n"
                 f"   Error: {e}"
             )
-            private_key, public_key = self.key_manager.generate_key_pair(key_id)
-            self.key_manager.save_private_key_encrypted(key_id, private_key, self.passphrase)
-            self.key_manager.save_public_key(key_id, public_key)
-
-            # DIDドキュメントを更新（専門家の指摘対応：DIDベースの公開鍵解決）
-            # A2AMessageHandlerは後で初期化されるため、ここではDIDResolverを直接使用
-            from v2.common.did_resolver import DIDResolver
-            did_resolver = DIDResolver(self.key_manager)
-            did_resolver.update_public_key(self.agent_id, key_id)
-            logger.info(f"[{self.agent_name}] ✓ DIDドキュメントを更新しました: {self.agent_id}")
+            raise RuntimeError(
+                f"ECDSA鍵が見つかりません。v2/scripts/init_keys.py を実行してください。"
+            ) from e
 
         # Ed25519鍵を読み込み（A2A通信用）
         try:
@@ -154,33 +152,22 @@ class BaseAgent(ABC):
                 f"[{self.agent_name}] ✓ Ed25519鍵を読み込みました: {key_id}"
             )
         except Exception as e:
-            # Ed25519鍵が存在しない場合は生成
-            logger.warning(
-                f"[{self.agent_name}] ⚠️  Ed25519鍵が見つかりませんでした。新しく生成します。\n"
-                f"   本番環境では v2/scripts/init_keys.py を実行してください。\n"
+            # Ed25519鍵が存在しない場合はエラー（本番環境の安全性のため）
+            logger.error(
+                f"[{self.agent_name}] ❌ Ed25519鍵が見つかりません。\n"
+                f"   鍵を生成するには以下のコマンドを実行してください:\n"
+                f"   \n"
+                f"   cd /app/v2 && python scripts/init_keys.py\n"
+                f"   \n"
+                f"   または Docker環境では:\n"
+                f"   \n"
+                f"   docker compose exec {self.agent_name.lower().replace(' ', '_')} python /app/v2/scripts/init_keys.py\n"
+                f"   \n"
                 f"   Error: {e}"
             )
-            private_key, public_key = self.key_manager.generate_ed25519_key_pair(key_id)
-            # Ed25519鍵を保存（ファイル名に_ed25519サフィックスを付ける）
-            ed25519_private_file = Path(self.key_manager.keys_directory) / f"{key_id}_ed25519_private.pem"
-            encrypted_pem = private_key.private_bytes(
-                encoding=serialization.Encoding.PEM,
-                format=serialization.PrivateFormat.PKCS8,
-                encryption_algorithm=serialization.BestAvailableEncryption(self.passphrase.encode('utf-8'))
-            )
-            ed25519_private_file.write_bytes(encrypted_pem)
-            os.chmod(ed25519_private_file, 0o600)
-
-            ed25519_public_file = Path(self.key_manager.keys_directory) / f"{key_id}_ed25519_public.pem"
-            public_pem = public_key.public_bytes(
-                encoding=serialization.Encoding.PEM,
-                format=serialization.PublicFormat.SubjectPublicKeyInfo
-            )
-            ed25519_public_file.write_bytes(public_pem)
-
-            # メモリに保存
-            self.key_manager._active_keys[f"{key_id}_ED25519"] = private_key
-            logger.info(f"[{self.agent_name}] ✓ Ed25519鍵を生成しました: {key_id}")
+            raise RuntimeError(
+                f"Ed25519鍵が見つかりません。v2/scripts/init_keys.py を実行してください。"
+            ) from e
 
     def _register_common_endpoints(self):
         """共通エンドポイントの登録"""
