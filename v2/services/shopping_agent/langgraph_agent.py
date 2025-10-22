@@ -41,6 +41,27 @@ from v2.common.logger import get_logger
 
 logger = get_logger(__name__, service_name='langgraph_agent')
 
+# Langfuseトレーシング設定
+LANGFUSE_ENABLED = os.getenv("LANGFUSE_ENABLED", "false").lower() == "true"
+langfuse_handler = None
+langfuse_client = None
+
+if LANGFUSE_ENABLED:
+    try:
+        from langfuse.langchain import CallbackHandler
+        from langfuse import Langfuse
+
+        langfuse_client = Langfuse(
+            public_key=os.getenv("LANGFUSE_PUBLIC_KEY"),
+            secret_key=os.getenv("LANGFUSE_SECRET_KEY"),
+            host=os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
+        )
+        langfuse_handler = CallbackHandler()
+        logger.info("[Langfuse] Tracing enabled for Shopping Agent")
+    except Exception as e:
+        logger.warning(f"[Langfuse] Failed to initialize: {e}")
+        LANGFUSE_ENABLED = False
+
 
 class IntentExtractionState(dict):
     """LangGraphのState型定義
@@ -152,7 +173,16 @@ JSONのみを出力し、説明文は含めないでください。"""
                 HumanMessage(content=f"ユーザーの要望: {user_prompt}")
             ]
 
-            response = self.llm.invoke(messages)
+            # Langfuseトレーシング
+            config = {}
+            if LANGFUSE_ENABLED and langfuse_handler:
+                config["callbacks"] = [langfuse_handler]
+                config["run_name"] = "extract_intent"
+                config["metadata"] = {
+                    "user_prompt": user_prompt[:100]  # 最初の100文字
+                }
+
+            response = self.llm.invoke(messages, config=config)
             llm_output = response.content.strip()
 
             logger.info(f"[extract_intent] LLM raw output: {llm_output}")
@@ -221,23 +251,84 @@ JSONのみを出力し、説明文は含めないでください。"""
         Raises:
             ValueError: インテント抽出に失敗した場合
         """
+        # Langfuseトレース開始
+        span = None
+        if LANGFUSE_ENABLED and langfuse_client:
+            try:
+                span = langfuse_client.start_as_current_span(
+                    name="shopping_agent_intent_extraction"
+                )
+                span.__enter__()
+                span.update_trace(
+                    metadata={"user_prompt": user_prompt[:100]},
+                    input={"user_prompt": user_prompt[:200]}
+                )
+            except Exception as e:
+                logger.warning(f"[Langfuse] Failed to create span: {e}")
+                span = None
+
         initial_state: IntentExtractionState = {
             "user_prompt": user_prompt,
             "intent_data": None,
             "error": None,
         }
 
-        # LangGraphグラフ実行
-        final_state = self.graph.invoke(initial_state)
+        # LangGraphグラフ実行（Langfuseハンドラーを渡す）
+        config = {}
+        if LANGFUSE_ENABLED and langfuse_handler:
+            config["callbacks"] = [langfuse_handler]
+
+        final_state = self.graph.invoke(initial_state, config=config)
 
         if final_state.get("error"):
             error_msg = final_state["error"]
             logger.error(f"[extract_intent_from_prompt] Error: {error_msg}")
+
+            # Langfuseトレース更新（エラー）
+            if span:
+                try:
+                    span.update_trace(output={"error": error_msg})
+                    span.__exit__(None, None, None)
+                except Exception as e:
+                    logger.warning(f"[Langfuse] Failed to close span: {e}")
+
             raise ValueError(error_msg)
 
         intent_data = final_state.get("intent_data")
         if not intent_data:
-            raise ValueError("Intent extraction returned no data")
+            error_msg = "Intent extraction returned no data"
+
+            # Langfuseトレース更新（エラー）
+            if span:
+                try:
+                    span.update_trace(output={"error": error_msg})
+                    span.__exit__(None, None, None)
+                except Exception as e:
+                    logger.warning(f"[Langfuse] Failed to close span: {e}")
+
+            raise ValueError(error_msg)
+
+        # Langfuseトレース終了（成功）
+        if span:
+            try:
+                span.update_trace(
+                    output={
+                        "natural_language_description": intent_data.get("natural_language_description"),
+                        "merchants": intent_data.get("merchants"),
+                        "requires_refundability": intent_data.get("requires_refundability")
+                    }
+                )
+                span.__exit__(None, None, None)
+            except Exception as e:
+                logger.warning(f"[Langfuse] Failed to close span: {e}")
+
+        # Langfuseトレースを即座に送信
+        if LANGFUSE_ENABLED and langfuse_client:
+            try:
+                langfuse_client.flush()
+                logger.debug("[Langfuse] Flushed traces")
+            except Exception as e:
+                logger.warning(f"[Langfuse] Failed to flush: {e}")
 
         return intent_data
 

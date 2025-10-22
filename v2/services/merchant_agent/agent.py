@@ -108,6 +108,21 @@ class MerchantAgent(BaseAgent):
                     logger.error(f"[{self.agent_name}] Failed to initialize LangGraph: {e}")
                     self.ai_mode_enabled = False
 
+        @self.app.on_event("shutdown")
+        async def shutdown_event():
+            """シャットダウン時の処理"""
+            logger.info(f"[{self.agent_name}] Running shutdown tasks...")
+
+            # Langfuse flush
+            if self.ai_mode_enabled and self.langgraph_agent:
+                try:
+                    from langgraph_merchant import langfuse_client, LANGFUSE_ENABLED
+                    if LANGFUSE_ENABLED and langfuse_client:
+                        langfuse_client.flush()
+                        logger.info(f"[{self.agent_name}] Langfuse traces flushed")
+                except Exception as e:
+                    logger.warning(f"[{self.agent_name}] Failed to flush Langfuse: {e}")
+
         logger.info(f"[{self.agent_name}] Initialized (AI Mode: {self.ai_mode_enabled})")
 
     def get_ap2_roles(self) -> list[str]:
@@ -296,8 +311,8 @@ class MerchantAgent(BaseAgent):
             shipping_address = None
             logger.info("[MerchantAgent] Received IntentMandate without shipping_address (legacy format)")
 
-        # Intent内容から商品を検索
-        intent_text = intent_mandate.get("intent", "")
+        # AP2準拠：natural_language_descriptionフィールドを使用
+        intent_text = intent_mandate.get("natural_language_description", intent_mandate.get("intent", ""))
         logger.info(f"[MerchantAgent] Searching products with intent: '{intent_text}'")
 
         try:
@@ -319,11 +334,22 @@ class MerchantAgent(BaseAgent):
                 logger.info("[MerchantAgent] Using default shipping address")
 
             # 複数のカート候補を生成
-            cart_candidates = await self._create_multiple_cart_candidates(
-                intent_mandate_id=intent_mandate["id"],
-                intent_text=intent_text,
-                shipping_address=shipping_address
-            )
+            # AI Mode: LangGraphエンジンを使用
+            if self.ai_mode_enabled and self.langgraph_agent:
+                logger.info("[MerchantAgent] Using LangGraph AI engine for cart generation")
+                cart_candidates = await self.langgraph_agent.create_cart_candidates(
+                    intent_mandate=intent_mandate,
+                    user_id=intent_mandate.get("user_id", "unknown"),
+                    session_id=str(uuid.uuid4())
+                )
+            else:
+                # 従来Mode: 固定ロジック
+                logger.info("[MerchantAgent] Using legacy cart generation")
+                cart_candidates = await self._create_multiple_cart_candidates(
+                    intent_mandate_id=intent_mandate["id"],
+                    intent_text=intent_text,
+                    shipping_address=shipping_address
+                )
 
             if not cart_candidates:
                 logger.warning("[MerchantAgent] No cart candidates generated")
@@ -946,17 +972,18 @@ class MerchantAgent(BaseAgent):
 
             metadata_dict = json.loads(product.product_metadata) if product.product_metadata else {}
 
+            # AP2準拠: PaymentCurrencyAmount型（value: float、円単位）
             cart_items.append({
                 "id": f"item_{uuid.uuid4().hex[:8]}",
                 "name": product.name,
                 "description": product.description,
                 "quantity": quantity,
                 "unit_price": {
-                    "value": str(unit_price_cents / 100),
+                    "value": unit_price_cents / 100,  # AP2準拠: float型、円単位
                     "currency": "JPY"
                 },
                 "total_price": {
-                    "value": str(total_price_cents / 100),
+                    "value": total_price_cents / 100,  # AP2準拠: float型、円単位
                     "currency": "JPY"
                 },
                 "image_url": metadata_dict.get("image_url"),

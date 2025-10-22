@@ -1,8 +1,208 @@
 # AP2 Demo App v2
 
-**完全実装版** - AP2プロトコルのマイクロサービスアーキテクチャ実装。FastAPI + Docker Compose + Next.js + LangGraph + WebAuthnで構築。
+**完全実装版** - AP2プロトコルのマイクロサービスアーキテクチャ実装。FastAPI + Docker Compose + Next.js + LangGraph + WebAuthn + Langfuseで構築。
 
 🎉 **Phase 1 & 2 完了！フル機能デモアプリ稼働中！**
+
+## 🏗️ アーキテクチャ概要
+
+このアプリケーションは、AP2（Agent Payments Protocol）仕様に完全準拠したマイクロサービスアーキテクチャで構築されています。6つのサービス（Backend 5 + Frontend 1）が相互に連携し、LangGraphによるAI対話機能とWebAuthn/Passkeyによる安全な署名機能を提供します。
+
+```mermaid
+graph TB
+    subgraph "Frontend (Next.js)"
+        UI[Chat UI / Merchant Dashboard]
+    end
+
+    subgraph "Backend Services"
+        SA[Shopping Agent<br/>Port 8000<br/>LangGraph統合]
+        MA[Merchant Agent<br/>Port 8001<br/>LangGraph統合]
+        M[Merchant<br/>Port 8002<br/>CartMandate署名]
+        CP[Credential Provider<br/>Port 8003<br/>WebAuthn検証]
+        PP[Payment Processor<br/>Port 8004<br/>決済処理]
+        PN[Payment Network<br/>Port 8005<br/>Agent Token発行]
+    end
+
+    subgraph "External Services"
+        DMR[DMR<br/>Docker Model Runner<br/>LLM Endpoint]
+        LF[Langfuse<br/>LLM Observability]
+    end
+
+    subgraph "Data Layer"
+        DB[(SQLite Database)]
+        Keys[Keys Directory<br/>ECDSA Keypairs]
+    end
+
+    UI -->|SSE Chat| SA
+    UI -->|WebAuthn| CP
+    UI -->|Product CRUD| M
+
+    SA -->|A2A Message<br/>IntentMandate| MA
+    MA -->|unsigned CartMandate| M
+    M -->|signed CartMandate| SA
+    SA -->|PaymentMandate| PP
+    SA -->|Credential Token| CP
+    PP -->|Transaction| DB
+
+    SA -.->|LLM Query| DMR
+    MA -.->|LLM Query| DMR
+    SA -.->|Trace| LF
+    MA -.->|Trace| LF
+
+    CP -->|Agent Token| PN
+
+    SA & MA & M & CP & PP --> DB
+    SA & MA & M & CP & PP --> Keys
+```
+
+### AP2準拠の6エンティティ
+
+| エンティティ | ポート | 役割 | LangGraph | 主要機能 |
+|------------|-------|------|-----------|---------|
+| **Shopping Agent** | 8000 | ユーザー代理人 | ✅ | 対話、Intent生成、Payment処理 |
+| **Merchant Agent** | 8001 | 商品検索・Cart作成 | ✅ | 商品検索、CartMandate作成（未署名） |
+| **Merchant** | 8002 | 販売者 | ❌ | CartMandate署名、在庫管理 |
+| **Credential Provider** | 8003 | 認証・トークン発行 | ❌ | WebAuthn検証、Step-up認証 |
+| **Payment Processor** | 8004 | 決済処理 | ❌ | 支払い処理、領収書生成 |
+| **Payment Network** | 8005 | 決済ネットワーク | ❌ | Agent Token発行 |
+
+## 🔄 完全な購入フロー（シーケンス図）
+
+以下は、ユーザーが商品を購入する際の完全なシーケンス図です。AP2仕様に完全準拠した3つのMandate（Intent → Cart → Payment）の流れを示しています。
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant User as 👤 User<br/>(Browser)
+    participant UI as 🖥️ Frontend<br/>(Next.js)
+    participant SA as 🤖 Shopping Agent<br/>(LangGraph)
+    participant DMR as 🧠 LLM<br/>(DMR/GPT)
+    participant MA as 🛍️ Merchant Agent<br/>(LangGraph)
+    participant M as 🏪 Merchant
+    participant CP as 🔐 Credential Provider
+    participant PP as 💳 Payment Processor
+    participant DB as 💾 Database
+
+    %% Phase 1: 対話とIntent生成
+    rect rgb(240, 248, 255)
+        Note over User,DMR: Phase 1: LangGraph対話フロー（Intent収集）
+        User->>UI: "かわいいグッズがほしい"
+        UI->>SA: POST /chat/stream (SSE)
+        SA->>DMR: LangGraph: extract_info
+        DMR-->>SA: {"intent": "かわいいグッズ", "max_amount": null}
+        SA-->>UI: SSE: "最大金額を教えてください"
+        User->>UI: "3000円まで"
+        UI->>SA: POST /chat/stream
+        SA->>DMR: LangGraph: extract_info (累積)
+        DMR-->>SA: {"intent": "かわいいグッズ", "max_amount": 3000}
+        SA->>SA: check_completeness (必須情報揃った)
+        SA->>DMR: LangGraph: IntentMandate生成
+        DMR-->>SA: IntentMandate (unsigned)
+        SA-->>UI: SSE: IntentMandate preview
+    end
+
+    %% Phase 2: Passkey署名（IntentMandate）
+    rect rgb(255, 250, 240)
+        Note over User,SA: Phase 2: WebAuthn署名（IntentMandate）
+        UI->>SA: GET /webauthn/options
+        SA-->>UI: challenge + options
+        UI->>User: Passkeyで署名してください
+        User->>UI: 👆 Fingerprint/FaceID
+        UI->>UI: navigator.credentials.get()
+        UI->>SA: POST /sign-mandate<br/>{attestation, challenge}
+        SA->>SA: verify challenge
+        SA->>SA: add user_signature to IntentMandate
+        SA->>DB: save IntentMandate
+        DB-->>SA: saved
+        SA-->>UI: signed IntentMandate
+    end
+
+    %% Phase 3: A2A通信とCartMandate生成
+    rect rgb(240, 255, 240)
+        Note over SA,M: Phase 3: A2A通信とCartMandate生成（LangGraph）
+        SA->>MA: A2A Message<br/>{IntentMandate, shipping_address}
+        MA->>MA: verify A2A signature
+        MA->>DMR: LangGraph: _analyze_intent
+        DMR-->>MA: extracted keywords
+        MA->>DB: ProductCRUD.search(keywords)
+        DB-->>MA: products (8 items)
+        MA->>DMR: LangGraph: _optimize_cart<br/>Rule-based then LLM
+        DMR-->>MA: 3 cart candidates
+        loop 各カート候補
+            MA->>MA: create unsigned CartMandate<br/>AP2準拠 PaymentCurrencyAmount
+            MA->>M: POST /sign/cart
+            M->>M: validate & sign (ECDSA + JWT)
+            M-->>MA: signed CartMandate
+            MA->>MA: wrap in Artifact format
+        end
+        MA-->>SA: A2A Response<br/>{cart_candidates: [Artifact, ...]}
+        SA-->>UI: SSE: cart_candidates
+    end
+
+    %% Phase 4: カート選択とCart署名
+    rect rgb(255, 245, 240)
+        Note over User,SA: Phase 4: Cart選択とWebAuthn署名
+        UI->>User: カート候補を表示（カルーセル）
+        User->>UI: カート選択
+        UI->>SA: GET /webauthn/options
+        SA-->>UI: challenge
+        UI->>User: Passkeyで署名
+        User->>UI: 👆 Authenticate
+        UI->>SA: POST /sign-cart<br/>{cart_id, attestation}
+        SA->>SA: add user_signature to CartMandate
+        SA->>DB: save signed CartMandate
+        SA-->>UI: signed CartMandate
+    end
+
+    %% Phase 5: 決済
+    rect rgb(255, 240, 245)
+        Note over User,PP: Phase 5: Payment処理
+        UI->>User: 支払い方法選択
+        User->>UI: "クレジットカード xxxx-1234"
+        UI->>SA: POST /create-payment
+        SA->>SA: create PaymentMandate<br/>+ risk_assessment
+        SA->>CP: GET /payment-methods
+        CP->>DB: fetch payment methods
+        DB-->>CP: methods
+        CP-->>SA: payment methods
+        SA->>UI: PaymentMandate preview
+        UI->>User: Passkeyで最終署名
+        User->>UI: 👆 Confirm
+        UI->>SA: POST /sign-payment
+        SA->>SA: add user_signature
+        SA->>CP: POST /verify/attestation
+        CP->>CP: verify WebAuthn
+        CP->>CP: issue credential_token
+        CP-->>SA: credential_token
+        SA->>PP: POST /process<br/>{PaymentMandate, credential_token}
+        PP->>PP: validate Mandate Chain<br/>(Intent → Cart → Payment)
+        PP->>DB: create Transaction (authorized)
+        PP->>PP: capture payment
+        PP->>DB: update Transaction (captured)
+        PP->>PP: generate PDF receipt
+        PP-->>SA: {transaction_id, receipt_url}
+        SA-->>UI: payment success + receipt
+        UI-->>User: ✅ 購入完了！領収書ダウンロード
+    end
+```
+
+### フローの主要ポイント
+
+1. **LangGraph対話フロー（Phase 1）**
+   - Shopping Agentの`langgraph_conversation.py`が対話を管理
+   - `extract_info` → `check_completeness` → `generate_question`のノード構成
+   - 必須情報（intent, max_amount）を段階的に収集
+
+2. **A2A通信（Phase 3）**
+   - Shopping Agent → Merchant Agent間でECDSA署名付きメッセージ
+   - Merchant AgentがLangGraphで商品検索とカート最適化
+   - Rule-based filtering → LLM-based optimization（2段階最適化）
+
+3. **AP2準拠のMandate Chain（Phase 5）**
+   - IntentMandate（ユーザー署名）
+   - CartMandate（Merchant署名 + User署名）
+   - PaymentMandate（Risk評価 + User署名）
+   - Payment Processorが3つのMandateを検証
 
 ## 📁 ディレクトリ構造
 
@@ -226,7 +426,7 @@ open http://localhost:3000/merchant  # Merchant Dashboard
 #### 5. デモフロー体験
 
 1. **Passkey登録** - `/chat`で初回訪問時に登録
-2. **商品検索** - 「むぎぼーのグッズが欲しい」と入力
+2. **商品検索** - 「かわいいグッズがほしい」と入力
 3. **Intent署名** - 最大金額などを入力してPasskey署名
 4. **カート選択** - LLMが提案するカートを選択
 5. **Cart署名** - カート内容を確認してPasskey署名
@@ -452,7 +652,7 @@ curl -N -H "Content-Type: application/json" \
 ```
 data: {"type":"agent_text","content":"こんにちは！AP2 Shopping Agentです。"}
 
-data: {"type":"agent_text","content":"何をお探しですか？例えば「むぎぼーのグッズが欲しい」のように教えてください。"}
+data: {"type":"agent_text","content":"何をお探しですか？例えば「かわいいグッズがほしい」のように教えてください。"}
 
 data: {"type":"done"}
 ```
@@ -491,11 +691,252 @@ curl -X POST http://localhost:8000/a2a/message \
 - **fido2** 1.1.3 - WebAuthn検証
 - **sse-starlette** 2.1.0 - Server-Sent Events
 - **httpx** 0.27.0 - 非同期HTTPクライアント
-- **LangGraph** - LLM対話フロー管理
-- **LangChain** - LLM統合
-- **OpenAI** - GPT-4 API
+- **LangGraph** - LLM対話フロー管理（StateGraph）
+- **LangChain** 0.3.0+ - LLM統合（OpenAI互換API）
+- **Langfuse** 2.0.0+ - LLM Observability（トレーシング）
+- **OpenAI** - ChatOpenAI（DMR endpoint対応）
 - **ReportLab** - PDF生成
 - **PyJWT** - JWT署名
+
+## 🧠 LangGraph統合の詳細
+
+このアプリケーションは、2つのエージェント（Shopping AgentとMerchant Agent）でLangGraphを活用しています。
+
+### Shopping Agent - 2つのLangGraphエンジン
+
+#### 1. `langgraph_conversation.py` - 対話フロー管理
+
+**目的**: ユーザーとの段階的な対話でIntent Mandateに必要な情報を収集
+
+**StateGraph構成**:
+```python
+ConversationState = {
+    "intent": str | None,           # 購買意図（必須）
+    "max_amount": float | None,     # 最大金額（必須）
+    "categories": List[str],        # カテゴリー（オプション）
+    "brands": List[str],            # ブランド（オプション）
+    "conversation_history": List[Dict],
+    "missing_fields": List[str],
+    "is_complete": bool
+}
+```
+
+**ノードフロー**:
+```
+extract_info → check_completeness → generate_question → END
+```
+
+1. **extract_info**: LLMでユーザー入力から情報抽出（JSON形式）
+2. **check_completeness**: 必須フィールド（intent, max_amount）が揃ったか確認
+3. **generate_question**: 不足情報を質問、または完了メッセージ
+
+**実装ファイル**: `v2/services/shopping_agent/langgraph_conversation.py`
+
+**使用LLM**: DMR endpoint（OpenAI互換API）
+- Model: `ai/qwen3` or `ai/smollm2`
+- Temperature: 0.3（決定論的）
+- Max tokens: 512
+
+#### 2. `langgraph_agent.py` - Intent Mandate生成
+
+**目的**: 対話完了後、AP2準拠のIntentMandateデータを生成
+
+**StateGraph構成**:
+```python
+IntentExtractionState = {
+    "user_prompt": str,
+    "intent_data": Optional[Dict[str, Any]],
+    "error": Optional[str]
+}
+```
+
+**ノードフロー**:
+```
+extract_intent → format_intent → END
+```
+
+1. **extract_intent**: LLMでAP2準拠フィールドを抽出
+   - `natural_language_description`
+   - `user_cart_confirmation_required`
+   - `merchants`, `skus`, `requires_refundability`
+2. **format_intent**: Pydantic `IntentMandate`型でバリデーション
+
+**実装ファイル**: `v2/services/shopping_agent/langgraph_agent.py`
+
+**Langfuseトレーシング**:
+- Span名: `shopping_agent_intent_extraction`
+- Metadata: `user_prompt`, `natural_language_description`
+
+### Merchant Agent - CartMandate生成エンジン
+
+#### `langgraph_merchant.py` - AI-Powered Cart最適化
+
+**目的**: Intent Mandateから複数のカート候補を生成（Rule-based + LLM最適化）
+
+**StateGraph構成**:
+```python
+MerchantState = {
+    "intent_mandate": Dict,
+    "user_id": str,
+    "session_id": str,
+    "shipping_address": Optional[Dict],
+    "search_results": List[Dict],
+    "cart_candidates": List[Dict],
+    "error": Optional[str]
+}
+```
+
+**ノードフロー**:
+```
+_analyze_intent → _search_products → _optimize_cart → _create_cart_mandates → END
+```
+
+1. **_analyze_intent**: LLMでIntent Mandateから検索キーワード抽出
+   - `natural_language_description`から商品カテゴリ、特徴を抽出
+
+2. **_search_products**: データベースから商品検索
+   - `ProductCRUD.search(keywords, limit=20)`
+   - 在庫状況を確認
+
+3. **_optimize_cart**: 2段階最適化
+   - **Rule-based**: 価格フィルタリング、カテゴリマッチング
+   - **LLM-based**: 商品の組み合わせ最適化（LLMに3つのカート候補を生成させる）
+   - Timeout: 180秒、Retries: 2
+
+4. **_create_cart_mandates**: 各カート候補をAP2準拠CartMandateに変換
+   - `PaymentCurrencyAmount` (float, JPY)
+   - Merchantに署名リクエスト
+   - Artifact形式でラップ
+
+**実装ファイル**: `v2/services/merchant_agent/langgraph_merchant.py`
+
+**使用LLM**: DMR endpoint（OpenAI互換API）
+- Model: `ai/qwen3`
+- Temperature: 0.5（創造性とバランス）
+- Max tokens: 2048（詳細な推論用）
+- Timeout: 180秒（LLMに十分な思考時間）
+
+**Langfuseトレーシング**:
+- Span名: `merchant_agent_cart_generation`
+- Metadata: `intent_mandate_id`, `user_id`, `product_count`
+
+### LangGraph設定
+
+**共通設定**:
+- LLM Endpoint: 環境変数 `DMR_API_URL`（デフォルト: `http://host.docker.internal:12434/engines/llama.cpp/v1`）
+- Model: 環境変数 `DMR_MODEL`（デフォルト: `ai/qwen3`）
+- API Key: 環境変数 `DMR_API_KEY`（デフォルト: `none`）
+
+**Langfuse設定**:
+```bash
+LANGFUSE_ENABLED=true
+LANGFUSE_PUBLIC_KEY=your-public-key
+LANGFUSE_SECRET_KEY=your-secret-key
+LANGFUSE_HOST=https://cloud.langfuse.com
+```
+
+**Timeout設定**:
+- Shopping Agent → Merchant Agent: 300秒（5分）
+- LLM呼び出し: 180秒（3分）+ 2リトライ
+- 理由: `_optimize_cart`は重要な処理で、LLMに十分な思考時間が必要
+
+### LangGraph State Management
+
+```mermaid
+stateDiagram-v2
+    [*] --> extract_info: User Input
+    extract_info --> check_completeness: Extract Intent Data
+    check_completeness --> generate_question: Check Required Fields
+
+    state check_completeness <<choice>>
+    check_completeness --> generate_question: Missing Fields
+    check_completeness --> [*]: Complete
+
+    generate_question --> [*]: Ask Question or Done
+```
+
+### AP2準拠の重要実装
+
+#### PaymentCurrencyAmount型（完全準拠）
+
+**W3C仕様**: https://www.w3.org/TR/payment-request/#dom-paymentcurrencyamount
+
+```python
+class PaymentCurrencyAmount(BaseModel):
+    currency: str  # ISO 4217（例: "JPY", "USD"）
+    value: float   # ★ float型、基本通貨単位（円、ドル）
+```
+
+**重要**: `value`は**float型**で、**基本通貨単位**（セント/銭ではない）
+
+**実装例**（`langgraph_merchant.py:523-530`）:
+```python
+cart_items.append({
+    "product_id": product_id,
+    "name": product["name"],
+    "quantity": quantity,
+    "unit_price": {
+        "value": unit_price_cents / 100,  # AP2準拠: float型、円単位
+        "currency": "JPY"
+    },
+    "total_price": {
+        "value": total_price_cents / 100,  # AP2準拠: float型、円単位
+        "currency": "JPY"
+    },
+    # ...
+})
+```
+
+#### IntentMandate構造（AP2準拠）
+
+**参照**: `v2/common/mandate_types.py:39-86`
+
+```python
+class IntentMandate(BaseModel):
+    user_cart_confirmation_required: bool  # カート確認が必要か
+    natural_language_description: str      # ★ AP2準拠フィールド
+    merchants: Optional[list[str]]         # 許可されたMerchantリスト
+    skus: Optional[list[str]]              # 特定のSKUリスト
+    requires_refundability: Optional[bool] # 返金可能性が必要か
+    intent_expiry: str                     # 有効期限（ISO 8601）
+```
+
+**重要**: `natural_language_description`はAP2仕様で**必須**フィールド
+
+#### CartMandate構造（AP2準拠 + Artifact Wrapping）
+
+**参照**: `v2/common/mandate_types.py:117-148`, `langgraph_merchant.py:721-733`
+
+```python
+# Artifact形式でラップ（A2A仕様準拠）
+artifact = {
+    "artifactId": f"artifact_{uuid.uuid4().hex[:8]}",
+    "name": "カート名",
+    "parts": [
+        {
+            "kind": "data",
+            "data": {
+                "ap2.mandates.CartMandate": {  # ★ AP2データキー
+                    "contents": {
+                        "id": "cart_abc123",
+                        "user_cart_confirmation_required": true,
+                        "payment_request": {
+                            "details": {
+                                "display_items": [...],  # PaymentItem[]
+                                "total": {...}           # PaymentItem
+                            },
+                            "shipping_address": {...}  # ContactAddress
+                        },
+                        "cart_expiry": "2025-10-23T12:00:00Z",
+                        "merchant_name": "Demo Store"
+                    },
+                    "merchant_authorization": "eyJhbGc..."  # JWT署名
+                }
+            }
+        }
+    ]
+}
+```
 
 ### フロントエンド
 - **Next.js** 15.1.4 (App Router)
@@ -700,7 +1141,7 @@ lsof -ti:8000 | xargs kill -9
    - デバイス認証を使用した安全な登録
 
 2. **LangGraph対話フロー**
-   - 「むぎぼーのグッズが欲しい」と入力
+   - 「かわいいグッズがほしい」と入力
    - LLMが段階的に必要情報を収集（Intent、最大金額、カテゴリ）
    - 思考過程がリアルタイム表示
 

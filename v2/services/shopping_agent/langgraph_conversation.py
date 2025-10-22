@@ -40,6 +40,27 @@ from v2.common.logger import get_logger
 
 logger = get_logger(__name__, service_name='langgraph_conversation')
 
+# Langfuseトレーシング設定
+LANGFUSE_ENABLED = os.getenv("LANGFUSE_ENABLED", "false").lower() == "true"
+langfuse_handler = None
+langfuse_client = None
+
+if LANGFUSE_ENABLED:
+    try:
+        from langfuse.langchain import CallbackHandler
+        from langfuse import Langfuse
+
+        langfuse_client = Langfuse(
+            public_key=os.getenv("LANGFUSE_PUBLIC_KEY"),
+            secret_key=os.getenv("LANGFUSE_SECRET_KEY"),
+            host=os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
+        )
+        langfuse_handler = CallbackHandler()
+        logger.info("[Langfuse] Tracing enabled for Shopping Agent Conversation")
+    except Exception as e:
+        logger.warning(f"[Langfuse] Failed to initialize: {e}")
+        LANGFUSE_ENABLED = False
+
 
 class ConversationState(dict):
     """対話状態管理
@@ -172,7 +193,17 @@ JSONのみを出力し、説明文は含めないでください。"""
         try:
             messages = [SystemMessage(content=system_prompt)] + context_messages
 
-            response = self.llm.invoke(messages)
+            # Langfuseトレーシング
+            config = {}
+            if LANGFUSE_ENABLED and langfuse_handler:
+                config["callbacks"] = [langfuse_handler]
+                config["run_name"] = "extract_conversation_info"
+                config["metadata"] = {
+                    "user_input": user_input[:100],
+                    "conversation_turns": len(conversation_history)
+                }
+
+            response = self.llm.invoke(messages, config=config)
             llm_output = response.content.strip()
 
             logger.info(f"[extract_info] LLM raw output: {llm_output}")
