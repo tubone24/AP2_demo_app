@@ -27,6 +27,9 @@ from v2.common.database import DatabaseManager, ProductCRUD
 from v2.common.seed_data import seed_products, seed_users
 from v2.common.logger import get_logger, log_http_request, log_http_response, log_a2a_message
 
+# LangGraphエンジンのインポート
+from langgraph_merchant import MerchantLangGraphAgent
+
 logger = get_logger(__name__, service_name='merchant_agent')
 
 
@@ -66,6 +69,12 @@ class MerchantAgent(BaseAgent):
         self.merchant_id = "did:ap2:merchant:mugibo_merchant"
         self.merchant_name = "むぎぼーショップ"
 
+        # LangGraphエンジンの初期化（AI化）
+        self.langgraph_agent = None  # startup時に初期化
+
+        # AI化モードフラグ（環境変数で制御）
+        self.ai_mode_enabled = os.getenv("MERCHANT_AI_MODE", "true").lower() == "true"
+
         # 起動イベントハンドラー登録
         @self.app.on_event("startup")
         async def startup_event():
@@ -84,7 +93,22 @@ class MerchantAgent(BaseAgent):
             except Exception as e:
                 logger.warning(f"[{self.agent_name}] Sample data seeding warning: {e}")
 
-        logger.info(f"[{self.agent_name}] Initialized")
+            # LangGraphエンジン初期化（AI化）
+            if self.ai_mode_enabled:
+                try:
+                    self.langgraph_agent = MerchantLangGraphAgent(
+                        db_manager=self.db_manager,
+                        merchant_id=self.merchant_id,
+                        merchant_name=self.merchant_name,
+                        merchant_url=self.merchant_url,
+                        http_client=self.http_client
+                    )
+                    logger.info(f"[{self.agent_name}] LangGraph AI engine initialized")
+                except Exception as e:
+                    logger.error(f"[{self.agent_name}] Failed to initialize LangGraph: {e}")
+                    self.ai_mode_enabled = False
+
+        logger.info(f"[{self.agent_name}] Initialized (AI Mode: {self.ai_mode_enabled})")
 
     def get_ap2_roles(self) -> list[str]:
         """AP2でのロールを返す"""
@@ -99,13 +123,19 @@ class MerchantAgent(BaseAgent):
         A2Aハンドラーの登録
 
         Merchant Agentが受信するA2Aメッセージ：
-        - ap2/IntentMandate: Shopping Agentからの購入意図
-        - ap2/ProductSearchRequest: 商品検索依頼
-        - ap2/CartRequest: Shopping Agentからのカート作成・署名依頼
+        - ap2.mandates.IntentMandate: Shopping Agentからの購入意図
+        - ap2.requests.ProductSearch: 商品検索依頼（AI化対応）
+        - ap2.requests.CartRequest: Shopping Agentからのカート作成・署名依頼
+        - ap2.requests.CartSelection: カート選択通知（AI化で追加）
+
+        Merchant Agentが送信するA2Aメッセージ：
+        - ap2.responses.CartCandidates: 複数カート候補（AI化で追加）
+        - ap2.responses.ProductList: 商品リスト（従来）
         """
         self.a2a_handler.register_handler("ap2.mandates.IntentMandate", self.handle_intent_mandate)
         self.a2a_handler.register_handler("ap2.requests.ProductSearch", self.handle_product_search_request)
         self.a2a_handler.register_handler("ap2.requests.CartRequest", self.handle_cart_request)
+        self.a2a_handler.register_handler("ap2.requests.CartSelection", self.handle_cart_selection)  # AI化で追加
         self.a2a_handler.register_handler("ap2.mandates.PaymentMandate", self.handle_payment_request)  # AP2仕様準拠
 
     def register_endpoints(self):
@@ -333,10 +363,55 @@ class MerchantAgent(BaseAgent):
             }
 
     async def handle_product_search_request(self, message: A2AMessage) -> Dict[str, Any]:
-        """商品検索リクエストを受信"""
-        logger.info("[MerchantAgent] Received ProductSearchRequest")
+        """
+        商品検索リクエストを受信（AI化対応）
+
+        AI Modeの場合:
+        - IntentMandateを含むリクエストからLangGraphで複数カート候補を生成
+        - ap2.responses.CartCandidates として返却（Shopping Agent対応済み）
+
+        従来Mode:
+        - 単純な商品リストを返却（ap2.responses.ProductList）
+        """
+        logger.info(f"[MerchantAgent] Received ProductSearchRequest (AI Mode: {self.ai_mode_enabled})")
         search_params = message.dataPart.payload
 
+        # AI Mode: IntentMandateが含まれている場合、複数カート候補を生成
+        if self.ai_mode_enabled and "intent_mandate" in search_params:
+            logger.info("[MerchantAgent] AI Mode: Generating cart candidates with LangGraph")
+
+            intent_mandate = search_params["intent_mandate"]
+            user_id = search_params.get("user_id", "unknown")
+            session_id = search_params.get("session_id", str(uuid.uuid4()))
+
+            try:
+                # LangGraphで複数カート候補を生成
+                cart_candidates = await self.langgraph_agent.create_cart_candidates(
+                    intent_mandate=intent_mandate,
+                    user_id=user_id,
+                    session_id=session_id
+                )
+
+                logger.info(f"[MerchantAgent] Generated {len(cart_candidates)} cart candidates")
+
+                # ap2.responses.CartCandidates として返却（Shopping Agent対応済み）
+                return {
+                    "type": "ap2.responses.CartCandidates",
+                    "id": str(uuid.uuid4()),
+                    "payload": {
+                        "cart_candidates": cart_candidates,
+                        "intent_mandate_id": intent_mandate.get("id"),
+                        "merchant_id": self.merchant_id,
+                        "merchant_name": self.merchant_name
+                    }
+                }
+
+            except Exception as e:
+                logger.error(f"[handle_product_search_request] LangGraph error: {e}", exc_info=True)
+                # フォールバック: 従来の商品リスト返却
+                pass
+
+        # 従来Mode: 単純な商品検索
         query = search_params.get("query", "")
         limit = search_params.get("max_results", 10)
 
@@ -352,9 +427,95 @@ class MerchantAgent(BaseAgent):
             }
         }
 
+    async def handle_cart_selection(self, message: A2AMessage) -> Dict[str, Any]:
+        """
+        カート選択通知を受信（Shopping Agentから） - AI化で追加
+
+        ユーザーが複数のカート候補から1つを選択したことを通知。
+        選択されたカートをMerchantに署名依頼して返却。
+
+        Args:
+            message: A2AMessage
+                - payload.selected_cart_id: 選択されたカートID
+                - payload.cart_mandate: 選択されたCartMandate（未署名）
+                - payload.user_id: ユーザーID
+
+        Returns:
+            署名済みCartMandateまたはエラー
+        """
+        logger.info("[MerchantAgent] Received CartSelectionRequest")
+        payload = message.dataPart.payload
+
+        selected_cart_id = payload.get("selected_cart_id")
+        cart_mandate = payload.get("cart_mandate")
+        user_id = payload.get("user_id")
+
+        if not cart_mandate:
+            return {
+                "type": "ap2.errors.Error",
+                "id": str(uuid.uuid4()),
+                "payload": {
+                    "error_code": "invalid_cart_selection",
+                    "error_message": "cart_mandate is required"
+                }
+            }
+
+        logger.info(f"[MerchantAgent] User {user_id} selected cart: {selected_cart_id}")
+
+        try:
+            # MerchantにCartMandateの署名を依頼（HTTP）
+            response = await self.http_client.post(
+                f"{self.merchant_url}/sign/cart",
+                json={"cart_mandate": cart_mandate},
+                timeout=10.0
+            )
+            response.raise_for_status()
+            result = response.json()
+
+            # 署名済みCartMandateを取得
+            signed_cart_mandate = result.get("signed_cart_mandate")
+            if signed_cart_mandate:
+                logger.info(f"[MerchantAgent] CartMandate signed: {selected_cart_id}")
+
+                # 署名済みCartMandateを返却
+                return {
+                    "type": "ap2.responses.SignedCartMandate",
+                    "id": str(uuid.uuid4()),
+                    "payload": {
+                        "cart_mandate": signed_cart_mandate,
+                        "cart_id": selected_cart_id
+                    }
+                }
+
+            # 手動署名待ち
+            if result.get("status") == "pending_merchant_signature":
+                logger.info(f"[MerchantAgent] CartMandate pending manual approval: {selected_cart_id}")
+                return {
+                    "type": "ap2.responses.CartMandatePending",
+                    "id": str(uuid.uuid4()),
+                    "payload": {
+                        "cart_mandate_id": result.get("cart_mandate_id"),
+                        "status": "pending_merchant_signature",
+                        "message": result.get("message", "Manual merchant approval required")
+                    }
+                }
+
+            raise ValueError(f"Unexpected response from Merchant: {result}")
+
+        except Exception as e:
+            logger.error(f"[handle_cart_selection] Error: {e}", exc_info=True)
+            return {
+                "type": "ap2.errors.Error",
+                "id": str(uuid.uuid4()),
+                "payload": {
+                    "error_code": "cart_signature_failed",
+                    "error_message": str(e)
+                }
+            }
+
     async def handle_cart_request(self, message: A2AMessage) -> Dict[str, Any]:
         """
-        CartRequestを受信（Shopping Agentから）
+        CartRequestを受信（Shopping Agentから）- 従来フロー
 
         AP2仕様準拠（Steps 10-12）：
         1. Merchant Agentが商品選択情報を受信
