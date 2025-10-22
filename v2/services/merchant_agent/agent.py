@@ -108,6 +108,21 @@ class MerchantAgent(BaseAgent):
                     logger.error(f"[{self.agent_name}] Failed to initialize LangGraph: {e}")
                     self.ai_mode_enabled = False
 
+        @self.app.on_event("shutdown")
+        async def shutdown_event():
+            """シャットダウン時の処理"""
+            logger.info(f"[{self.agent_name}] Running shutdown tasks...")
+
+            # Langfuse flush
+            if self.ai_mode_enabled and self.langgraph_agent:
+                try:
+                    from langgraph_merchant import langfuse_client, LANGFUSE_ENABLED
+                    if LANGFUSE_ENABLED and langfuse_client:
+                        langfuse_client.flush()
+                        logger.info(f"[{self.agent_name}] Langfuse traces flushed")
+                except Exception as e:
+                    logger.warning(f"[{self.agent_name}] Failed to flush Langfuse: {e}")
+
         logger.info(f"[{self.agent_name}] Initialized (AI Mode: {self.ai_mode_enabled})")
 
     def get_ap2_roles(self) -> list[str]:

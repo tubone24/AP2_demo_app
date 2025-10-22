@@ -41,6 +41,13 @@ services:
       - DATABASE_URL=sqlite+aiosqlite:////app/v2/data/shopping_agent.db
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - LOG_FORMAT=${LOG_FORMAT:-text}
+      - DMR_API_URL=${DMR_API_URL:-http://host.docker.internal:12434/engines/llama.cpp/v1}
+      - DMR_MODEL=${DMR_MODEL:-ai/qwen3}
+      - DMR_API_KEY=${DMR_API_KEY:-none}
+      - LANGFUSE_ENABLED=${LANGFUSE_ENABLED:-false}
+      - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY:-}
+      - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY:-}
+      - LANGFUSE_HOST=${LANGFUSE_HOST:-https://cloud.langfuse.com}
     networks:
       - ap2_network
     depends_on:
@@ -68,6 +75,14 @@ services:
       - DATABASE_URL=sqlite+aiosqlite:////app/v2/data/merchant_agent.db
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - LOG_FORMAT=${LOG_FORMAT:-text}
+      - DMR_API_URL=${DMR_API_URL:-http://host.docker.internal:12434/engines/llama.cpp/v1}
+      - DMR_MODEL=${DMR_MODEL:-ai/qwen3}
+      - DMR_API_KEY=${DMR_API_KEY:-none}
+      - MERCHANT_AI_MODE=${MERCHANT_AI_MODE:-true}
+      - LANGFUSE_ENABLED=${LANGFUSE_ENABLED:-false}
+      - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY:-}
+      - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY:-}
+      - LANGFUSE_HOST=${LANGFUSE_HOST:-https://cloud.langfuse.com}
     networks:
       - ap2_network
     depends_on:

@@ -28,6 +28,27 @@ from v2.common.logger import get_logger
 
 logger = get_logger(__name__, service_name='langgraph_merchant')
 
+# Langfuseトレーシング設定
+LANGFUSE_ENABLED = os.getenv("LANGFUSE_ENABLED", "false").lower() == "true"
+langfuse_handler = None
+langfuse_client = None
+
+if LANGFUSE_ENABLED:
+    try:
+        from langfuse.langchain import CallbackHandler
+        from langfuse import Langfuse
+
+        langfuse_client = Langfuse(
+            public_key=os.getenv("LANGFUSE_PUBLIC_KEY"),
+            secret_key=os.getenv("LANGFUSE_SECRET_KEY"),
+            host=os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
+        )
+        langfuse_handler = CallbackHandler()
+        logger.info("[Langfuse] Tracing enabled")
+    except Exception as e:
+        logger.warning(f"[Langfuse] Failed to initialize: {e}")
+        LANGFUSE_ENABLED = False
+
 
 class MerchantAgentState(TypedDict):
     """Merchant Agentの状態管理
@@ -162,7 +183,19 @@ Brands: {brands}
                 SystemMessage(content="あなたは商品専門のアナリストです。ユーザーの購買意図を正確に理解してください。"),
                 HumanMessage(content=prompt)
             ]
-            response = await self.llm.ainvoke(messages)
+
+            # Langfuseトレーシング
+            config = {}
+            if LANGFUSE_ENABLED and langfuse_handler:
+                config["callbacks"] = [langfuse_handler]
+                config["run_name"] = "analyze_intent"
+                config["metadata"] = {
+                    "session_id": state.get("session_id"),
+                    "user_id": state.get("user_id"),
+                    "intent": intent[:100]  # 最初の100文字
+                }
+
+            response = await self.llm.ainvoke(messages, config=config)
 
             # JSON抽出
             preferences = self._parse_json_from_llm(response.content)
@@ -307,7 +340,20 @@ Brands: {brands}
                 SystemMessage(content="あなたは優秀な販売アドバイザーです。ユーザーのニーズに最適な商品の組み合わせを提案してください。"),
                 HumanMessage(content=prompt)
             ]
-            response = await self.llm.ainvoke(messages)
+
+            # Langfuseトレーシング
+            config = {}
+            if LANGFUSE_ENABLED and langfuse_handler:
+                config["callbacks"] = [langfuse_handler]
+                config["run_name"] = "optimize_cart"
+                config["metadata"] = {
+                    "session_id": state.get("session_id"),
+                    "user_id": state.get("user_id"),
+                    "max_amount": max_amount,
+                    "product_count": len(products)
+                }
+
+            response = await self.llm.ainvoke(messages, config=config)
 
             # JSON配列を抽出
             cart_plans = self._parse_json_from_llm(response.content)
@@ -622,6 +668,27 @@ Brands: {brands}
         Returns:
             複数のCartMandate候補（通常3つ、署名済み）
         """
+        # Langfuseトレース開始（start_as_current_spanを使用）
+        span = None
+        if LANGFUSE_ENABLED and langfuse_client:
+            try:
+                span = langfuse_client.start_as_current_span(
+                    name="merchant_agent_cart_generation"
+                )
+                span.__enter__()
+                span.update_trace(
+                    user_id=user_id,
+                    session_id=session_id,
+                    metadata={
+                        "intent": intent_mandate.get("intent", "")[:100],
+                        "max_amount": intent_mandate.get("constraints", {}).get("max_amount", {}).get("value", 0)
+                    },
+                    input={"intent_mandate_id": intent_mandate.get("id")}
+                )
+            except Exception as e:
+                logger.warning(f"[Langfuse] Failed to create trace: {e}")
+                span = None
+
         # 初期状態
         initial_state: MerchantAgentState = {
             "intent_mandate": intent_mandate,
@@ -636,7 +703,12 @@ Brands: {brands}
         }
 
         # グラフ実行（未署名のCartMandate候補を生成）
-        result = await self.graph.ainvoke(initial_state)
+        # Langfuseハンドラーをconfigとして渡す
+        config = {}
+        if LANGFUSE_ENABLED and langfuse_handler:
+            config["callbacks"] = [langfuse_handler]
+
+        result = await self.graph.ainvoke(initial_state, config=config)
         cart_candidates = result["cart_candidates"]
 
         # AP2仕様準拠：各CartMandateをMerchantサービスに署名依頼
@@ -668,6 +740,28 @@ Brands: {brands}
                 continue
 
         logger.info(f"[create_cart_candidates] {len(signed_candidates)}/{len(cart_candidates)} carts signed successfully")
+
+        # Langfuseトレース終了
+        if span:
+            try:
+                span.update_trace(
+                    output={
+                        "cart_count": len(signed_candidates),
+                        "plans": [c.get("plan_name") for c in signed_candidates]
+                    }
+                )
+                span.__exit__(None, None, None)
+            except Exception as e:
+                logger.warning(f"[Langfuse] Failed to close span: {e}")
+
+        # Langfuseトレースを即座に送信
+        if LANGFUSE_ENABLED and langfuse_client:
+            try:
+                langfuse_client.flush()
+                logger.debug("[Langfuse] Flushed traces")
+            except Exception as e:
+                logger.warning(f"[Langfuse] Failed to flush: {e}")
+
         return signed_candidates
 
     async def _request_merchant_signature(self, cart_mandate: Dict[str, Any]) -> Dict[str, Any]:
