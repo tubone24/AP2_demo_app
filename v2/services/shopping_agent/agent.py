@@ -2780,23 +2780,21 @@ class ShoppingAgent(BaseAgent):
                 intent_data = await self.langgraph_agent.extract_intent_from_prompt(intent)
 
                 # IntentMandateデータ（AP2仕様準拠の構造に変換）
+                # AP2準拠のIntentMandate構造（mandate_types.py参照）
                 intent_mandate_unsigned = {
                     "id": f"intent_{uuid.uuid4().hex[:8]}",
                     "type": "IntentMandate",
                     "version": "0.2",
                     "user_id": user_id,
-                    "intent": intent_data.get("natural_language_description", intent),
-                    "constraints": {
-                        "valid_until": intent_data.get("intent_expiry"),
-                        "max_amount": session.get("max_amount", {"value": "50000.00", "currency": "JPY"}),
-                        "categories": session.get("categories", []),
-                        "merchants": intent_data.get("merchants") or [],
-                        "brands": session.get("brands", [])
-                    },
-                    "created_at": now.isoformat().replace('+00:00', 'Z'),
-                    "expires_at": intent_data.get("intent_expiry"),
+                    # AP2準拠フィールド
+                    "natural_language_description": intent_data.get("natural_language_description", intent),
                     "user_cart_confirmation_required": intent_data.get("user_cart_confirmation_required", True),
-                    "requires_refundability": intent_data.get("requires_refundability", False)
+                    "merchants": intent_data.get("merchants"),  # Optional[list[str]]
+                    "skus": intent_data.get("skus"),  # Optional[list[str]]
+                    "requires_refundability": intent_data.get("requires_refundability", False),
+                    "intent_expiry": intent_data.get("intent_expiry"),
+                    # メタデータ（AP2仕様外だが互換性のため保持）
+                    "created_at": now.isoformat().replace('+00:00', 'Z')
                 }
 
                 logger.info(
@@ -2845,33 +2843,29 @@ class ShoppingAgent(BaseAgent):
             IntentMandate（署名前）
         """
         expires_at = now + timedelta(hours=1)
-        max_amount = session.get("max_amount", 50000)
-        categories = session.get("categories", [])
-        brands = session.get("brands", [])
+        merchants = session.get("merchants", [])
+        skus = session.get("skus", [])
 
+        # AP2準拠のIntentMandate構造（mandate_types.py参照）
         intent_mandate_unsigned = {
             "id": f"intent_{uuid.uuid4().hex[:8]}",
             "type": "IntentMandate",
             "version": "0.2",
             "user_id": user_id,
-            "intent": intent,
-            "constraints": {
-                "valid_until": expires_at.isoformat().replace('+00:00', 'Z'),
-                "max_amount": {
-                    "value": f"{max_amount}.00",
-                    "currency": "JPY"
-                },
-                "categories": categories if categories else [],
-                "merchants": [],
-                "brands": brands if brands else []
-            },
-            "created_at": now.isoformat().replace('+00:00', 'Z'),
-            "expires_at": expires_at.isoformat().replace('+00:00', 'Z')
+            # AP2準拠フィールド
+            "natural_language_description": intent,
+            "user_cart_confirmation_required": True,
+            "merchants": merchants if merchants else None,  # Optional[list[str]]
+            "skus": skus if skus else None,  # Optional[list[str]]
+            "requires_refundability": False,
+            "intent_expiry": expires_at.isoformat().replace('+00:00', 'Z'),
+            # メタデータ（AP2仕様外だが互換性のため保持）
+            "created_at": now.isoformat().replace('+00:00', 'Z')
         }
 
         logger.info(
             f"[ShoppingAgent] IntentMandate created (fallback mode): "
-            f"id={intent_mandate_unsigned['id']}, max_amount={max_amount}"
+            f"id={intent_mandate_unsigned['id']}, intent='{intent[:50]}...'"
         )
 
         return intent_mandate_unsigned
@@ -3317,10 +3311,13 @@ class ShoppingAgent(BaseAgent):
                 f"{'='*80}"
             )
 
+            # AP2準拠: Merchant AgentのAI処理時間を考慮して300秒（5分）タイムアウト
+            # LangGraph処理（Intent分析→商品検索→カート最適化→署名）に時間がかかる
+            # LLMのリトライも含めて十分な時間を確保
             response = await self.http_client.post(
                 f"{self.merchant_agent_url}/a2a/message",
                 json=message.model_dump(by_alias=True),
-                timeout=30.0
+                timeout=300.0
             )
             response.raise_for_status()
             result = response.json()
@@ -3417,10 +3414,13 @@ class ShoppingAgent(BaseAgent):
                 f"{'='*80}"
             )
 
+            # AP2準拠: Merchant AgentのAI処理時間を考慮して300秒（5分）タイムアウト
+            # LangGraph処理（Intent分析→商品検索→カート最適化→署名）に時間がかかる
+            # LLMのリトライも含めて十分な時間を確保
             response = await self.http_client.post(
                 f"{self.merchant_agent_url}/a2a/message",
                 json=message.model_dump(by_alias=True),
-                timeout=30.0
+                timeout=300.0
             )
             response.raise_for_status()
             result = response.json()
@@ -3556,10 +3556,13 @@ class ShoppingAgent(BaseAgent):
                 f"{'='*80}"
             )
 
+            # AP2準拠: Merchant AgentのAI処理時間を考慮して300秒（5分）タイムアウト
+            # LangGraph処理（Intent分析→商品検索→カート最適化→署名）に時間がかかる
+            # LLMのリトライも含めて十分な時間を確保
             response = await self.http_client.post(
                 f"{self.merchant_agent_url}/a2a/message",
                 json=message.model_dump(by_alias=True),
-                timeout=30.0
+                timeout=300.0
             )
             response.raise_for_status()
             result = response.json()

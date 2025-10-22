@@ -119,7 +119,9 @@ class MerchantLangGraphAgent:
             model=self.llm_model,
             api_key=self.llm_api_key,
             temperature=0.5,
-            max_tokens=1024,
+            max_tokens=2048,  # AP2準拠: 詳細な思考のためトークン数増加
+            timeout=180.0,  # AP2準拠: LLM深い思考のため180秒（3分）タイムアウト
+            max_retries=2  # リトライ実施で安定性向上
         )
 
         # グラフ構築
@@ -151,23 +153,29 @@ class MerchantLangGraphAgent:
         return workflow.compile()
 
     async def _analyze_intent(self, state: MerchantAgentState) -> MerchantAgentState:
-        """IntentMandateを解析してユーザー嗜好を抽出"""
+        """IntentMandateを解析してユーザー嗜好を抽出
+
+        AP2準拠のIntentMandate構造:
+        - natural_language_description: ユーザーの意図
+        - merchants: 許可されたMerchantリスト（オプション）
+        - skus: 特定のSKUリスト（オプション）
+        - requires_refundability: 返金可能性要件（オプション）
+        """
         intent_mandate = state["intent_mandate"]
 
-        # IntentMandateから情報抽出
-        intent = intent_mandate.get("intent", "")
-        constraints = intent_mandate.get("constraints", {})
-        max_amount = constraints.get("max_amount", {}).get("value", 0)
-        categories = constraints.get("categories", [])
-        brands = constraints.get("brands", [])
+        # AP2準拠のフィールド抽出
+        natural_language_description = intent_mandate.get("natural_language_description", intent_mandate.get("intent", ""))
+        merchants = intent_mandate.get("merchants", [])
+        skus = intent_mandate.get("skus", [])
+        requires_refundability = intent_mandate.get("requires_refundability", False)
 
         # LLMでユーザーの嗜好を分析
         prompt = f"""以下のIntent Mandateから、ユーザーの具体的なニーズと嗜好を抽出してください。
 
-Intent: {intent}
-Max Amount: ¥{max_amount:,}
-Categories: {categories}
-Brands: {brands}
+ユーザーの意図: {natural_language_description}
+指定Merchant: {merchants if merchants else "制約なし"}
+指定SKU: {skus if skus else "制約なし"}
+返金可能性要件: {requires_refundability}
 
 以下をJSON形式で出力してください：
 {{
@@ -192,7 +200,7 @@ Brands: {brands}
                 config["metadata"] = {
                     "session_id": state.get("session_id"),
                     "user_id": state.get("user_id"),
-                    "intent": intent[:100]  # 最初の100文字
+                    "natural_language_description": natural_language_description[:100]
                 }
 
             response = await self.llm.ainvoke(messages, config=config)
@@ -205,66 +213,70 @@ Brands: {brands}
             logger.info(f"[analyze_intent] Extracted preferences: {preferences}")
         except Exception as e:
             logger.error(f"[analyze_intent] LLM error: {e}")
-            # フォールバック
+            # フォールバック（AP2準拠）
             state["user_preferences"] = {
-                "primary_need": intent,
+                "primary_need": natural_language_description,
                 "budget_strategy": "balanced",
-                "key_factors": categories or ["品質"],
-                "search_keywords": [intent] if intent else []
+                "key_factors": ["品質", "価格"],
+                "search_keywords": [natural_language_description] if natural_language_description else []
             }
 
         return state
 
     async def _search_products(self, state: MerchantAgentState) -> MerchantAgentState:
-        """データベースから商品検索"""
+        """データベースから商品検索
+
+        AP2準拠のIntentMandate構造を使用:
+        - skus: 特定のSKUリスト（オプション）
+        - merchants: 許可されたMerchantリスト（オプション）
+        - natural_language_description: 検索に使用
+        """
         intent_mandate = state["intent_mandate"]
         preferences = state["user_preferences"]
 
-        # 検索条件構築
-        constraints = intent_mandate.get("constraints", {})
-        categories = constraints.get("categories", [])
-        brands = constraints.get("brands", [])
-        max_amount = constraints.get("max_amount", {}).get("value", 1000000)
+        # AP2準拠のフィールド抽出
+        skus = intent_mandate.get("skus", [])
+        merchants = intent_mandate.get("merchants", [])
+        natural_language_description = intent_mandate.get("natural_language_description", intent_mandate.get("intent", ""))
 
-        # キーワード検索
+        # キーワード検索（LLMで抽出したキーワードまたはnatural_language_description）
         search_keywords = preferences.get("search_keywords", [])
-        query = " ".join(search_keywords) if search_keywords else ""
+        query = " ".join(search_keywords) if search_keywords else natural_language_description
 
-        # ProductCRUDで検索
+        # ProductCRUDで検索（AP2準拠の静的メソッド使用）
         from v2.common.database import ProductCRUD
-        product_crud = ProductCRUD(self.db_manager)
 
-        products = await product_crud.search_products(
-            query=query,
-            limit=20  # 多めに取得してLLMで絞り込む
-        )
+        async with self.db_manager.get_session() as session:
+            products = await ProductCRUD.search(session, query, limit=20)
 
-        # フィルタリング
+        # AP2準拠のフィルタリング
         filtered_products = []
         for product in products:
-            # 価格フィルタ
-            if product["price"] / 100 > max_amount:
+            # dict形式に変換
+            product_dict = {
+                "id": product.id,
+                "sku": product.sku,
+                "name": product.name,
+                "description": product.description,
+                "price": product.price,
+                "inventory_count": product.inventory_count,
+                "metadata": json.loads(product.product_metadata) if product.product_metadata else {}
+            }
+
+            # SKUフィルタ（AP2準拠）
+            if skus and product_dict["sku"] not in skus:
                 continue
 
-            # カテゴリーフィルタ
-            if categories:
-                # メタデータにカテゴリー情報があれば確認
-                product_category = product.get("metadata", {}).get("category", "")
-                if product_category and product_category not in categories:
-                    continue
-
-            # ブランドフィルタ
-            if brands:
-                product_brand = product.get("metadata", {}).get("brand", "")
-                if product_brand and product_brand not in brands:
-                    continue
+            # Merchantフィルタ（AP2準拠）
+            if merchants and self.merchant_id not in merchants:
+                continue
 
             # 在庫あり
-            if product["inventory_count"] > 0:
-                filtered_products.append(product)
+            if product_dict["inventory_count"] > 0:
+                filtered_products.append(product_dict)
 
         state["available_products"] = filtered_products
-        logger.info(f"[search_products] Found {len(filtered_products)} products")
+        logger.info(f"[search_products] Found {len(filtered_products)} products (AP2 compliant)")
 
         return state
 
@@ -288,56 +300,59 @@ Brands: {brands}
         return state
 
     async def _optimize_cart(self, state: MerchantAgentState) -> MerchantAgentState:
-        """LLMによるカート最適化 - 3プラン生成"""
+        """LLMによるカート最適化 - 3プラン生成（AP2準拠）
+
+        LLMで深く思考してユーザーに最適なカートプランを提案
+        十分な時間（180秒×3回リトライ）を確保
+        """
         intent_mandate = state["intent_mandate"]
         preferences = state["user_preferences"]
         products = state["available_products"]
         inventory = state["inventory_status"]
 
-        max_amount = intent_mandate.get("constraints", {}).get("max_amount", {}).get("value", 0)
+        if not products:
+            state["cart_plans"] = []
+            logger.warning("[optimize_cart] No products available")
+            return state
 
-        # 商品情報を簡潔に整形
+        # AP2準拠: 予算制限がないため、商品価格帯から推定
+        if products:
+            avg_price = sum(p["price"] for p in products) / len(products) / 100
+            max_amount = int(avg_price * 3)
+        else:
+            max_amount = 50000
+
+        # 商品情報を整形（上位10個まで）
         products_summary = []
-        for p in products[:15]:  # LLMのトークン制限を考慮して15個まで
+        for p in products[:10]:
             products_summary.append({
                 "id": p["id"],
                 "name": p["name"],
-                "price": p["price"] / 100,  # 円単位
-                "inventory": inventory.get(p["id"], 0),
-                "description": p.get("description", "")[:50]  # 短縮
+                "price": int(p["price"] / 100),
+                "description": p.get("description", "")[:100]
             })
 
-        # LLMプロンプト
-        prompt = f"""以下の商品から、ユーザーの予算¥{max_amount:,}内で、3つの異なるカートプランを作成してください。
+        # シンプルなプロンプト（LLMの負荷軽減）
+        prompt = f"""ユーザーの要望: {preferences.get("primary_need", "商品を購入したい")}
 
-ユーザーのニーズ:
-{json.dumps(preferences, ensure_ascii=False, indent=2)}
-
-利用可能な商品:
+利用可能な商品（上位10個）:
 {json.dumps(products_summary, ensure_ascii=False, indent=2)}
 
-要件:
-1. エコノミープラン: 最もコストパフォーマンスが高い組み合わせ（予算の60-70%）
-2. スタンダードプラン: バランスの取れた組み合わせ（予算の70-85%）
-3. プレミアムプラン: 最高品質の組み合わせ（予算の85-100%）
+以下の3プランを作成してください:
+1. お手頃プラン: 最もコストパフォーマンスが良い商品
+2. バランスプラン: 品質と価格のバランスが良い商品
+3. 高品質プラン: 最も品質が高い商品
 
-各プランを以下のJSON形式で出力してください：
+JSON配列で出力してください:
 [
-  {{
-    "plan_name": "エコノミープラン",
-    "items": [
-      {{"product_id": "prod_xxx", "quantity": 1, "reason": "選択理由"}}
-    ],
-    "total_price": 0,
-    "selling_points": ["セールスポイント1", "セールスポイント2"]
-  }},
-  ...
-]
-"""
+  {{"plan_name": "お手頃プラン", "items": [{{"product_id": "商品ID", "quantity": 1}}], "selling_points": ["ポイント1", "ポイント2"]}},
+  {{"plan_name": "バランスプラン", "items": [{{"product_id": "商品ID", "quantity": 1}}], "selling_points": ["ポイント1", "ポイント2"]}},
+  {{"plan_name": "高品質プラン", "items": [{{"product_id": "商品ID", "quantity": 1}}], "selling_points": ["ポイント1", "ポイント2"]}}
+]"""
 
         try:
             messages = [
-                SystemMessage(content="あなたは優秀な販売アドバイザーです。ユーザーのニーズに最適な商品の組み合わせを提案してください。"),
+                SystemMessage(content="あなたは商品選びのプロフェッショナルです。ユーザーに最適な商品プランを提案してください。"),
                 HumanMessage(content=prompt)
             ]
 
@@ -349,35 +364,76 @@ Brands: {brands}
                 config["metadata"] = {
                     "session_id": state.get("session_id"),
                     "user_id": state.get("user_id"),
-                    "max_amount": max_amount,
                     "product_count": len(products)
                 }
 
+            logger.info("[optimize_cart] Calling LLM for cart optimization...")
             response = await self.llm.ainvoke(messages, config=config)
+            logger.info(f"[optimize_cart] LLM response received: {len(response.content)} chars")
 
             # JSON配列を抽出
             cart_plans = self._parse_json_from_llm(response.content)
 
-            # リストでない場合は配列化
             if not isinstance(cart_plans, list):
                 cart_plans = [cart_plans]
+
+            # total_priceを計算
+            for plan in cart_plans:
+                total = 0
+                for item in plan.get("items", []):
+                    product_id = item.get("product_id")
+                    quantity = item.get("quantity", 1)
+                    product = next((p for p in products if p["id"] == product_id), None)
+                    if product:
+                        total += (product["price"] / 100) * quantity
+                plan["total_price"] = total
 
             state["cart_plans"] = cart_plans
             state["llm_reasoning"] = response.content
 
-            logger.info(f"[optimize_cart] Generated {len(cart_plans)} cart plans")
+            logger.info(f"[optimize_cart] Generated {len(cart_plans)} cart plans via LLM (AP2 compliant)")
+
         except Exception as e:
             logger.error(f"[optimize_cart] LLM error: {e}")
-            # フォールバック: 最初の商品を1つ選ぶ
-            if products:
-                state["cart_plans"] = [{
+            # フォールバック: 価格帯別に3プラン生成
+            sorted_by_price = sorted(products, key=lambda p: p["price"])
+            cart_plans = []
+
+            if len(sorted_by_price) >= 1:
+                cart_plans.append({
+                    "plan_name": "お手頃プラン",
+                    "items": [{"product_id": sorted_by_price[0]["id"], "quantity": 1}],
+                    "total_price": sorted_by_price[0]["price"] / 100,
+                    "selling_points": ["コストパフォーマンス重視", "在庫あり"]
+                })
+
+            if len(sorted_by_price) >= 2:
+                mid_idx = len(sorted_by_price) // 2
+                cart_plans.append({
+                    "plan_name": "バランスプラン",
+                    "items": [{"product_id": sorted_by_price[mid_idx]["id"], "quantity": 1}],
+                    "total_price": sorted_by_price[mid_idx]["price"] / 100,
+                    "selling_points": ["品質と価格のバランス", "在庫あり"]
+                })
+
+            if len(sorted_by_price) >= 3:
+                cart_plans.append({
+                    "plan_name": "高品質プラン",
+                    "items": [{"product_id": sorted_by_price[-1]["id"], "quantity": 1}],
+                    "total_price": sorted_by_price[-1]["price"] / 100,
+                    "selling_points": ["高品質重視", "在庫あり"]
+                })
+
+            if not cart_plans:
+                cart_plans.append({
                     "plan_name": "デフォルトプラン",
-                    "items": [{"product_id": products[0]["id"], "quantity": 1, "reason": "自動選択"}],
+                    "items": [{"product_id": products[0]["id"], "quantity": 1}],
                     "total_price": products[0]["price"] / 100,
                     "selling_points": ["在庫あり"]
-                }]
-            else:
-                state["cart_plans"] = []
+                })
+
+            state["cart_plans"] = cart_plans
+            logger.info(f"[optimize_cart] Generated {len(cart_plans)} cart plans via fallback (AP2 compliant)")
 
         return state
 
@@ -668,25 +724,31 @@ Brands: {brands}
         Returns:
             複数のCartMandate候補（通常3つ、署名済み）
         """
-        # Langfuseトレース開始（start_as_current_spanを使用）
+        # Langfuseトレース開始（AP2準拠のIntentMandate構造）
+        # TODO: Langfuse SDK v3のAPI仕様を確認して修正
         span = None
         if LANGFUSE_ENABLED and langfuse_client:
             try:
+                # Context manager形式で使用
                 span = langfuse_client.start_as_current_span(
                     name="merchant_agent_cart_generation"
                 )
-                span.__enter__()
-                span.update_trace(
-                    user_id=user_id,
-                    session_id=session_id,
-                    metadata={
-                        "intent": intent_mandate.get("intent", "")[:100],
-                        "max_amount": intent_mandate.get("constraints", {}).get("max_amount", {}).get("value", 0)
-                    },
-                    input={"intent_mandate_id": intent_mandate.get("id")}
-                )
+                # __enter__を呼ぶと実際のspanオブジェクトが返される
+                actual_span = span.__enter__()
+                # user_id/session_idはmetadataに含める
+                if hasattr(actual_span, 'update_trace'):
+                    actual_span.update_trace(
+                        metadata={
+                            "user_id": user_id,
+                            "session_id": session_id,
+                            "natural_language_description": intent_mandate.get("natural_language_description", intent_mandate.get("intent", ""))[:100],
+                            "merchants": intent_mandate.get("merchants"),
+                            "requires_refundability": intent_mandate.get("requires_refundability", False)
+                        },
+                        input={"intent_mandate_id": intent_mandate.get("id")}
+                    )
             except Exception as e:
-                logger.warning(f"[Langfuse] Failed to create trace: {e}")
+                logger.warning(f"[Langfuse] Failed to create span: {e}")
                 span = None
 
         # 初期状態
@@ -711,22 +773,30 @@ Brands: {brands}
         result = await self.graph.ainvoke(initial_state, config=config)
         cart_candidates = result["cart_candidates"]
 
-        # AP2仕様準拠：各CartMandateをMerchantサービスに署名依頼
+        # AP2仕様準拠：各CartMandateをMerchantサービスに署名依頼し、Artifact形式でラップ
         signed_candidates = []
         for candidate in cart_candidates:
             try:
                 cart_mandate = candidate["cart_mandate"]
                 signed_cart = await self._request_merchant_signature(cart_mandate)
 
-                # 署名済みCartMandateで更新
-                signed_candidate = {
-                    **candidate,
-                    "cart_mandate": signed_cart
+                # AP2/A2A仕様準拠：Artifact形式でラップ（a2a-extension.md:144-229）
+                artifact = {
+                    "artifactId": f"artifact_{uuid.uuid4().hex[:8]}",
+                    "name": candidate.get("plan_name", "カート"),
+                    "parts": [
+                        {
+                            "kind": "data",
+                            "data": {
+                                "ap2.mandates.CartMandate": signed_cart
+                            }
+                        }
+                    ]
                 }
-                signed_candidates.append(signed_candidate)
+                signed_candidates.append(artifact)
 
                 logger.info(
-                    f"[create_cart_candidates] Cart signed: "
+                    f"[create_cart_candidates] Cart signed and wrapped: "
                     f"cart_id={signed_cart.get('contents', {}).get('id')}, "
                     f"plan={candidate.get('plan_name')}"
                 )
@@ -747,7 +817,8 @@ Brands: {brands}
                 span.update_trace(
                     output={
                         "cart_count": len(signed_candidates),
-                        "plans": [c.get("plan_name") for c in signed_candidates]
+                        "artifact_ids": [c.get("artifactId") for c in signed_candidates],
+                        "cart_names": [c.get("name") for c in signed_candidates]
                     }
                 )
                 span.__exit__(None, None, None)
