@@ -22,6 +22,7 @@ export default function ChatPage() {
     messages,
     isStreaming,
     currentAgentMessage,
+    currentAgentThinking,  // LLMの思考内容
     currentProducts,
     currentCartCandidates,
     signatureRequest,
@@ -331,8 +332,25 @@ export default function ChatPage() {
                 />
               ))}
 
+              {/* ストリーミング中のLLM思考過程 */}
+              {isStreaming && currentAgentThinking && (
+                <div className="flex gap-3 mb-4">
+                  <Avatar className="w-8 h-8 flex-shrink-0">
+                    <AvatarFallback className="bg-green-500">
+                      <Bot className="w-4 h-4 text-white" />
+                    </AvatarFallback>
+                  </Avatar>
+                  <div className="flex flex-col max-w-full">
+                    <div className="rounded-lg px-4 py-2 text-sm bg-muted text-foreground opacity-60">
+                      <p className="whitespace-pre-wrap font-mono text-xs">{currentAgentThinking}</p>
+                      <span className="inline-block w-2 h-4 ml-1 bg-foreground animate-pulse" />
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* ストリーミング中のエージェントメッセージ */}
-              {isStreaming && currentAgentMessage && (
+              {isStreaming && currentAgentMessage && !currentAgentThinking && (
                 <div className="flex gap-3 mb-4">
                   <Avatar className="w-8 h-8 flex-shrink-0">
                     <AvatarFallback className="bg-green-500">

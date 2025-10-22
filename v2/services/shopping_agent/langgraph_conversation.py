@@ -340,6 +340,142 @@ JSONのみを出力し、説明文は含めないでください。"""
             "conversation_history": final_state.get("conversation_history", []),
         }
 
+    async def process_user_input_stream(
+        self,
+        user_input: str,
+        current_state: Optional[Dict[str, Any]] = None
+    ):
+        """ユーザー入力を処理（ストリーミング版）
+
+        Args:
+            user_input: ユーザーの入力
+            current_state: 現在の状態（Noneの場合は新規開始）
+
+        Yields:
+            Dict[str, Any]: ストリーミングイベント
+            {
+                "type": "思考", "content": "..."  # LLMの思考過程
+                "type": "テキスト", "content": "..."  # 抽出されたテキスト
+                "type": "完了", "state": {...}  # 最終状態
+            }
+        """
+        # 対話履歴に追加
+        conversation_history = current_state.get("conversation_history", []) if current_state else []
+        conversation_history.append({"role": "user", "content": user_input})
+
+        # 情報抽出ノード（ストリーミング版）
+        system_prompt = """あなたはAP2 Shopping Agentです。ユーザーとの対話から以下の情報を抽出してください。
+
+必須情報:
+- intent: 購買意図（例: 「赤いバスケットボールシューズが欲しい」）
+- max_amount: 最大金額（数値のみ、単位なし）
+
+オプション情報:
+- categories: カテゴリーリスト（例: ["スポーツ", "シューズ"]）。なければ空リスト
+- brands: ブランドリスト（例: ["Nike", "Adidas"]）。なければ空リスト
+
+以下のJSON形式で出力してください:
+{
+  "intent": "購買意図の文字列またはnull",
+  "max_amount": 数値またはnull,
+  "categories": ["カテゴリー1", "カテゴリー2"] または [],
+  "brands": ["ブランド1", "ブランド2"] または []
+}
+
+JSONのみを出力し、説明文は含めないでください。"""
+
+        # コンテキストメッセージ
+        context_messages = []
+        for msg in conversation_history[-5:]:
+            if msg["role"] == "user":
+                context_messages.append(HumanMessage(content=msg["content"]))
+            elif msg["role"] == "assistant":
+                context_messages.append(AIMessage(content=msg["content"]))
+
+        messages = [SystemMessage(content=system_prompt)] + context_messages
+
+        # LLMをストリーミングで呼び出し
+        extracted = {}
+        full_response = ""
+
+        try:
+            async for chunk in self.llm.astream(messages):
+                content = chunk.content
+                if content:
+                    full_response += content
+                    # LLMの出力をストリーミング
+                    yield {
+                        "type": "llm_chunk",
+                        "content": content
+                    }
+
+            logger.info(f"[process_user_input_stream] LLM full output: {full_response}")
+
+            # JSON抽出
+            llm_output = full_response.strip()
+            if "```json" in llm_output:
+                llm_output = llm_output.split("```json")[1].split("```")[0].strip()
+            elif "```" in llm_output:
+                llm_output = llm_output.split("```")[1].split("```")[0].strip()
+
+            extracted = json.loads(llm_output)
+
+        except Exception as e:
+            logger.error(f"[process_user_input_stream] Error: {e}", exc_info=True)
+            extracted = {}
+
+        # 状態を更新
+        intent = extracted.get("intent") if extracted.get("intent") else (current_state.get("intent") if current_state else None)
+        max_amount = extracted.get("max_amount") if extracted.get("max_amount") is not None else (current_state.get("max_amount") if current_state else None)
+        categories = extracted.get("categories") if extracted.get("categories") else (current_state.get("categories", []) if current_state else [])
+        brands = extracted.get("brands") if extracted.get("brands") else (current_state.get("brands", []) if current_state else [])
+
+        # 不足フィールド確認
+        missing_fields = []
+        if not intent:
+            missing_fields.append("intent")
+        if max_amount is None:
+            missing_fields.append("max_amount")
+
+        is_complete = len(missing_fields) == 0
+
+        # 応答生成
+        if not missing_fields:
+            agent_response = f"購入条件が確認できました。\n\n"
+            agent_response += f"・購買意図: {intent}\n"
+            agent_response += f"・最大金額: {max_amount:,.0f}円\n"
+            if categories:
+                agent_response += f"・カテゴリー: {', '.join(categories)}\n"
+            if brands:
+                agent_response += f"・ブランド: {', '.join(brands)}\n"
+        elif "intent" in missing_fields:
+            agent_response = "何をお探しですか？例えば「赤いバスケットボールシューズが欲しい」のように教えてください。"
+        elif "max_amount" in missing_fields:
+            agent_response = "最大金額を教えてください。（例：50000円、または50000）"
+        else:
+            agent_response = ""
+
+        # 対話履歴に応答を追加
+        conversation_history.append({"role": "assistant", "content": agent_response})
+
+        # 最終状態を返す
+        final_state = {
+            "intent": intent,
+            "max_amount": max_amount,
+            "categories": categories,
+            "brands": brands,
+            "agent_response": agent_response,
+            "is_complete": is_complete,
+            "conversation_history": conversation_history,
+            "missing_fields": missing_fields,
+        }
+
+        # 完了イベント
+        yield {
+            "type": "complete",
+            "state": final_state
+        }
+
 
 # シングルトンインスタンス
 _conversation_agent_instance: Optional[LangGraphConversationAgent] = None

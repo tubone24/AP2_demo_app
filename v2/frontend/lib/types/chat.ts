@@ -6,6 +6,10 @@
 // SSEイベント型
 export type SSEEventType =
   | "agent_text"
+  | "agent_thinking"  // LLMの思考過程（JSON出力など）
+  | "agent_thinking_complete"  // LLM思考完了通知
+  | "agent_text_chunk"  // エージェント応答のストリーミングチャンク
+  | "agent_text_complete"  // エージェント応答完了通知
   | "signature_request"
   | "cart_options"
   | "product_list"
@@ -26,6 +30,30 @@ export interface SSEEvent {
 export interface AgentTextEvent extends SSEEvent {
   type: "agent_text";
   content: string;
+}
+
+// LLM思考過程イベント
+export interface AgentThinkingEvent extends SSEEvent {
+  type: "agent_thinking";
+  content?: string;
+}
+
+// LLM思考完了イベント
+export interface AgentThinkingCompleteEvent extends SSEEvent {
+  type: "agent_thinking_complete";
+  content?: string;
+}
+
+// エージェント応答チャンクイベント
+export interface AgentTextChunkEvent extends SSEEvent {
+  type: "agent_text_chunk";
+  content?: string;
+}
+
+// エージェント応答完了イベント
+export interface AgentTextCompleteEvent extends SSEEvent {
+  type: "agent_text_complete";
+  content?: string;
 }
 
 // 署名リクエストイベント
@@ -95,6 +123,10 @@ export interface ErrorEvent extends SSEEvent {
 // すべてのSSEイベント型
 export type ChatSSEEvent =
   | AgentTextEvent
+  | AgentThinkingEvent
+  | AgentThinkingCompleteEvent
+  | AgentTextChunkEvent
+  | AgentTextCompleteEvent
   | SignatureRequestEvent
   | CartOptionsEvent
   | ProductListEvent

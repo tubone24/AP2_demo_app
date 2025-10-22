@@ -7,6 +7,7 @@ export function useSSEChat() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [currentAgentMessage, setCurrentAgentMessage] = useState("");
+  const [currentAgentThinking, setCurrentAgentThinking] = useState(""); // LLMの思考内容
   const [signatureRequest, setSignatureRequest] = useState<SignatureRequestEvent | null>(null);
   const [currentProducts, setCurrentProducts] = useState<Product[]>([]);
   const [currentCartCandidates, setCurrentCartCandidates] = useState<any[]>([]);
@@ -78,9 +79,12 @@ export function useSSEChat() {
 
       let buffer = "";
       let agentMessageContent = "";
+      let agentThinkingContent = ""; // LLMの思考過程を蓄積
       let streamProducts: Product[] = []; // ローカル変数で商品データを管理
       let streamCartCandidates: any[] = []; // ローカル変数でカート候補を管理
       let hasReceivedContentEvent = false; // リッチコンテンツイベント受信フラグ
+      let isThinking = false; // LLMが思考中かどうか
+      let isTyping = false; // テキストをタイプ中かどうか
 
       while (true) {
         const { done, value } = await reader.read();
@@ -113,6 +117,40 @@ export function useSSEChat() {
               });
 
               switch (event.type) {
+                case "agent_thinking":
+                  // LLMの思考過程をリアルタイム表示
+                  if (!isThinking) {
+                    isThinking = true;
+                    // 思考開始のマーカーを表示
+                    agentThinkingContent = "🤔 思考中...\n\n";
+                  }
+                  agentThinkingContent += event.content || "";
+                  // 思考内容を専用stateに保存
+                  setCurrentAgentThinking(agentThinkingContent);
+                  break;
+
+                case "agent_thinking_complete":
+                  // LLM思考完了 - 思考内容をクリア
+                  isThinking = false;
+                  agentThinkingContent = "";
+                  setCurrentAgentThinking("");
+                  break;
+
+                case "agent_text_chunk":
+                  // エージェント応答のストリーミングチャンク
+                  if (!isTyping) {
+                    isTyping = true;
+                    agentMessageContent = "";
+                  }
+                  agentMessageContent += event.content || "";
+                  setCurrentAgentMessage(agentMessageContent);
+                  break;
+
+                case "agent_text_complete":
+                  // エージェント応答完了
+                  isTyping = false;
+                  break;
+
                 case "agent_text":
                   // リッチコンテンツイベントを受信していない場合のみクリア
                   if (!hasReceivedContentEvent) {
@@ -330,6 +368,7 @@ export function useSSEChat() {
     messages,
     isStreaming,
     currentAgentMessage,
+    currentAgentThinking,  // LLMの思考内容を公開
     currentProducts,
     currentCartCandidates,
     signatureRequest,

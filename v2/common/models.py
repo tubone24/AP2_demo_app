@@ -513,6 +513,10 @@ class StreamEvent(BaseModel):
     """
     type: Literal[
         "agent_text",
+        "agent_thinking",  # LLMの思考過程（JSON出力など）
+        "agent_thinking_complete",  # LLM思考完了通知
+        "agent_text_chunk",  # エージェント応答のストリーミングチャンク
+        "agent_text_complete",  # エージェント応答完了通知
         "signature_request",
         "cart_options",
         "shipping_form_request",

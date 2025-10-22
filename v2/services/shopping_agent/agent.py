@@ -1246,42 +1246,92 @@ class ShoppingAgent(BaseAgent):
                     )
                 return
 
-        # ステップ1: 初回挨拶 または 対話フロー（LangGraph AI対応）
+        # ステップ1: 初回挨拶 または 対話フロー（LangGraph AI対応 - ストリーミング）
         if current_step in ["initial", "ask_intent", "ask_max_amount", "ask_categories", "ask_brands", "collecting_intent_info"]:
-            # LangGraph対話エージェントを使用
+            # LangGraph対話エージェントを使用（ストリーミング版）
             if self.conversation_agent:
                 try:
                     # 現在の対話状態を取得
                     conversation_state = session.get("conversation_state")
 
-                    # 対話エージェントを実行
-                    result = await self.conversation_agent.process_user_input(
+                    # LLMの思考過程を表示
+                    llm_thinking_content = ""
+                    final_state = None
+
+                    # 対話エージェントをストリーミング実行
+                    async for event in self.conversation_agent.process_user_input_stream(
                         user_input=user_input,
                         current_state=conversation_state
-                    )
+                    ):
+                        event_type = event.get("type")
+
+                        if event_type == "llm_chunk":
+                            # LLMの出力をリアルタイムで表示
+                            chunk_content = event.get("content", "")
+                            llm_thinking_content += chunk_content
+
+                            yield StreamEvent(
+                                type="agent_thinking",
+                                content=chunk_content
+                            )
+
+                        elif event_type == "complete":
+                            # 最終状態を取得
+                            final_state = event.get("state")
+
+                    if not final_state:
+                        raise ValueError("LangGraph conversation did not return final state")
 
                     # セッションに状態を保存
-                    session["conversation_state"] = result
+                    session["conversation_state"] = final_state
 
-                    # エージェントの応答を表示
+                    # LLM思考過程が完了したことを通知
+                    if llm_thinking_content:
+                        await asyncio.sleep(0.2)
+                        yield StreamEvent(
+                            type="agent_thinking_complete",
+                            content=""
+                        )
+                        await asyncio.sleep(0.3)
+
+                    # エージェントの応答を段階的に表示
+                    agent_response = final_state["agent_response"]
+                    # 文字単位でストリーミング表示（より自然なUX）
+                    for char in agent_response:
+                        yield StreamEvent(
+                            type="agent_text_chunk",
+                            content=char
+                        )
+                        await asyncio.sleep(0.02)  # 20msごとに1文字表示
+
+                    # テキスト完了を通知
                     yield StreamEvent(
-                        type="agent_text",
-                        content=result["agent_response"]
+                        type="agent_text_complete",
+                        content=""
                     )
                     await asyncio.sleep(0.3)
 
                     # すべての必須情報が揃ったか確認
-                    if result["is_complete"]:
+                    if final_state["is_complete"]:
                         # Intent Mandateの生成へ進む
-                        session["intent"] = result["intent"]
-                        session["max_amount"] = result["max_amount"]
-                        session["categories"] = result.get("categories", [])
-                        session["brands"] = result.get("brands", [])
+                        session["intent"] = final_state["intent"]
+                        session["max_amount"] = final_state["max_amount"]
+                        session["categories"] = final_state.get("categories", [])
+                        session["brands"] = final_state.get("brands", [])
                         session["step"] = "intent_complete_ask_shipping"
 
+                        # 配送先入力の案内
+                        shipping_prompt = "商品の配送先を入力してください。"
+                        for char in shipping_prompt:
+                            yield StreamEvent(
+                                type="agent_text_chunk",
+                                content=char
+                            )
+                            await asyncio.sleep(0.02)
+
                         yield StreamEvent(
-                            type="agent_text",
-                            content="商品の配送先を入力してください。"
+                            type="agent_text_complete",
+                            content=""
                         )
                         await asyncio.sleep(0.3)
 
