@@ -13,54 +13,70 @@ import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { ShoppingCart, Package, Truck, MapPin } from "lucide-react";
 
-interface CartItem {
+// AP2準拠の型定義
+// refs/AP2-main/src/ap2/types/payment_request.py
+
+interface PaymentCurrencyAmount {
+  currency: string;
+  value: number;
+}
+
+interface PaymentItem {
+  label: string;
+  amount: PaymentCurrencyAmount;
+  pending?: boolean;
+  refund_period?: number;
+}
+
+interface ContactAddress {
+  recipient?: string;
+  postal_code?: string;
+  city?: string;
+  region?: string;
+  country?: string;
+  address_line?: string[];
+  phone_number?: string;
+}
+
+interface PaymentShippingOption {
   id: string;
-  name: string;
-  description?: string;
-  quantity: number;
-  unit_price: {
-    value: string;
-    currency: string;
+  label: string;
+  amount: PaymentCurrencyAmount;
+  selected?: boolean;
+}
+
+interface PaymentRequest {
+  method_data: any[];
+  details: {
+    id: string;
+    display_items: PaymentItem[];
+    total: PaymentItem;
+    shipping_options?: PaymentShippingOption[];
+    modifiers?: any[];
   };
-  total_price: {
-    value: string;
-    currency: string;
-  };
-  image_url?: string;
-  sku?: string;
-  category?: string;
-  brand?: string;
+  options?: any;
+  shipping_address?: ContactAddress;
+}
+
+interface CartContents {
+  id: string;
+  user_cart_confirmation_required: boolean;
+  payment_request: PaymentRequest;
+  cart_expiry: string;
+  merchant_name: string;
 }
 
 interface CartMandate {
-  id: string;
-  items: CartItem[];
-  subtotal: {
-    value: string;
-    currency: string;
+  contents: CartContents;
+  merchant_authorization?: string | null;
+  _metadata?: {
+    intent_mandate_id?: string;
+    merchant_id?: string;
+    created_at?: string;
+    cart_name?: string;
+    cart_description?: string;
+    raw_items?: any[];
   };
-  tax: {
-    value: string;
-    currency: string;
-  };
-  shipping: {
-    address?: any;
-    method?: string;
-    cost: {
-      value: string;
-      currency: string;
-    };
-    estimated_delivery?: string;
-  };
-  total: {
-    value: string;
-    currency: string;
-  };
-  cart_metadata?: {
-    name: string;
-    description: string;
-  };
-  merchant_name?: string;
 }
 
 interface CartCandidate {
@@ -87,10 +103,23 @@ export function CartDetailsModal({
   }
 
   const { cart_mandate, artifact_name } = cartCandidate;
-  const { items, subtotal, tax, shipping, total, cart_metadata, merchant_name } = cart_mandate;
 
-  const cartName = cart_metadata?.name || artifact_name || "カート";
-  const cartDescription = cart_metadata?.description || "";
+  // AP2準拠の構造から情報を取得
+  const { contents, _metadata } = cart_mandate;
+  const { payment_request, merchant_name } = contents;
+  const { display_items, total, shipping_options } = payment_request.details;
+  const { shipping_address } = payment_request;
+
+  const cartName = _metadata?.cart_name || artifact_name || "カート";
+  const cartDescription = _metadata?.cart_description || "";
+
+  // display_itemsを分類
+  const productItems = display_items.filter(item => item.refund_period && item.refund_period > 0);
+  const shippingItem = display_items.find(item => item.label.includes("送料"));
+  const taxItem = display_items.find(item => item.label.includes("税"));
+
+  // 小計を計算（商品の合計）
+  const subtotal = productItems.reduce((sum, item) => sum + item.amount.value, 0);
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
@@ -111,102 +140,102 @@ export function CartDetailsModal({
             <div>
               <h3 className="text-sm font-semibold mb-3 flex items-center gap-2">
                 <ShoppingCart className="w-4 h-4" />
-                商品一覧（{items.length}点）
+                商品一覧（{productItems.length}点）
               </h3>
               <div className="space-y-3">
-                {items.map((item) => (
-                  <div
-                    key={item.id}
-                    className="flex gap-3 p-3 bg-muted/30 rounded-lg"
-                  >
-                    {item.image_url && (
-                      <img
-                        src={item.image_url}
-                        alt={item.name}
-                        className="w-20 h-20 object-cover rounded"
-                      />
-                    )}
-                    <div className="flex-1 min-w-0">
-                      <h4 className="font-medium">{item.name}</h4>
-                      {item.description && (
-                        <p className="text-sm text-muted-foreground mt-1">
-                          {item.description}
-                        </p>
+                {productItems.map((item, index) => {
+                  // _metadata.raw_itemsから詳細情報を取得
+                  const rawItem = _metadata?.raw_items?.[index];
+
+                  return (
+                    <div
+                      key={index}
+                      className="flex gap-3 p-3 bg-muted/30 rounded-lg"
+                    >
+                      {rawItem?.image_url && (
+                        <img
+                          src={rawItem.image_url}
+                          alt={item.label}
+                          className="w-20 h-20 object-cover rounded"
+                        />
                       )}
-                      <div className="flex gap-2 mt-2">
-                        {item.brand && (
-                          <Badge variant="outline" className="text-xs">
-                            {item.brand}
-                          </Badge>
+                      <div className="flex-1 min-w-0">
+                        <h4 className="font-medium">{item.label}</h4>
+                        {rawItem?.description && (
+                          <p className="text-sm text-muted-foreground mt-1">
+                            {rawItem.description}
+                          </p>
                         )}
-                        {item.category && (
-                          <Badge variant="secondary" className="text-xs">
-                            {item.category}
-                          </Badge>
+                        <div className="flex gap-2 mt-2">
+                          {rawItem?.brand && (
+                            <Badge variant="outline" className="text-xs">
+                              {rawItem.brand}
+                            </Badge>
+                          )}
+                          {rawItem?.category && (
+                            <Badge variant="secondary" className="text-xs">
+                              {rawItem.category}
+                            </Badge>
+                          )}
+                        </div>
+                        {rawItem?.sku && (
+                          <p className="text-xs text-muted-foreground mt-1">
+                            SKU: {rawItem.sku}
+                          </p>
                         )}
                       </div>
-                      {item.sku && (
-                        <p className="text-xs text-muted-foreground mt-1">
-                          SKU: {item.sku}
+                      <div className="text-right">
+                        {rawItem && (
+                          <p className="text-sm text-muted-foreground">
+                            ¥{parseFloat(rawItem.unit_price.value).toLocaleString()} × {rawItem.quantity}
+                          </p>
+                        )}
+                        <p className="text-lg font-semibold mt-1">
+                          ¥{item.amount.value.toLocaleString()}
                         </p>
-                      )}
+                      </div>
                     </div>
-                    <div className="text-right">
-                      <p className="text-sm text-muted-foreground">
-                        ¥{parseFloat(item.unit_price.value).toLocaleString()} × {item.quantity}
-                      </p>
-                      <p className="text-lg font-semibold mt-1">
-                        ¥{parseFloat(item.total_price.value).toLocaleString()}
-                      </p>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
 
             <Separator />
 
             {/* 配送情報 */}
-            {shipping && (
+            {(shipping_options || shipping_address) && (
               <div>
                 <h3 className="text-sm font-semibold mb-3 flex items-center gap-2">
                   <Truck className="w-4 h-4" />
                   配送情報
                 </h3>
                 <div className="space-y-2 text-sm">
-                  {shipping.method && (
+                  {shipping_options && shipping_options.length > 0 && (
                     <div className="flex justify-between">
                       <span className="text-muted-foreground">配送方法</span>
-                      <span className="font-medium">{shipping.method}</span>
-                    </div>
-                  )}
-                  {shipping.estimated_delivery && (
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">お届け予定</span>
                       <span className="font-medium">
-                        {new Date(shipping.estimated_delivery).toLocaleDateString('ja-JP')}
+                        {shipping_options.find(opt => opt.selected)?.label || shipping_options[0].label}
                       </span>
                     </div>
                   )}
-                  {shipping.address && (
+                  {shipping_address && (
                     <div className="mt-2 p-2 bg-muted/30 rounded">
                       <div className="flex items-start gap-2">
                         <MapPin className="w-4 h-4 mt-0.5 text-muted-foreground" />
                         <div className="text-xs">
-                          <p className="font-medium">{shipping.address.recipient || "配送先"}</p>
+                          <p className="font-medium">{shipping_address.recipient || "配送先"}</p>
                           <p className="text-muted-foreground mt-1">
-                            〒{shipping.address.postal_code || ""}
+                            {shipping_address.postal_code && `〒${shipping_address.postal_code}`}
                             <br />
-                            {shipping.address.state || ""} {shipping.address.city || ""}
+                            {shipping_address.region || ""} {shipping_address.city || ""}
                             <br />
-                            {shipping.address.address_line1 || ""}
-                            {shipping.address.address_line2 && (
-                              <>
-                                <br />
-                                {shipping.address.address_line2}
-                              </>
-                            )}
+                            {shipping_address.address_line && shipping_address.address_line.join(' ')}
                           </p>
+                          {shipping_address.phone_number && (
+                            <p className="text-muted-foreground mt-1">
+                              TEL: {shipping_address.phone_number}
+                            </p>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -223,21 +252,25 @@ export function CartDetailsModal({
               <div className="space-y-2 text-sm">
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">小計</span>
-                  <span>¥{parseFloat(subtotal.value).toLocaleString()}</span>
+                  <span>¥{subtotal.toLocaleString()}</span>
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">税金</span>
-                  <span>¥{parseFloat(tax.value).toLocaleString()}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">送料</span>
-                  <span>¥{parseFloat(shipping.cost.value).toLocaleString()}</span>
-                </div>
+                {taxItem && (
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">{taxItem.label}</span>
+                    <span>¥{taxItem.amount.value.toLocaleString()}</span>
+                  </div>
+                )}
+                {shippingItem && (
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">{shippingItem.label}</span>
+                    <span>¥{shippingItem.amount.value.toLocaleString()}</span>
+                  </div>
+                )}
                 <Separator />
                 <div className="flex justify-between text-lg font-bold pt-2">
                   <span>合計</span>
                   <span className="text-primary">
-                    ¥{parseFloat(total.value).toLocaleString()}
+                    ¥{total.amount.value.toLocaleString()}
                   </span>
                 </div>
               </div>

@@ -132,8 +132,10 @@ export default function ChatPage() {
   // カート候補選択
   const handleSelectCart = (cartCandidate: any) => {
     console.log("Cart selected:", cartCandidate);
+    // AP2準拠：カートIDをcontents.idから取得
+    const cartId = cartCandidate.cart_mandate.contents.id;
     // カートIDをエージェントに送信
-    sendMessage(cartCandidate.cart_mandate.id);
+    sendMessage(cartId);
   };
 
   // カート詳細表示

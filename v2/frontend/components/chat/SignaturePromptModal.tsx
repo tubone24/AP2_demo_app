@@ -36,8 +36,21 @@ export function SignaturePromptModal({
     setError(null);
 
     try {
+      // AP2準拠：mandate_idを取得
+      let mandateId: string;
+      if (mandate_type === "cart") {
+        // CartMandateの場合はcontents.idから取得
+        mandateId = (mandate as any).contents?.id || "unknown";
+      } else if (mandate_type === "intent") {
+        // IntentMandateの場合はそのままidを使用
+        mandateId = (mandate as any).id || "unknown";
+      } else {
+        // PaymentMandateの場合
+        mandateId = (mandate as any).id || "unknown";
+      }
+
       // チャレンジ生成（Base64URL形式）
-      const challengeData = JSON.stringify({ mandate_id: mandate.id, timestamp: Date.now() });
+      const challengeData = JSON.stringify({ mandate_id: mandateId, timestamp: Date.now() });
       const challenge = btoa(challengeData)
         .replace(/\+/g, "-")
         .replace(/\//g, "_")
@@ -109,33 +122,54 @@ export function SignaturePromptModal({
         );
 
       case "cart":
-        const cartMandate = mandate as any; // バックエンドの実際の構造に合わせる
-        const total = cartMandate.total || {}; // バックエンドでは "total" キーを使用
+        const cartMandate = mandate as any;
+        // AP2準拠：contents.payment_request.details.totalから取得
+        const contents = cartMandate.contents || {};
+        const paymentRequest = contents.payment_request || {};
+        const details = paymentRequest.details || {};
+        const totalItem = details.total || {};
+        const totalAmount = totalItem.amount || { value: "0", currency: "JPY" };
+        const displayItems = details.display_items || [];
+
+        // 商品アイテムのみを抽出（refund_period > 0）
+        const productItems = displayItems.filter((item: any) =>
+          item.refund_period && item.refund_period > 0
+        );
+
+        // _metadataまたはcontentsからmerchant情報を取得
+        const merchantName = contents.merchant_name || cartMandate._metadata?.merchant_id || "不明";
+
         return (
           <div className="space-y-3">
             <div className="flex justify-between">
               <span className="text-sm text-muted-foreground">店舗</span>
-              <span className="text-sm font-medium">{cartMandate.merchant_id || cartMandate.merchant_name}</span>
+              <span className="text-sm font-medium">{merchantName}</span>
             </div>
             <Separator />
             <div className="space-y-2">
               <span className="text-sm font-semibold">カート内容</span>
-              {cartMandate.items?.map((item: any, index: number) => (
-                <div key={index} className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">
-                    {item.name} x {item.quantity}
-                  </span>
-                  <span className="font-medium">
-                    {item.total_price?.currency} {parseFloat(item.total_price?.value || "0").toLocaleString()}
-                  </span>
-                </div>
-              ))}
+              {productItems.map((item: any, index: number) => {
+                // _metadata.raw_itemsから数量を取得
+                const rawItem = cartMandate._metadata?.raw_items?.[index];
+                const quantity = rawItem?.quantity || 1;
+
+                return (
+                  <div key={index} className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">
+                      {item.label} x {quantity}
+                    </span>
+                    <span className="font-medium">
+                      ¥{item.amount.value.toLocaleString()}
+                    </span>
+                  </div>
+                );
+              })}
             </div>
             <Separator />
             <div className="flex justify-between font-semibold">
               <span>合計</span>
               <span className="text-lg">
-                {total.currency} ¥{parseFloat(total.value || "0").toLocaleString()}
+                ¥{totalAmount.value.toLocaleString()}
               </span>
             </div>
           </div>

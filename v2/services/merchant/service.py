@@ -143,6 +143,9 @@ class MerchantService(BaseAgent):
                 await self._check_inventory(cart_mandate)
 
                 # 3. 署名モードによる分岐
+                # AP2準拠：cart_idをcontents.idから取得
+                cart_id = cart_mandate["contents"]["id"]
+
                 if self.auto_sign_mode:
                     # 自動署名モード
                     signature = await self._sign_cart_mandate(cart_mandate)
@@ -159,30 +162,30 @@ class MerchantService(BaseAgent):
                     # データベースに保存（既存のものがあれば更新）
                     async with self.db_manager.get_session() as db_session:
                         # 既存のMandateをチェック
-                        existing_mandate = await MandateCRUD.get_by_id(db_session, cart_mandate["id"])
+                        existing_mandate = await MandateCRUD.get_by_id(db_session, cart_id)
 
                         if existing_mandate:
                             # 既存のMandateを更新
                             await MandateCRUD.update_status(
                                 db_session,
-                                cart_mandate["id"],
+                                cart_id,
                                 "signed",
                                 signed_cart_mandate
                             )
-                            logger.info(f"[Merchant] Updated existing CartMandate: {cart_mandate['id']}")
+                            logger.info(f"[Merchant] Updated existing CartMandate: {cart_id}")
                         else:
                             # 新規作成
                             await MandateCRUD.create(db_session, {
-                                "id": cart_mandate["id"],
+                                "id": cart_id,
                                 "type": "Cart",
                                 "status": "signed",
                                 "payload": signed_cart_mandate,
                                 "issuer": self.agent_id
                             })
-                            logger.info(f"[Merchant] Created new CartMandate: {cart_mandate['id']}")
+                            logger.info(f"[Merchant] Created new CartMandate: {cart_id}")
 
                     logger.info(
-                        f"[Merchant] Auto-signed CartMandate: {cart_mandate['id']} "
+                        f"[Merchant] Auto-signed CartMandate: {cart_id} "
                         f"(with merchant_authorization JWT)"
                     )
 
@@ -196,36 +199,36 @@ class MerchantService(BaseAgent):
                     # AP2仕様準拠：Cart Mandateは冪等であり、同じIDで複数回リクエスト可能
                     async with self.db_manager.get_session() as session:
                         # 既存のCart Mandateをチェック
-                        existing = await MandateCRUD.get_by_id(session, cart_mandate["id"])
+                        existing = await MandateCRUD.get_by_id(session, cart_id)
 
                         if existing:
                             # 既存のMandateを更新（update_statusメソッドを使用）
                             await MandateCRUD.update_status(
                                 session,
-                                cart_mandate["id"],
+                                cart_id,
                                 status="pending_merchant_signature",
                                 payload=cart_mandate
                             )
                             logger.info(
-                                f"[Merchant] Updated existing CartMandate: {cart_mandate['id']} "
+                                f"[Merchant] Updated existing CartMandate: {cart_id} "
                                 f"(AP2 idempotency)"
                             )
                         else:
                             # 新規作成
                             await MandateCRUD.create(session, {
-                                "id": cart_mandate["id"],
+                                "id": cart_id,
                                 "type": "Cart",
                                 "status": "pending_merchant_signature",
                                 "payload": cart_mandate,
                                 "issuer": self.agent_id
                             })
-                            logger.info(f"[Merchant] Created new CartMandate: {cart_mandate['id']}")
+                            logger.info(f"[Merchant] Created new CartMandate: {cart_id}")
 
-                    logger.info(f"[Merchant] CartMandate pending manual approval: {cart_mandate['id']}")
+                    logger.info(f"[Merchant] CartMandate pending manual approval: {cart_id}")
 
                     return {
                         "status": "pending_merchant_signature",
-                        "cart_mandate_id": cart_mandate["id"],
+                        "cart_mandate_id": cart_id,
                         "message": "Manual approval required by merchant"
                     }
 
@@ -607,14 +610,17 @@ class MerchantService(BaseAgent):
             )
             signed_cart_mandate["merchant_authorization"] = merchant_authorization_jwt
 
+            # AP2準拠：cart_idをcontents.idから取得
+            cart_id = cart_mandate["contents"]["id"]
+
             logger.info(
-                f"[A2A] Signed CartMandate: {cart_mandate['id']} "
+                f"[A2A] Signed CartMandate: {cart_id} "
                 f"(with merchant_authorization JWT)"
             )
 
             return {
                 "type": "ap2.mandates.CartMandate",
-                "id": cart_mandate["id"],
+                "id": cart_id,
                 "payload": signed_cart_mandate
             }
 
@@ -635,33 +641,51 @@ class MerchantService(BaseAgent):
 
     def _validate_cart_mandate(self, cart_mandate: Dict[str, Any]):
         """
-        CartMandateを検証
+        CartMandateを検証（AP2準拠）
 
-        - merchant_idが一致するか
+        - merchant_idが一致するか（_metadataから取得）
         - 価格が正しいか
         - 有効期限内か
         """
-        # merchant_id確認
-        if cart_mandate.get("merchant_id") != self.merchant_id:
-            raise ValueError(f"Merchant ID mismatch: expected={self.merchant_id}, got={cart_mandate.get('merchant_id')}")
+        # AP2準拠：CartMandate.contents.cart_expiryを確認
+        contents = cart_mandate.get("contents")
+        if not contents:
+            raise ValueError("CartMandate.contents is missing")
 
-        # 有効期限確認
-        expires_at_str = cart_mandate.get("expires_at")
-        if expires_at_str:
-            expires_at = datetime.fromisoformat(expires_at_str.replace('Z', '+00:00'))
-            if datetime.now(timezone.utc) > expires_at:
+        # merchant_id確認（_metadataから取得）
+        metadata = cart_mandate.get("_metadata", {})
+        cart_merchant_id = metadata.get("merchant_id")
+        if cart_merchant_id and cart_merchant_id != self.merchant_id:
+            raise ValueError(f"Merchant ID mismatch: expected={self.merchant_id}, got={cart_merchant_id}")
+
+        # 有効期限確認（CartContents.cart_expiry）
+        cart_expiry_str = contents.get("cart_expiry")
+        if cart_expiry_str:
+            cart_expiry = datetime.fromisoformat(cart_expiry_str.replace('Z', '+00:00'))
+            if datetime.now(timezone.utc) > cart_expiry:
                 raise ValueError("CartMandate has expired")
 
-        logger.info(f"[Merchant] CartMandate validation passed: {cart_mandate['id']}")
+        cart_id = contents.get("id")
+        logger.info(f"[Merchant] CartMandate validation passed: {cart_id}")
 
     async def _check_inventory(self, cart_mandate: Dict[str, Any]):
         """
-        在庫を確認
+        在庫を確認（AP2準拠）
 
         全アイテムの在庫が十分にあるか確認
+        _metadata.raw_itemsから元のアイテム情報を取得
         """
+        # AP2準拠：_metadata.raw_itemsから商品情報を取得
+        metadata = cart_mandate.get("_metadata", {})
+        raw_items = metadata.get("raw_items", [])
+
+        if not raw_items:
+            # raw_itemsがない場合はスキップ（後方互換性）
+            logger.warning("[Merchant] No raw_items in _metadata, skipping inventory check")
+            return
+
         async with self.db_manager.get_session() as session:
-            for item in cart_mandate.get("items", []):
+            for item in raw_items:
                 sku = item.get("sku")
                 if not sku:
                     continue
@@ -677,7 +701,8 @@ class MerchantService(BaseAgent):
                         f"required={required_quantity}, available={product.inventory_count}"
                     )
 
-        logger.info(f"[Merchant] Inventory check passed for CartMandate: {cart_mandate['id']}")
+        cart_id = cart_mandate.get("contents", {}).get("id")
+        logger.info(f"[Merchant] Inventory check passed for CartMandate: {cart_id}")
 
     def _generate_merchant_authorization_jwt(
         self,

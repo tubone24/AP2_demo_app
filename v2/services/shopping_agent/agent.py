@@ -946,26 +946,42 @@ class ShoppingAgent(BaseAgent):
 
                     # AP2仕様準拠：CartMandateから商品情報と金額を取得
                     cart_mandate = session.get("cart_mandate", {})
-                    items = cart_mandate.get("items", [])
-                    total = cart_mandate.get("total", {})
+
+                    # AP2準拠：contents.payment_request.details から情報を取得
+                    contents = cart_mandate.get("contents", {})
+                    payment_request = contents.get("payment_request", {})
+                    details = payment_request.get("details", {})
+
+                    # 商品アイテムを取得（display_itemsからrefund_period > 0のものを抽出）
+                    display_items = details.get("display_items", [])
+                    items = [item for item in display_items if item.get("refund_period", 0) > 0]
+
+                    # 合計金額を取得
+                    total_item = details.get("total", {})
+                    total_amount_data = total_item.get("amount", {})
+                    currency = total_amount_data.get("currency", "JPY")
+
+                    # _metadata.raw_itemsからも情報取得（後方互換性）
+                    raw_items = cart_mandate.get("_metadata", {}).get("raw_items", [])
 
                     logger.info(
                         f"[submit_payment_attestation] CartMandate info: "
                         f"items_count={len(items)}, "
-                        f"total={total}"
+                        f"raw_items_count={len(raw_items)}, "
+                        f"total_amount={total_amount_data}"
                     )
 
                     # 商品名を生成（複数商品の場合は商品数を表示）
                     if len(items) == 1:
-                        product_name = items[0].get("name", "商品")
+                        product_name = items[0].get("label", "商品")
                     elif len(items) > 1:
-                        product_name = f"{items[0].get('name', '商品')} 他{len(items) - 1}点"
+                        product_name = f"{items[0].get('label', '商品')} 他{len(items) - 1}点"
                     else:
                         product_name = "購入商品"
 
-                    # 金額を取得（文字列から数値に変換）
+                    # 金額を取得（AP2準拠：numberとして扱う）
                     try:
-                        amount = float(total.get("value", "0"))
+                        amount = float(total_amount_data.get("value", 0))
                     except (ValueError, TypeError):
                         amount = 0
 
@@ -973,7 +989,7 @@ class ShoppingAgent(BaseAgent):
                         f"[submit_payment_attestation] Payment success response: "
                         f"product_name={product_name}, "
                         f"amount={amount}, "
-                        f"currency={total.get('currency', 'JPY')}"
+                        f"currency={currency}"
                     )
 
                     return {
@@ -983,7 +999,7 @@ class ShoppingAgent(BaseAgent):
                         "product_name": product_name,
                         "amount": amount,
                         "items_count": len(items),
-                        "currency": total.get("currency", "JPY")
+                        "currency": currency
                     }
                 else:
                     # 決済失敗
@@ -1012,10 +1028,13 @@ class ShoppingAgent(BaseAgent):
         logger.info("[ShoppingAgent] Received CartMandate")
         cart_mandate = message.dataPart.payload
 
+        # AP2準拠：cart_idをcontents.idから取得
+        cart_id = cart_mandate["contents"]["id"]
+
         # データベースに保存
         async with self.db_manager.get_session() as session:
             await MandateCRUD.create(session, {
-                "id": cart_mandate["id"],
+                "id": cart_id,
                 "type": "Cart",
                 "status": "pending_signature",
                 "payload": cart_mandate,
@@ -1027,7 +1046,7 @@ class ShoppingAgent(BaseAgent):
             "id": str(uuid.uuid4()),
             "payload": {
                 "status": "received",
-                "cart_mandate_id": cart_mandate["id"]
+                "cart_mandate_id": cart_id
             }
         }
 
@@ -1335,17 +1354,20 @@ class ShoppingAgent(BaseAgent):
                         )
                         await asyncio.sleep(0.3)
 
-                        # 配送先フォーム表示
+                        # 配送先フォーム表示（AP2準拠: ContactAddress形式）
                         yield StreamEvent(
                             type="shipping_form_request",
                             form_schema={
-                                "type": "shipping_address",
+                                "type": "contact_address",  # AP2準拠
                                 "fields": [
                                     {"name": "recipient", "label": "受取人名", "type": "text", "required": True},
                                     {"name": "postal_code", "label": "郵便番号", "type": "text", "required": True},
-                                    {"name": "address_line1", "label": "住所1", "type": "text", "required": True},
+                                    {"name": "city", "label": "市区町村", "type": "text", "required": True},
+                                    {"name": "region", "label": "都道府県", "type": "text", "required": True},
+                                    {"name": "address_line1", "label": "住所1（番地等）", "type": "text", "required": True},
                                     {"name": "address_line2", "label": "住所2（建物名等）", "type": "text", "required": False},
                                     {"name": "country", "label": "国", "type": "text", "required": True, "default": "JP"},
+                                    {"name": "phone_number", "label": "電話番号", "type": "text", "required": False},
                                 ]
                             }
                         )
@@ -1585,11 +1607,31 @@ class ShoppingAgent(BaseAgent):
                     "address_line1": "東京都渋谷区渋谷1-1-1",
                     "address_line2": "",
                     "city": "渋谷区",
-                    "state": "東京都",
-                    "country": "JP"
+                    "region": "東京都",
+                    "country": "JP",
+                    "phone_number": "03-1234-5678"
                 }
 
-            session["shipping_address"] = shipping_address
+            # AP2準拠: ContactAddress形式に変換
+            # address_line1とaddress_line2を配列に変換
+            address_lines = []
+            if shipping_address.get("address_line1"):
+                address_lines.append(shipping_address["address_line1"])
+            if shipping_address.get("address_line2"):
+                address_lines.append(shipping_address["address_line2"])
+
+            contact_address = {
+                "recipient": shipping_address.get("recipient"),
+                "postal_code": shipping_address.get("postal_code"),
+                "city": shipping_address.get("city"),
+                "region": shipping_address.get("region") or shipping_address.get("state"),  # regionまたはstate
+                "country": shipping_address.get("country"),
+                "address_line": address_lines if address_lines else None,
+                "phone_number": shipping_address.get("phone_number"),
+            }
+
+            # AP2 ContactAddress形式でセッションに保存
+            session["shipping_address"] = contact_address
 
             # IntentMandate生成（LangGraphで収集した情報を使用）
             intent_mandate = await self._create_intent_mandate(
@@ -1782,7 +1824,9 @@ class ShoppingAgent(BaseAgent):
             if not selected_cart:
                 for cart in cart_candidates:
                     cart_mandate = cart.get("cart_mandate", {})
-                    if cart_mandate.get("id") in user_input:
+                    # AP2準拠：cart_idをcontents.idから取得
+                    cart_id = cart_mandate.get("contents", {}).get("id", "")
+                    if cart_id and cart_id in user_input:
                         selected_cart = cart
                         break
 
@@ -1805,8 +1849,15 @@ class ShoppingAgent(BaseAgent):
             session["selected_cart_mandate"] = cart_mandate
             session["selected_cart_artifact"] = selected_cart
 
-            cart_name = cart_mandate.get("cart_metadata", {}).get("name", "カート")
-            total_amount = float(cart_mandate.get("total", {}).get("value", 0))
+            # AP2準拠：cart_nameとtotal_amountを取得
+            cart_name = cart_mandate.get("_metadata", {}).get("cart_name", "カート")
+            # AP2準拠：contents.payment_request.details.total.amountから金額を取得
+            contents = cart_mandate.get("contents", {})
+            payment_request = contents.get("payment_request", {})
+            details = payment_request.get("details", {})
+            total_item = details.get("total", {})
+            total_amount_data = total_item.get("amount", {})
+            total_amount = float(total_amount_data.get("value", 0))
 
             yield StreamEvent(
                 type="agent_text",
@@ -2469,8 +2520,11 @@ class ShoppingAgent(BaseAgent):
                     intent_mandate = session.get("intent_mandate")
 
                     if cart_mandate:
-                        total_amount = cart_mandate.get("total", {})
-                        merchant_id = cart_mandate.get("merchant_id")
+                        # AP2準拠：totalをpayment_request.details.totalから取得
+                        total_item = cart_mandate.get("contents", {}).get("payment_request", {}).get("details", {}).get("total", {})
+                        total_amount = total_item.get("amount", {"value": "0", "currency": "JPY"})
+                        # merchant_idは_metadataから取得
+                        merchant_id = cart_mandate.get("_metadata", {}).get("merchant_id")
                     elif intent_mandate:
                         # CartMandateがない場合、IntentMandateの最大金額を使用
                         max_amount = intent_mandate.get("max_amount", {})
@@ -3141,10 +3195,10 @@ class ShoppingAgent(BaseAgent):
 
             # 後方互換性・内部処理用フィールド（既存コードとの互換性維持）
             "id": payment_mandate_id,  # 後方互換性
-            "cart_mandate_id": cart_mandate.get("id"),
+            "cart_mandate_id": cart_mandate.get("contents", {}).get("id"),  # AP2準拠
             "intent_mandate_id": session.get("intent_mandate", {}).get("id"),
             "payer_id": "user_demo_001",
-            "payee_id": cart_mandate.get("merchant_id", "did:ap2:merchant:mugibo_merchant"),
+            "payee_id": cart_mandate.get("_metadata", {}).get("merchant_id", "did:ap2:merchant:mugibo_merchant"),  # AP2準拠
             "amount": {
                 "value": total_amount.get("value", "0.00"),
                 "currency": total_amount.get("currency", "JPY")
