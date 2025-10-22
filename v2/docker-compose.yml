@@ -201,17 +201,6 @@ services:
       - payment_processor
     restart: unless-stopped
 
-#    # Ollama - ローカルLLMサーバー
-#  ollama:
-#    build: ./ollama
-#    container_name: ollama
-#    ports:
-#      # ホスト側のアドレスは11435に変更(コンテナ側は11434のまま)
-#        - "11435:11434"
-#    volumes:
-#      - ollama_data:/root/.ollama
-#    restart: unless-stopped
-
 networks:
   ap2_network:
     driver: bridge

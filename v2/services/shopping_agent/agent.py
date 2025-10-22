@@ -47,6 +47,10 @@ from v2.common.logger import (
     log_database_operation
 )
 
+# LangGraph統合（AI化）
+from langgraph_agent import get_langgraph_agent
+from langgraph_conversation import get_conversation_agent
+
 logger = get_logger(__name__, service_name='shopping_agent')
 
 
@@ -109,6 +113,22 @@ class ShoppingAgent(BaseAgent):
 
         # WebAuthn challenge管理（Intent/Consent署名用）
         self.webauthn_challenge_manager = WebAuthnChallengeManager(challenge_ttl_seconds=60)
+
+        # LangGraphエージェント（AIによるインテント抽出）
+        try:
+            self.langgraph_agent = get_langgraph_agent()
+            logger.info(f"[{self.agent_name}] LangGraph agent initialized successfully")
+        except Exception as e:
+            logger.warning(f"[{self.agent_name}] LangGraph agent initialization failed (will use fallback): {e}")
+            self.langgraph_agent = None
+
+        # LangGraph対話エージェント（ユーザーとの対話でIntent情報収集）
+        try:
+            self.conversation_agent = get_conversation_agent()
+            logger.info(f"[{self.agent_name}] LangGraph conversation agent initialized successfully")
+        except Exception as e:
+            logger.warning(f"[{self.agent_name}] LangGraph conversation agent initialization failed (will use fallback): {e}")
+            self.conversation_agent = None
 
         # 起動イベントハンドラー登録
         @self.app.on_event("startup")
@@ -1226,35 +1246,105 @@ class ShoppingAgent(BaseAgent):
                     )
                 return
 
-        # ステップ1: 初回挨拶
-        if current_step == "initial":
-            if any(word in user_input_lower for word in ["こんにちは", "hello", "hi", "購入", "買い", "探"]):
+        # ステップ1: 初回挨拶 または 対話フロー（LangGraph AI対応）
+        if current_step in ["initial", "ask_intent", "ask_max_amount", "ask_categories", "ask_brands", "collecting_intent_info"]:
+            # LangGraph対話エージェントを使用
+            if self.conversation_agent:
+                try:
+                    # 現在の対話状態を取得
+                    conversation_state = session.get("conversation_state")
+
+                    # 対話エージェントを実行
+                    result = await self.conversation_agent.process_user_input(
+                        user_input=user_input,
+                        current_state=conversation_state
+                    )
+
+                    # セッションに状態を保存
+                    session["conversation_state"] = result
+
+                    # エージェントの応答を表示
+                    yield StreamEvent(
+                        type="agent_text",
+                        content=result["agent_response"]
+                    )
+                    await asyncio.sleep(0.3)
+
+                    # すべての必須情報が揃ったか確認
+                    if result["is_complete"]:
+                        # Intent Mandateの生成へ進む
+                        session["intent"] = result["intent"]
+                        session["max_amount"] = result["max_amount"]
+                        session["categories"] = result.get("categories", [])
+                        session["brands"] = result.get("brands", [])
+                        session["step"] = "intent_complete_ask_shipping"
+
+                        yield StreamEvent(
+                            type="agent_text",
+                            content="商品の配送先を入力してください。"
+                        )
+                        await asyncio.sleep(0.3)
+
+                        # 配送先フォーム表示
+                        yield StreamEvent(
+                            type="shipping_form_request",
+                            form_schema={
+                                "type": "shipping_address",
+                                "fields": [
+                                    {"name": "recipient", "label": "受取人名", "type": "text", "required": True},
+                                    {"name": "postal_code", "label": "郵便番号", "type": "text", "required": True},
+                                    {"name": "address_line1", "label": "住所1", "type": "text", "required": True},
+                                    {"name": "address_line2", "label": "住所2（建物名等）", "type": "text", "required": False},
+                                    {"name": "country", "label": "国", "type": "text", "required": True, "default": "JP"},
+                                ]
+                            }
+                        )
+                    else:
+                        # まだ情報が不足している場合、次の入力を待つ
+                        session["step"] = "collecting_intent_info"
+
+                    return
+
+                except Exception as e:
+                    logger.error(f"[_generate_fixed_response] LangGraph conversation failed: {e}", exc_info=True)
+                    # フォールバック: 従来の固定フローに切り替え
+                    yield StreamEvent(
+                        type="agent_text",
+                        content="申し訳ございません。AIエージェントでエラーが発生しました。従来の方式で続けます。"
+                    )
+                    await asyncio.sleep(0.3)
+                    session["step"] = "ask_intent_fallback"
+                    return
+
+            # LangGraph未初期化の場合：従来の固定フロー
+            if current_step == "initial":
+                if any(word in user_input_lower for word in ["こんにちは", "hello", "hi", "購入", "買い", "探"]):
+                    yield StreamEvent(
+                        type="agent_text",
+                        content="こんにちは！AP2 Shopping Agentです。"
+                    )
+                    await asyncio.sleep(0.3)
+                    yield StreamEvent(
+                        type="agent_text",
+                        content="何をお探しですか？例えば「むぎぼーのグッズが欲しい」のように教えてください。"
+                    )
+                    session["step"] = "ask_intent"
+                    return
+
+                # Intent入力された場合
+                session["intent"] = user_input
+                session["step"] = "ask_max_amount"
+
                 yield StreamEvent(
                     type="agent_text",
-                    content="こんにちは！AP2 Shopping Agentです。"
+                    content=f"「{user_input}」ですね！"
                 )
                 await asyncio.sleep(0.3)
                 yield StreamEvent(
                     type="agent_text",
-                    content="何をお探しですか？例えば「むぎぼーのグッズが欲しい」のように教えてください。"
+                    content="最大金額を教えてください。（例：50000円、または50000）"
                 )
-                session["step"] = "ask_intent"
                 return
-
-            # Intent入力された場合
-            session["intent"] = user_input
-            session["step"] = "ask_max_amount"
-
-            yield StreamEvent(
-                type="agent_text",
-                content=f"「{user_input}」ですね！"
-            )
-            await asyncio.sleep(0.3)
-            yield StreamEvent(
-                type="agent_text",
-                content="最大金額を教えてください。（例：50000円、または50000）"
-            )
-            return
 
         # ステップ2: 最大金額を質問
         elif current_step == "ask_intent":
@@ -1343,7 +1433,7 @@ class ShoppingAgent(BaseAgent):
             await asyncio.sleep(0.5)
 
             # IntentMandate生成（AP2 Human-Presentフロー：署名不要）
-            intent_mandate = self._create_intent_mandate(
+            intent_mandate = await self._create_intent_mandate(
                 session["intent"],
                 session
             )
@@ -1415,6 +1505,107 @@ class ShoppingAgent(BaseAgent):
             session["step"] = "shipping_address_input"
             return
 
+
+        # LangGraph対話完了後の配送先入力
+        elif current_step == "intent_complete_ask_shipping":
+            # 配送先入力処理（shipping_address_inputと同じ）
+            shipping_address = None
+
+            try:
+                import json as json_lib
+
+                logger.info(f"[intent_complete_ask_shipping] Received user_input: {user_input[:200]}")
+
+                if user_input.strip().startswith("{"):
+                    shipping_address = json_lib.loads(user_input)
+                    logger.info(f"[intent_complete_ask_shipping] Parsed JSON shipping address: {shipping_address}")
+                else:
+                    logger.warning(f"[intent_complete_ask_shipping] user_input does not start with '{{', using demo address")
+
+            except json_lib.JSONDecodeError as e:
+                logger.error(f"[intent_complete_ask_shipping] JSON parse error: {e}, input: {user_input[:200]}")
+            except Exception as e:
+                logger.error(f"[intent_complete_ask_shipping] Unexpected error: {e}", exc_info=True)
+
+            # フォールバック：デモ用固定値を使用
+            if not shipping_address:
+                shipping_address = {
+                    "recipient": "デモユーザー",
+                    "postal_code": "150-0001",
+                    "address_line1": "東京都渋谷区渋谷1-1-1",
+                    "address_line2": "",
+                    "city": "渋谷区",
+                    "state": "東京都",
+                    "country": "JP"
+                }
+
+            session["shipping_address"] = shipping_address
+
+            # IntentMandate生成（LangGraphで収集した情報を使用）
+            intent_mandate = await self._create_intent_mandate(
+                session["intent"],
+                session
+            )
+            session["intent_mandate"] = intent_mandate
+
+            # IntentMandateをDB永続化
+            await self._persist_intent_mandate(intent_mandate, session)
+
+            yield StreamEvent(
+                type="agent_text",
+                content=f"配送先を設定しました：{shipping_address['recipient']} 様"
+            )
+            await asyncio.sleep(0.3)
+
+            # AP2仕様準拠：配送先が確定したので、Merchant Agentにカート候補を依頼
+            yield StreamEvent(
+                type="agent_text",
+                content="Merchant Agentにカート候補を依頼中..."
+            )
+            await asyncio.sleep(0.5)
+
+            # Merchant AgentにIntentMandateと配送先を送信してカート候補を取得（A2A通信）
+            try:
+                cart_candidates = await self._search_products_via_merchant_agent(
+                    session["intent_mandate"],
+                    session  # intent_message_idと shipping_addressを参照
+                )
+
+                if not cart_candidates:
+                    yield StreamEvent(
+                        type="agent_text",
+                        content="申し訳ありません。条件に合うカート候補が見つかりませんでした。"
+                    )
+                    session["step"] = "error"
+                    return
+
+                logger.info(f"[ShoppingAgent] Received {len(cart_candidates)} signed cart candidates from Merchant Agent")
+
+                # カート候補をセッションに保存
+                session["cart_candidates"] = cart_candidates
+
+                # AP2/A2A仕様準拠：複数のカート候補をカルーセル表示
+                yield StreamEvent(
+                    type="cart_options",
+                    items=cart_candidates
+                )
+
+                yield StreamEvent(
+                    type="agent_text",
+                    content=f"{len(cart_candidates)}つのカート候補が見つかりました。お好みのカートを選択してください。"
+                )
+
+                session["step"] = "cart_selection"
+                return
+
+            except Exception as e:
+                logger.error(f"[intent_complete_ask_shipping] Cart candidates request failed: {e}", exc_info=True)
+                yield StreamEvent(
+                    type="agent_text",
+                    content=f"申し訳ありません。カート候補の取得に失敗しました: {str(e)}"
+                )
+                session["step"] = "error"
+                return
 
         # ステップ6.1: 配送先入力完了後、商品検索（Merchant AgentへA2A通信）
         elif current_step == "shipping_address_input":
@@ -2457,33 +2648,103 @@ class ShoppingAgent(BaseAgent):
             content=f"申し訳ありません。現在のステップ（{current_step}）では対応できません。「こんにちは」と入力して最初からやり直してください。"
         )
 
-    def _create_intent_mandate(self, intent: str, session: Dict[str, Any]) -> Dict[str, Any]:
+    async def _create_intent_mandate(self, intent: str, session: Dict[str, Any]) -> Dict[str, Any]:
         """
-        IntentMandateを作成（セッション情報を使用）
+        IntentMandateを作成（LangGraph AI統合版）
 
-        専門家の指摘対応：
-        - サーバー署名は使用しない（これまでの実装の誤り）
-        - ユーザーPasskey署名はフロントエンドで追加される
-        - このメソッドは署名なしのIntentMandateを返す
+        AP2仕様準拠：
+        - LangGraphでユーザーの自然言語入力からインテント抽出
+        - 既存のIntentMandate型（mandate_types.py）を使用
+        - サーバー署名は使用しない（Passkey署名はフロントエンドで追加）
 
-        AP2仕様準拠（Step 3-4）：
-        - IntentMandateはユーザーのPasskey（WebAuthn）で署名される
-        - フロントエンドがWebAuthn APIを使用して署名を生成
-        - 署名付きIntentMandateは /intent/submit エンドポイントに送信される
+        Args:
+            intent: ユーザーの自然言語入力
+            session: セッションデータ
+
+        Returns:
+            IntentMandate（署名前、AP2仕様準拠の構造）
         """
         now = datetime.now(timezone.utc)
-        expires_at = now + timedelta(hours=1)
+        user_id = "user_demo_001"  # デモ用固定値
 
-        # セッションから情報を取得
-        max_amount = session.get("max_amount", 50000)  # デフォルト50000円
+        # LangGraphでAIインテント抽出を試行
+        if self.langgraph_agent:
+            try:
+                logger.info(f"[ShoppingAgent] Using LangGraph to extract intent from: '{intent}'")
+
+                # LangGraphエージェントでインテント抽出
+                intent_data = await self.langgraph_agent.extract_intent_from_prompt(intent)
+
+                # IntentMandateデータ（AP2仕様準拠の構造に変換）
+                intent_mandate_unsigned = {
+                    "id": f"intent_{uuid.uuid4().hex[:8]}",
+                    "type": "IntentMandate",
+                    "version": "0.2",
+                    "user_id": user_id,
+                    "intent": intent_data.get("natural_language_description", intent),
+                    "constraints": {
+                        "valid_until": intent_data.get("intent_expiry"),
+                        "max_amount": session.get("max_amount", {"value": "50000.00", "currency": "JPY"}),
+                        "categories": session.get("categories", []),
+                        "merchants": intent_data.get("merchants") or [],
+                        "brands": session.get("brands", [])
+                    },
+                    "created_at": now.isoformat().replace('+00:00', 'Z'),
+                    "expires_at": intent_data.get("intent_expiry"),
+                    "user_cart_confirmation_required": intent_data.get("user_cart_confirmation_required", True),
+                    "requires_refundability": intent_data.get("requires_refundability", False)
+                }
+
+                logger.info(
+                    f"[ShoppingAgent] IntentMandate created via LangGraph: "
+                    f"id={intent_mandate_unsigned['id']}, "
+                    f"natural_language_description='{intent_data.get('natural_language_description')}'"
+                )
+
+            except Exception as e:
+                logger.error(f"[ShoppingAgent] LangGraph intent extraction failed, using fallback: {e}", exc_info=True)
+                # フォールバック：従来の固定文言方式
+                intent_mandate_unsigned = self._create_intent_mandate_fallback(intent, session, user_id, now)
+        else:
+            # LangGraph未初期化の場合：フォールバック
+            logger.warning("[ShoppingAgent] LangGraph not available, using fallback intent creation")
+            intent_mandate_unsigned = self._create_intent_mandate_fallback(intent, session, user_id, now)
+
+        # User公開鍵を取得（WebAuthn Passkey公開鍵）
+        try:
+            user_public_key_pem = self.key_manager.get_public_key_pem(user_id)
+            intent_mandate_unsigned["user_public_key"] = user_public_key_pem
+        except Exception as e:
+            logger.info(f"[ShoppingAgent] User public key not available yet (will be provided by frontend): {e}")
+            intent_mandate_unsigned["user_public_key"] = None
+
+        return intent_mandate_unsigned
+
+    def _create_intent_mandate_fallback(
+        self,
+        intent: str,
+        session: Dict[str, Any],
+        user_id: str,
+        now: datetime
+    ) -> Dict[str, Any]:
+        """IntentMandate作成のフォールバック（従来方式）
+
+        LangGraphが利用できない場合の固定文言方式
+
+        Args:
+            intent: ユーザー入力
+            session: セッションデータ
+            user_id: ユーザーID
+            now: 現在時刻
+
+        Returns:
+            IntentMandate（署名前）
+        """
+        expires_at = now + timedelta(hours=1)
+        max_amount = session.get("max_amount", 50000)
         categories = session.get("categories", [])
         brands = session.get("brands", [])
 
-        # User IDを取得（デモ用固定値）
-        user_id = "user_demo_001"
-
-        # IntentMandate基本情報（署名前）
-        # フロントエンドがPasskey署名を追加する前の状態
         intent_mandate_unsigned = {
             "id": f"intent_{uuid.uuid4().hex[:8]}",
             "type": "IntentMandate",
@@ -2504,24 +2765,11 @@ class ShoppingAgent(BaseAgent):
             "expires_at": expires_at.isoformat().replace('+00:00', 'Z')
         }
 
-        # User公開鍵を取得（WebAuthn Passkey公開鍵）
-        # 実際の公開鍵はPasskey署名と一緒にフロントエンドから送信される
-        try:
-            user_public_key_pem = self.key_manager.get_public_key_pem(user_id)
-            intent_mandate_unsigned["user_public_key"] = user_public_key_pem
-        except Exception as e:
-            logger.info(f"[ShoppingAgent] User public key not available yet (will be provided by frontend): {e}")
-            # 公開鍵はフロントエンドのPasskey署名時に提供されるため、この時点では省略可能
-            intent_mandate_unsigned["user_public_key"] = None
-
         logger.info(
-            f"[ShoppingAgent] IntentMandate created (unsigned, awaiting Passkey signature): "
-            f"id={intent_mandate_unsigned['id']}, max_amount={max_amount}, "
-            f"categories={categories}, brands={brands}"
+            f"[ShoppingAgent] IntentMandate created (fallback mode): "
+            f"id={intent_mandate_unsigned['id']}, max_amount={max_amount}"
         )
 
-        # 重要：サーバー署名は使用しない
-        # フロントエンドがWebAuthn Passkeyで署名を追加する
         return intent_mandate_unsigned
 
     async def _persist_intent_mandate(self, intent_mandate: Dict[str, Any], session: Dict[str, Any]) -> None:
