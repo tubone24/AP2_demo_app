@@ -514,17 +514,18 @@ JSON配列で出力してください:
             else:
                 metadata_dict = metadata
 
+            # AP2準拠: PaymentCurrencyAmount型（value: float、円単位）
             cart_items.append({
                 "product_id": product_id,
                 "name": product["name"],
                 "description": product.get("description", ""),
                 "quantity": quantity,
                 "unit_price": {
-                    "value": str(unit_price_cents),
+                    "value": unit_price_cents / 100,  # AP2準拠: float型、円単位
                     "currency": "JPY"
                 },
                 "total_price": {
-                    "value": str(total_price_cents),
+                    "value": total_price_cents / 100,  # AP2準拠: float型、円単位
                     "currency": "JPY"
                 },
                 "image_url": metadata_dict.get("image_url"),

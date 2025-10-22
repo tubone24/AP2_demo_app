@@ -187,7 +187,7 @@ export function CartDetailsModal({
                       <div className="text-right">
                         {rawItem && (
                           <p className="text-sm text-muted-foreground">
-                            ¥{parseFloat(rawItem.unit_price.value).toLocaleString()} × {rawItem.quantity}
+                            ¥{rawItem.unit_price.value.toLocaleString()} × {rawItem.quantity}
                           </p>
                         )}
                         <p className="text-lg font-semibold mt-1">
