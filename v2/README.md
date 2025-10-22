@@ -226,7 +226,7 @@ open http://localhost:3000/merchant  # Merchant Dashboard
 #### 5. デモフロー体験
 
 1. **Passkey登録** - `/chat`で初回訪問時に登録
-2. **商品検索** - 「むぎぼーのグッズが欲しい」と入力
+2. **商品検索** - 「かわいいグッズがほしい」と入力
 3. **Intent署名** - 最大金額などを入力してPasskey署名
 4. **カート選択** - LLMが提案するカートを選択
 5. **Cart署名** - カート内容を確認してPasskey署名
@@ -452,7 +452,7 @@ curl -N -H "Content-Type: application/json" \
 ```
 data: {"type":"agent_text","content":"こんにちは！AP2 Shopping Agentです。"}
 
-data: {"type":"agent_text","content":"何をお探しですか？例えば「むぎぼーのグッズが欲しい」のように教えてください。"}
+data: {"type":"agent_text","content":"何をお探しですか？例えば「かわいいグッズがほしい」のように教えてください。"}
 
 data: {"type":"done"}
 ```
@@ -700,7 +700,7 @@ lsof -ti:8000 | xargs kill -9
    - デバイス認証を使用した安全な登録
 
 2. **LangGraph対話フロー**
-   - 「むぎぼーのグッズが欲しい」と入力
+   - 「かわいいグッズがほしい」と入力
    - LLMが段階的に必要情報を収集（Intent、最大金額、カテゴリ）
    - 思考過程がリアルタイム表示
 

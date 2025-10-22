@@ -1398,7 +1398,7 @@ class ShoppingAgent(BaseAgent):
                     await asyncio.sleep(0.3)
                     yield StreamEvent(
                         type="agent_text",
-                        content="何をお探しですか？例えば「むぎぼーのグッズが欲しい」のように教えてください。"
+                        content="何をお探しですか？例えば「かわいいグッズがほしい」のように教えてください。"
                     )
                     session["step"] = "ask_intent"
                     return
