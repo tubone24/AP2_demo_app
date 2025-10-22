@@ -368,6 +368,29 @@ export default function ChatPage() {
                 </div>
               )}
 
+              {/* 考え中UI：isStreamingがtrueだが、まだ何も応答がない場合 */}
+              {isStreaming && !currentAgentThinking && !currentAgentMessage && (
+                <div className="flex gap-3 mb-4">
+                  <Avatar className="w-8 h-8 flex-shrink-0">
+                    <AvatarFallback className="bg-green-500">
+                      <Bot className="w-4 h-4 text-white" />
+                    </AvatarFallback>
+                  </Avatar>
+                  <div className="flex flex-col max-w-full">
+                    <div className="rounded-lg px-4 py-3 text-sm bg-muted text-foreground">
+                      <div className="flex items-center gap-2">
+                        <div className="flex gap-1">
+                          <span className="inline-block w-2 h-2 bg-foreground rounded-full animate-bounce" style={{ animationDelay: "0ms" }} />
+                          <span className="inline-block w-2 h-2 bg-foreground rounded-full animate-bounce" style={{ animationDelay: "150ms" }} />
+                          <span className="inline-block w-2 h-2 bg-foreground rounded-full animate-bounce" style={{ animationDelay: "300ms" }} />
+                        </div>
+                        <span className="text-muted-foreground">考え中...</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* 商品カルーセル（isStreamingの外） */}
               {currentProducts.length > 0 && (
                 <div className="mb-4">
