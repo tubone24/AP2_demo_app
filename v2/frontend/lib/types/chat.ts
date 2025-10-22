@@ -1,0 +1,290 @@
+/**
+ * Chat UI型定義
+ * demo_app_v2.mdのSSE仕様に準拠
+ */
+
+// SSEイベント型
+export type SSEEventType =
+  | "agent_text"
+  | "agent_thinking"  // LLMの思考過程（JSON出力など）
+  | "agent_thinking_complete"  // LLM思考完了通知
+  | "agent_text_chunk"  // エージェント応答のストリーミングチャンク
+  | "agent_text_complete"  // エージェント応答完了通知
+  | "signature_request"
+  | "cart_options"
+  | "product_list"
+  | "credential_provider_selection"
+  | "shipping_form_request"
+  | "payment_method_selection"
+  | "webauthn_request"
+  | "step_up_redirect"
+  | "done"
+  | "error";
+
+// 基本SSEイベント
+export interface SSEEvent {
+  type: SSEEventType;
+}
+
+// エージェントテキストイベント
+export interface AgentTextEvent extends SSEEvent {
+  type: "agent_text";
+  content: string;
+}
+
+// LLM思考過程イベント
+export interface AgentThinkingEvent extends SSEEvent {
+  type: "agent_thinking";
+  content?: string;
+}
+
+// LLM思考完了イベント
+export interface AgentThinkingCompleteEvent extends SSEEvent {
+  type: "agent_thinking_complete";
+  content?: string;
+}
+
+// エージェント応答チャンクイベント
+export interface AgentTextChunkEvent extends SSEEvent {
+  type: "agent_text_chunk";
+  content?: string;
+}
+
+// エージェント応答完了イベント
+export interface AgentTextCompleteEvent extends SSEEvent {
+  type: "agent_text_complete";
+  content?: string;
+}
+
+// 署名リクエストイベント
+export interface SignatureRequestEvent extends SSEEvent {
+  type: "signature_request";
+  mandate: IntentMandate | CartMandate | PaymentMandate;
+  mandate_type: "intent" | "cart" | "payment";
+}
+
+// カートオプションイベント（カルーセル用）
+export interface CartOptionsEvent extends SSEEvent {
+  type: "cart_options";
+  items: Product[];
+}
+
+// 商品リストイベント
+export interface ProductListEvent extends SSEEvent {
+  type: "product_list";
+  products: Product[];
+}
+
+// Credential Provider選択イベント
+export interface CredentialProviderSelectionEvent extends SSEEvent {
+  type: "credential_provider_selection";
+  providers: CredentialProvider[];
+}
+
+// 配送先フォームリクエストイベント
+export interface ShippingFormRequestEvent extends SSEEvent {
+  type: "shipping_form_request";
+  form_schema: FormSchema;
+}
+
+// 支払い方法選択イベント
+export interface PaymentMethodSelectionEvent extends SSEEvent {
+  type: "payment_method_selection";
+  payment_methods: PaymentMethodOption[];
+}
+
+// WebAuthn認証リクエストイベント
+export interface WebAuthnRequestEvent extends SSEEvent {
+  type: "webauthn_request";
+  challenge: string;
+  rp_id: string;
+  timeout: number;
+}
+
+// Step-upリダイレクトイベント（AP2 Step 13対応）
+export interface StepUpRedirectEvent extends SSEEvent {
+  type: "step_up_redirect";
+  step_up_url: string;
+  session_id: string;
+  reason: string;
+}
+
+// 完了イベント
+export interface DoneEvent extends SSEEvent {
+  type: "done";
+}
+
+// エラーイベント
+export interface ErrorEvent extends SSEEvent {
+  type: "error";
+  message: string;
+}
+
+// すべてのSSEイベント型
+export type ChatSSEEvent =
+  | AgentTextEvent
+  | AgentThinkingEvent
+  | AgentThinkingCompleteEvent
+  | AgentTextChunkEvent
+  | AgentTextCompleteEvent
+  | SignatureRequestEvent
+  | CartOptionsEvent
+  | ProductListEvent
+  | CredentialProviderSelectionEvent
+  | ShippingFormRequestEvent
+  | PaymentMethodSelectionEvent
+  | WebAuthnRequestEvent
+  | StepUpRedirectEvent
+  | DoneEvent
+  | ErrorEvent;
+
+// チャットメッセージ
+export interface ChatMessage {
+  id: string;
+  role: "user" | "agent";
+  content: string;
+  timestamp: Date;
+  metadata?: {
+    products?: Product[];
+    mandate?: any;
+    mandate_type?: string;
+    payment_result?: {
+      status: "success" | "failed";
+      transaction_id: string;
+      receipt_url: string;
+      product_name?: string;
+      amount?: number;
+    };
+  };
+}
+
+// 商品
+export interface Product {
+  id: string;
+  sku: string;
+  name: string;
+  description: string;
+  price: number; // cents
+  inventory_count: number;
+  metadata?: any;
+}
+
+// Amount（AP2仕様）
+export interface Amount {
+  value: string;
+  currency: string;
+}
+
+// IntentMandate
+export interface IntentMandate {
+  id: string;
+  user_id: string;
+  max_amount: Amount;
+  allowed_merchants?: string[];
+  allowed_categories?: string[];
+  expires_at?: string;
+  user_signature?: Signature;
+}
+
+// CartMandate
+export interface CartMandate {
+  id: string;
+  merchant_id: string;
+  items: CartItem[];
+  total_amount: Amount;
+  merchant_signature?: Signature;
+  user_signature?: Signature;
+  intent_mandate_id?: string;
+}
+
+// CartItem
+export interface CartItem {
+  product_id: string;
+  sku: string;
+  name: string;
+  quantity: number;
+  unit_price: Amount;
+  total_price: Amount;
+}
+
+// PaymentMandate
+export interface PaymentMandate {
+  id: string;
+  cart_mandate_id: string;
+  intent_mandate_id: string;
+  payment_method: PaymentMethod;
+  amount: Amount;
+  payer_id: string;
+  payee_id: string;
+  risk_score?: number;
+  fraud_indicators?: string[];
+}
+
+// PaymentMethod
+export interface PaymentMethod {
+  type: "card" | "wallet" | "bank_transfer";
+  token?: string;
+  last4?: string;
+  brand?: string;
+}
+
+// Signature（AP2仕様）
+export interface Signature {
+  algorithm: string;
+  public_key: string;
+  value: string;
+}
+
+// WebAuthn Attestation
+export interface WebAuthnAttestation {
+  id: string;
+  rawId: string;
+  response: {
+    clientDataJSON: string;
+    authenticatorData: string;
+    signature: string;
+    userHandle?: string;
+  };
+  type: "public-key";
+  attestation_type?: string;
+  challenge?: string;
+  // 登録専用フィールド（registerPasskey()の戻り値に含まれる）
+  attestationObject?: string;  // attestationObject（Base64URL）
+  transports?: string[];  // 利用可能なトランスポート
+}
+
+// Credential Provider
+export interface CredentialProvider {
+  id: string;
+  name: string;
+  url: string;
+  description: string;
+  logo_url?: string;
+  supported_methods: string[];
+}
+
+// Form Schema（配送先フォーム）
+export interface FormSchema {
+  type: string;
+  fields: FormField[];
+}
+
+export interface FormField {
+  name: string;
+  label: string;
+  type: "text" | "select" | "textarea" | "number";
+  required: boolean;
+  placeholder?: string;
+  pattern?: string;
+  options?: Array<{ value: string; label: string }>;
+  default?: string;
+}
+
+// Payment Method Option（支払い方法選択肢）
+export interface PaymentMethodOption {
+  id: string;
+  type: string;
+  brand?: string;
+  last4?: string;
+  expires_at?: string;
+}

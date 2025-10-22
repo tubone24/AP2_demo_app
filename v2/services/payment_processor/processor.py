@@ -754,7 +754,8 @@ class PaymentProcessorService(BaseAgent):
 
         # 2. PaymentMandateがCartMandateを正しく参照しているか
         cart_mandate_id_in_payment = payment_mandate.get("cart_mandate_id")
-        cart_mandate_id = cart_mandate.get("id")
+        # AP2準拠：CartMandate.contents.idから取得
+        cart_mandate_id = cart_mandate.get("contents", {}).get("id")
 
         if cart_mandate_id_in_payment != cart_mandate_id:
             raise ValueError(

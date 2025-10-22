@@ -5,46 +5,62 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ShoppingCart, Info } from "lucide-react";
 
-interface CartItem {
+// AP2準拠の型定義
+// refs/AP2-main/src/ap2/types/payment_request.py
+
+interface PaymentCurrencyAmount {
+  currency: string;
+  value: number;
+}
+
+interface PaymentItem {
+  label: string;
+  amount: PaymentCurrencyAmount;
+  pending?: boolean;
+  refund_period?: number;
+}
+
+interface ContactAddress {
+  recipient?: string;
+  postal_code?: string;
+  city?: string;
+  region?: string;
+  country?: string;
+  address_line?: string[];
+  phone_number?: string;
+}
+
+interface PaymentRequest {
+  method_data: any[];
+  details: {
+    id: string;
+    display_items: PaymentItem[];
+    total: PaymentItem;
+    shipping_options?: any[];
+    modifiers?: any[];
+  };
+  options?: any;
+  shipping_address?: ContactAddress;
+}
+
+interface CartContents {
   id: string;
-  name: string;
-  description?: string;
-  quantity: number;
-  unit_price: {
-    value: string;
-    currency: string;
-  };
-  total_price: {
-    value: string;
-    currency: string;
-  };
-  image_url?: string;
+  user_cart_confirmation_required: boolean;
+  payment_request: PaymentRequest;
+  cart_expiry: string;
+  merchant_name: string;
 }
 
 interface CartMandate {
-  id: string;
-  items: CartItem[];
-  subtotal: {
-    value: string;
-    currency: string;
-  };
-  tax: {
-    value: string;
-    currency: string;
-  };
-  shipping: {
-    cost: {
-      value: string;
-      currency: string;
-    };
-  };
-  total: {
-    value: string;
-    currency: string;
-  };
-  cart_metadata?: {
-    name: string;
-    description: string;
+  contents: CartContents;
+  merchant_authorization?: string | null;
+  _metadata?: {
+    intent_mandate_id?: string;
+    merchant_id?: string;
+    created_at?: string;
+    cart_name?: string;
+    cart_description?: string;
+    raw_items?: any[];
   };
 }
 
@@ -66,14 +82,24 @@ export function CartCard({
   onViewDetails,
 }: CartCardProps) {
   const { cart_mandate, artifact_name } = cartCandidate;
-  const { items, total, cart_metadata } = cart_mandate;
 
-  const cartName = cart_metadata?.name || artifact_name || "カート";
-  const cartDescription = cart_metadata?.description || "";
+  // AP2準拠の構造から情報を取得
+  const { contents, _metadata } = cart_mandate;
+  const { payment_request } = contents;
+  const { display_items, total } = payment_request.details;
+
+  const cartName = _metadata?.cart_name || artifact_name || "カート";
+  const cartDescription = _metadata?.cart_description || "";
+
+  // display_itemsから商品アイテムのみを抽出（送料・税金を除く）
+  // 商品は通常refund_period > 0を持つ
+  const productItems = display_items.filter(item =>
+    item.refund_period && item.refund_period > 0
+  );
 
   // 最初の3つの商品を表示
-  const displayItems = items.slice(0, 3);
-  const hasMoreItems = items.length > 3;
+  const displayProductItems = productItems.slice(0, 3);
+  const hasMoreItems = productItems.length > 3;
 
   return (
     <Card className="h-full flex flex-col hover:shadow-lg transition-shadow">
@@ -88,7 +114,7 @@ export function CartCard({
             )}
           </div>
           <Badge variant="outline" className="ml-2">
-            {items.length}点
+            {productItems.length}点
           </Badge>
         </div>
       </CardHeader>
@@ -96,33 +122,40 @@ export function CartCard({
       <CardContent className="flex-1 flex flex-col">
         {/* 商品リスト（最大3つ） */}
         <div className="space-y-2 mb-4 flex-1">
-          {displayItems.map((item, index) => (
-            <div
-              key={item.id}
-              className="flex items-center gap-2 p-2 bg-muted/30 rounded-md"
-            >
-              {item.image_url && (
-                <img
-                  src={item.image_url}
-                  alt={item.name}
-                  className="w-10 h-10 object-cover rounded"
-                />
-              )}
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium truncate">{item.name}</p>
-                <p className="text-xs text-muted-foreground">
-                  ¥{parseFloat(item.unit_price.value).toLocaleString()} × {item.quantity}
+          {displayProductItems.map((item, index) => {
+            // _metadata.raw_itemsから画像URLと数量を取得（あれば）
+            const rawItem = _metadata?.raw_items?.[index];
+
+            return (
+              <div
+                key={index}
+                className="flex items-center gap-2 p-2 bg-muted/30 rounded-md"
+              >
+                {rawItem?.image_url && (
+                  <img
+                    src={rawItem.image_url}
+                    alt={item.label}
+                    className="w-10 h-10 object-cover rounded"
+                  />
+                )}
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium truncate">{item.label}</p>
+                  {rawItem && (
+                    <p className="text-xs text-muted-foreground">
+                      ¥{parseFloat(rawItem.unit_price.value).toLocaleString()} × {rawItem.quantity}
+                    </p>
+                  )}
+                </div>
+                <p className="text-sm font-medium">
+                  ¥{item.amount.value.toLocaleString()}
                 </p>
               </div>
-              <p className="text-sm font-medium">
-                ¥{parseFloat(item.total_price.value).toLocaleString()}
-              </p>
-            </div>
-          ))}
+            );
+          })}
 
           {hasMoreItems && (
             <p className="text-xs text-muted-foreground text-center py-1">
-              他{items.length - 3}点...
+              他{productItems.length - 3}点...
             </p>
           )}
         </div>
@@ -132,7 +165,7 @@ export function CartCard({
           <div className="flex justify-between items-center">
             <span className="text-sm font-medium">合計</span>
             <span className="text-lg font-bold text-primary">
-              ¥{parseFloat(total.value).toLocaleString()}
+              ¥{total.amount.value.toLocaleString()}
             </span>
           </div>
         </div>

@@ -136,10 +136,13 @@ def generate_receipt_pdf(
     y_position -= 5 * mm
 
     c.drawString(25 * mm, y_position, f"店舗名:")
-    # AP2仕様準拠：CartMandateがない場合はPaymentMandateから情報を取得
+    # AP2準拠：CartMandateがない場合はPaymentMandateから情報を取得
     if cart_mandate:
-        merchant_name = cart_mandate.get("merchant_name", "Unknown Merchant")
-        merchant_id = cart_mandate.get("merchant_id", "N/A")
+        # AP2準拠：contents.merchant_nameから取得
+        contents = cart_mandate.get("contents", {})
+        merchant_name = contents.get("merchant_name", "Unknown Merchant")
+        # _metadataからmerchant_idを取得
+        merchant_id = cart_mandate.get("_metadata", {}).get("merchant_id", "N/A")
     else:
         merchant_name = payment_mandate.get("payee_name", "Unknown Merchant")
         merchant_id = payment_mandate.get("payee_id", "N/A")
@@ -160,8 +163,17 @@ def generate_receipt_pdf(
     c.line(20 * mm, y_position + 2 * mm, width - 20 * mm, y_position + 2 * mm)
     y_position -= 5 * mm
 
-    # AP2仕様準拠：CartMandateがない場合は詳細情報なし
+    # AP2準拠：CartMandateがない場合は詳細情報なし
     if cart_mandate:
+        # AP2準拠：contents.payment_request.detailsから取得
+        contents = cart_mandate.get("contents", {})
+        payment_request = contents.get("payment_request", {})
+        details = payment_request.get("details", {})
+        display_items = details.get("display_items", [])
+
+        # _metadataからraw_itemsを取得（数量情報）
+        raw_items = cart_mandate.get("_metadata", {}).get("raw_items", [])
+
         # テーブルヘッダー
         c.drawString(25 * mm, y_position, "商品名")
         c.drawRightString(100 * mm, y_position, "数量")
@@ -169,25 +181,28 @@ def generate_receipt_pdf(
         c.drawRightString(160 * mm, y_position, "小計")
         y_position -= 5 * mm
 
-        # 商品リスト
-        items = cart_mandate.get("items", [])
-        for item in items:
+        # 商品リスト（refund_period > 0のものだけが商品）
+        product_items = [item for item in display_items if item.get("refund_period", 0) > 0]
+        for idx, item in enumerate(product_items):
             # 商品名（長い場合は切り詰め）
-            item_name = item.get("name", "Unknown Item")[:30]
+            item_name = item.get("label", "Unknown Item")[:30]
             c.drawString(25 * mm, y_position, item_name)
 
-            # 数量
-            quantity = item.get("quantity", 1)
+            # 数量（_metadata.raw_itemsから取得）
+            quantity = 1
+            if idx < len(raw_items):
+                quantity = raw_items[idx].get("quantity", 1)
             c.drawRightString(100 * mm, y_position, str(quantity))
 
-            # 単価（Dict形式の Amount を文字列化）
-            unit_price = item.get("unit_price", {})
-            unit_price_str = _format_amount(unit_price)
+            # 単価（小計 ÷ 数量）
+            item_amount = item.get("amount", {})
+            item_value = float(item_amount.get("value", 0))
+            unit_price = item_value / quantity if quantity > 0 else 0
+            unit_price_str = f"¥{unit_price:,.0f}"
             c.drawRightString(130 * mm, y_position, unit_price_str)
 
-            # 小計
-            total_price = item.get("total_price", {})
-            total_price_str = _format_amount(total_price)
+            # 小計（AP2準拠のamount構造）
+            total_price_str = _format_amount_ap2(item_amount)
             c.drawRightString(160 * mm, y_position, total_price_str)
 
             y_position -= 5 * mm
@@ -198,26 +213,40 @@ def generate_receipt_pdf(
         c.line(110 * mm, y_position + 2 * mm, width - 20 * mm, y_position + 2 * mm)
         y_position -= 5 * mm
 
+        # 小計、税金、配送料を取得（refund_periodで判別）
+        subtotal_value = 0.0
+        tax_value = 0.0
+        shipping_value = 0.0
+
+        for item in display_items:
+            item_amount = item.get("amount", {})
+            item_value = float(item_amount.get("value", 0))
+            refund_period = item.get("refund_period", 0)
+            label = item.get("label", "")
+
+            if refund_period > 0:
+                # 商品
+                subtotal_value += item_value
+            elif "税" in label or "tax" in label.lower():
+                # 税金
+                tax_value += item_value
+            elif "送料" in label or "shipping" in label.lower():
+                # 配送料
+                shipping_value += item_value
+
         # 小計
         c.drawString(110 * mm, y_position, "小計:")
-        subtotal = cart_mandate.get("subtotal", {})
-        subtotal_str = _format_amount(subtotal)
-        c.drawRightString(160 * mm, y_position, subtotal_str)
+        c.drawRightString(160 * mm, y_position, f"¥{subtotal_value:,.0f}")
         y_position -= 5 * mm
 
         # 税金
         c.drawString(110 * mm, y_position, "税金:")
-        tax = cart_mandate.get("tax", {})
-        tax_str = _format_amount(tax)
-        c.drawRightString(160 * mm, y_position, tax_str)
+        c.drawRightString(160 * mm, y_position, f"¥{tax_value:,.0f}")
         y_position -= 5 * mm
 
         # 配送料
         c.drawString(110 * mm, y_position, "配送料:")
-        shipping = cart_mandate.get("shipping", {})
-        shipping_cost = shipping.get("cost", {})
-        shipping_cost_str = _format_amount(shipping_cost)
-        c.drawRightString(160 * mm, y_position, shipping_cost_str)
+        c.drawRightString(160 * mm, y_position, f"¥{shipping_value:,.0f}")
         y_position -= 5 * mm
 
         # 合計金額（太字）
@@ -226,8 +255,9 @@ def generate_receipt_pdf(
 
         c.setFont(font_name, 12)
         c.drawString(110 * mm, y_position, "合計金額:")
-        total = cart_mandate.get("total", {})
-        total_str = _format_amount(total)
+        total_item = details.get("total", {})
+        total_amount = total_item.get("amount", {})
+        total_str = _format_amount_ap2(total_amount)
         c.drawRightString(160 * mm, y_position, total_str)
         y_position -= 10 * mm
 
@@ -267,7 +297,7 @@ def generate_receipt_pdf(
 
 def _format_amount(amount: Dict[str, Any]) -> str:
     """
-    Amount（Dict形式）を文字列にフォーマット
+    Amount（Dict形式）を文字列にフォーマット（旧バージョン用、互換性のため保持）
 
     Args:
         amount: {"value": "10000", "currency": "JPY"} 形式
@@ -289,6 +319,42 @@ def _format_amount(amount: Dict[str, Any]) -> str:
         formatted_value = f"{value_yen:,.0f}"
     except (ValueError, TypeError):
         formatted_value = str(value)
+
+    # 通貨記号
+    currency_symbol = {
+        "JPY": "¥",
+        "USD": "$",
+        "EUR": "€"
+    }.get(currency, currency)
+
+    return f"{currency_symbol}{formatted_value}"
+
+
+def _format_amount_ap2(amount: Dict[str, Any]) -> str:
+    """
+    AP2準拠のAmount（Dict形式）を文字列にフォーマット
+
+    AP2仕様では、valueは既に実際の金額（float）として格納されているため、
+    セント変換は不要
+
+    Args:
+        amount: {"value": 10000.0, "currency": "JPY"} 形式（AP2準拠）
+
+    Returns:
+        str: "¥10,000" のようなフォーマット済み文字列
+    """
+    if not amount:
+        return "¥0"
+
+    value = amount.get("value", 0)
+    currency = amount.get("currency", "JPY")
+
+    # AP2準拠：valueは既に実際の金額（float）
+    try:
+        value_float = float(value)
+        formatted_value = f"{value_float:,.0f}"
+    except (ValueError, TypeError):
+        formatted_value = "0"
 
     # 通貨記号
     currency_symbol = {

@@ -816,42 +816,119 @@ class MerchantAgent(BaseAgent):
         total_cents = subtotal_cents + tax_cents + shipping_cost_cents
 
         # CartMandate作成（未署名）
-        cart_mandate = {
-            "id": f"cart_{uuid.uuid4().hex[:8]}",
-            "type": "CartMandate",
-            "version": "0.2",
-            "intent_mandate_id": intent_mandate_id,
-            "items": cart_items,
-            "subtotal": {
-                "value": str(subtotal_cents / 100),
-                "currency": "JPY"
-            },
-            "tax": {
-                "value": str(tax_cents / 100),
-                "currency": "JPY"
-            },
-            "shipping": {
-                "address": shipping_address,
-                "method": "standard",
-                "cost": {
-                    "value": str(shipping_cost_cents / 100),
-                    "currency": "JPY"
+        # AP2準拠: CartContents + PaymentRequest構造
+        # refs/AP2-main/src/ap2/types/mandate.py:107-135
+        # refs/AP2-main/src/ap2/types/payment_request.py:184-202
+
+        cart_id = f"cart_{uuid.uuid4().hex[:8]}"
+
+        # PaymentItem形式でアイテムを変換
+        display_items = []
+        for item in cart_items:
+            display_items.append({
+                "label": item["name"],
+                "amount": {
+                    "currency": "JPY",
+                    "value": float(item["total_price"]["value"])
                 },
-                "estimated_delivery": (now + timedelta(days=3)).isoformat().replace('+00:00', 'Z')
+                "pending": False,
+                "refund_period": 30
+            })
+
+        # 送料をdisplay_itemsに追加
+        if shipping_cost_cents > 0:
+            display_items.append({
+                "label": "送料",
+                "amount": {
+                    "currency": "JPY",
+                    "value": float(shipping_cost_cents / 100)
+                },
+                "pending": False,
+                "refund_period": 0
+            })
+
+        # 税金をdisplay_itemsに追加
+        if tax_cents > 0:
+            display_items.append({
+                "label": "消費税",
+                "amount": {
+                    "currency": "JPY",
+                    "value": float(tax_cents / 100)
+                },
+                "pending": False,
+                "refund_period": 0
+            })
+
+        # PaymentRequest.options
+        payment_options = {
+            "request_payer_name": False,
+            "request_payer_email": False,
+            "request_payer_phone": False,
+            "request_shipping": shipping_address is not None,
+            "shipping_type": "shipping" if shipping_address else None
+        }
+
+        # PaymentRequest.method_data (支払い方法)
+        payment_method_data = [
+            {
+                "supported_methods": "basic-card",
+                "data": {}
+            }
+        ]
+
+        # PaymentRequest構造
+        payment_request = {
+            "method_data": payment_method_data,
+            "details": {
+                "id": cart_id,
+                "display_items": display_items,
+                "total": {
+                    "label": "合計",
+                    "amount": {
+                        "currency": "JPY",
+                        "value": float(total_cents / 100)
+                    },
+                    "pending": False,
+                    "refund_period": 30
+                },
+                "shipping_options": [
+                    {
+                        "id": "standard",
+                        "label": "通常配送（3日程度）",
+                        "amount": {
+                            "currency": "JPY",
+                            "value": float(shipping_cost_cents / 100)
+                        },
+                        "selected": True
+                    }
+                ] if shipping_address else None,
+                "modifiers": None
             },
-            "total": {
-                "value": str(total_cents / 100),
-                "currency": "JPY"
-            },
-            "merchant_id": self.merchant_id,
-            "merchant_name": self.merchant_name,
-            "created_at": now.isoformat().replace('+00:00', 'Z'),
-            "expires_at": expires_at.isoformat().replace('+00:00', 'Z'),
-            "merchant_signature": None,
-            # カート候補メタデータ
-            "cart_metadata": {
-                "name": cart_name,
-                "description": cart_description
+            "options": payment_options,
+            "shipping_address": shipping_address  # AP2準拠: ContactAddress形式
+        }
+
+        # CartContents構造（AP2準拠）
+        cart_contents = {
+            "id": cart_id,
+            "user_cart_confirmation_required": True,  # Human-Presentフロー
+            "payment_request": payment_request,
+            "cart_expiry": expires_at.isoformat().replace('+00:00', 'Z'),
+            "merchant_name": self.merchant_name
+        }
+
+        # CartMandate構造（AP2準拠）
+        cart_mandate = {
+            "contents": cart_contents,
+            "merchant_authorization": None,  # Merchantが署名
+            # 追加メタデータ（AP2仕様外だが、Shopping Agent UIで必要）
+            "_metadata": {
+                "intent_mandate_id": intent_mandate_id,
+                "merchant_id": self.merchant_id,
+                "created_at": now.isoformat().replace('+00:00', 'Z'),
+                "cart_name": cart_name,
+                "cart_description": cart_description,
+                "raw_items": cart_items  # 元のアイテム情報（互換性のため保持）
             }
         }
 
@@ -910,7 +987,9 @@ class MerchantAgent(BaseAgent):
                 logger.error(f"[_create_cart_from_products] Unexpected response from Merchant: {result}")
                 return None
 
-            logger.info(f"[_create_cart_from_products] CartMandate signed: {cart_mandate['id']}")
+            # AP2準拠：cart_idをcontents.idから取得
+            cart_id = signed_cart_mandate.get("contents", {}).get("id", "unknown")
+            logger.info(f"[_create_cart_from_products] CartMandate signed: {cart_id}")
 
             # Artifact形式でラップ
             # AP2/A2A仕様準拠：a2a-extension.md:144-229

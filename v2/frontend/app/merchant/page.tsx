@@ -465,7 +465,8 @@ export default function MerchantPage() {
                         </p>
 
                         <div className="mt-3 space-y-1">
-                          {mandate.payload?.items?.map((item: any, idx: number) => (
+                          {/* AP2準拠：_metadata.raw_itemsから商品情報を取得 */}
+                          {mandate.payload?._metadata?.raw_items?.map((item: any, idx: number) => (
                             <p key={idx} className="text-sm">
                               • {item.name} × {item.quantity}個
                             </p>
@@ -473,23 +474,52 @@ export default function MerchantPage() {
                         </div>
 
                         <div className="mt-3 p-2 bg-muted rounded">
-                          <div className="flex justify-between text-sm">
-                            <span className="text-muted-foreground">小計</span>
-                            <span>¥{parseFloat(mandate.payload?.subtotal?.value || "0").toLocaleString()}</span>
-                          </div>
-                          <div className="flex justify-between text-sm">
-                            <span className="text-muted-foreground">税+送料</span>
-                            <span>¥{(
-                              parseFloat(mandate.payload?.tax?.value || "0") +
-                              parseFloat(mandate.payload?.shipping?.cost?.value || "0")
-                            ).toLocaleString()}</span>
-                          </div>
-                          <div className="flex justify-between text-sm font-semibold mt-1 pt-1 border-t">
-                            <span>合計</span>
-                            <span className="text-primary">
-                              ¥{parseFloat(mandate.payload?.total?.value || "0").toLocaleString()}
-                            </span>
-                          </div>
+                          {/* AP2準拠：contents.payment_request.details.display_itemsから金額を計算 */}
+                          {(() => {
+                            const contents = mandate.payload?.contents || {};
+                            const paymentRequest = contents.payment_request || {};
+                            const details = paymentRequest.details || {};
+                            const displayItems = details.display_items || [];
+                            const total = details.total?.amount || { value: 0 };
+
+                            // 小計、税金、送料を計算
+                            let subtotal = 0;
+                            let tax = 0;
+                            let shipping = 0;
+
+                            displayItems.forEach((item: any) => {
+                              const value = parseFloat(item.amount?.value || "0");
+                              const label = item.label || "";
+                              const refundPeriod = item.refund_period || 0;
+
+                              if (refundPeriod > 0) {
+                                subtotal += value;
+                              } else if (label.includes("税") || label.toLowerCase().includes("tax")) {
+                                tax += value;
+                              } else if (label.includes("送料") || label.toLowerCase().includes("shipping")) {
+                                shipping += value;
+                              }
+                            });
+
+                            return (
+                              <>
+                                <div className="flex justify-between text-sm">
+                                  <span className="text-muted-foreground">小計</span>
+                                  <span>¥{subtotal.toLocaleString()}</span>
+                                </div>
+                                <div className="flex justify-between text-sm">
+                                  <span className="text-muted-foreground">税+送料</span>
+                                  <span>¥{(tax + shipping).toLocaleString()}</span>
+                                </div>
+                                <div className="flex justify-between text-sm font-semibold mt-1 pt-1 border-t">
+                                  <span>合計</span>
+                                  <span className="text-primary">
+                                    ¥{parseFloat(total.value || "0").toLocaleString()}
+                                  </span>
+                                </div>
+                              </>
+                            );
+                          })()}
                         </div>
                       </div>
 
@@ -745,95 +775,138 @@ export default function MerchantPage() {
           </DialogHeader>
           {showCartMandateDetail && (
             <div className="space-y-4">
-              <div>
-                <h4 className="font-semibold mb-2">基本情報</h4>
-                <div className="space-y-1 text-sm">
-                  <p><span className="text-muted-foreground">ID:</span> {showCartMandateDetail.id}</p>
-                  <p><span className="text-muted-foreground">作成日時:</span> {new Date(showCartMandateDetail.created_at).toLocaleString("ja-JP")}</p>
-                  <p><span className="text-muted-foreground">店舗:</span> {showCartMandateDetail.payload?.merchant_name}</p>
-                </div>
-              </div>
+              {/* AP2準拠の詳細表示 */}
+              {(() => {
+                const contents = showCartMandateDetail.payload?.contents || {};
+                const paymentRequest = contents.payment_request || {};
+                const details = paymentRequest.details || {};
+                const displayItems = details.display_items || [];
+                const total = details.total?.amount || { value: 0 };
+                const shippingAddress = paymentRequest.shipping_address;
+                const rawItems = showCartMandateDetail.payload?._metadata?.raw_items || [];
+                const merchantName = contents.merchant_name || "Unknown";
 
-              <Separator />
+                // 商品アイテム（refund_period > 0）のみ抽出
+                const productItems = displayItems.filter((item: any) => item.refund_period && item.refund_period > 0);
 
-              <div>
-                <h4 className="font-semibold mb-2">注文商品</h4>
-                <div className="space-y-2">
-                  {showCartMandateDetail.payload?.items?.map((item: any, index: number) => (
-                    <div key={index} className="flex justify-between text-sm p-3 bg-muted rounded">
-                      <div className="flex-1">
-                        <p className="font-medium">{item.name}</p>
-                        <p className="text-muted-foreground text-xs">
-                          {item.description || item.sku}
-                        </p>
-                        <p className="text-muted-foreground text-xs mt-1">
-                          単価: ¥{parseFloat(item.unit_price?.value || "0").toLocaleString()} × {item.quantity}個
-                        </p>
+                // 小計、税金、送料を計算
+                let subtotal = 0;
+                let tax = 0;
+                let shipping = 0;
+
+                displayItems.forEach((item: any) => {
+                  const value = parseFloat(item.amount?.value || "0");
+                  const label = item.label || "";
+                  const refundPeriod = item.refund_period || 0;
+
+                  if (refundPeriod > 0) {
+                    subtotal += value;
+                  } else if (label.includes("税") || label.toLowerCase().includes("tax")) {
+                    tax += value;
+                  } else if (label.includes("送料") || label.toLowerCase().includes("shipping")) {
+                    shipping += value;
+                  }
+                });
+
+                return (
+                  <>
+                    <div>
+                      <h4 className="font-semibold mb-2">基本情報</h4>
+                      <div className="space-y-1 text-sm">
+                        <p><span className="text-muted-foreground">ID:</span> {showCartMandateDetail.id}</p>
+                        <p><span className="text-muted-foreground">作成日時:</span> {new Date(showCartMandateDetail.created_at).toLocaleString("ja-JP")}</p>
+                        <p><span className="text-muted-foreground">店舗:</span> {merchantName}</p>
                       </div>
-                      <span className="font-medium">
-                        ¥{parseFloat(item.total_price?.value || "0").toLocaleString()}
+                    </div>
+
+                    <Separator />
+
+                    <div>
+                      <h4 className="font-semibold mb-2">注文商品</h4>
+                      <div className="space-y-2">
+                        {productItems.map((item: any, index: number) => {
+                          const rawItem = rawItems[index] || {};
+                          const quantity = rawItem.quantity || 1;
+                          const itemValue = parseFloat(item.amount?.value || "0");
+                          const unitPrice = itemValue / quantity;
+
+                          return (
+                            <div key={index} className="flex justify-between text-sm p-3 bg-muted rounded">
+                              <div className="flex-1">
+                                <p className="font-medium">{item.label}</p>
+                                <p className="text-muted-foreground text-xs">
+                                  {rawItem.description || rawItem.sku || ""}
+                                </p>
+                                <p className="text-muted-foreground text-xs mt-1">
+                                  単価: ¥{unitPrice.toLocaleString()} × {quantity}個
+                                </p>
+                              </div>
+                              <span className="font-medium">
+                                ¥{itemValue.toLocaleString()}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    <Separator />
+
+                    <div className="space-y-2 text-sm">
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">小計</span>
+                        <span>¥{subtotal.toLocaleString()}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">税金</span>
+                        <span>¥{tax.toLocaleString()}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">送料</span>
+                        <span>¥{shipping.toLocaleString()}</span>
+                      </div>
+                    </div>
+
+                    <Separator />
+
+                    <div className="flex justify-between font-semibold text-lg">
+                      <span>合計金額</span>
+                      <span className="text-primary">
+                        ¥{parseFloat(total.value || "0").toLocaleString()}
                       </span>
                     </div>
-                  ))}
-                </div>
-              </div>
 
-              <Separator />
-
-              <div className="space-y-2 text-sm">
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">小計</span>
-                  <span>
-                    ¥{parseFloat(showCartMandateDetail.payload?.subtotal?.value || "0").toLocaleString()}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">税金</span>
-                  <span>
-                    ¥{parseFloat(showCartMandateDetail.payload?.tax?.value || "0").toLocaleString()}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">送料</span>
-                  <span>
-                    ¥{parseFloat(showCartMandateDetail.payload?.shipping?.cost?.value || "0").toLocaleString()}
-                  </span>
-                </div>
-              </div>
-
-              <Separator />
-
-              <div className="flex justify-between font-semibold text-lg">
-                <span>合計金額</span>
-                <span className="text-primary">
-                  ¥{parseFloat(showCartMandateDetail.payload?.total?.value || "0").toLocaleString()}
-                </span>
-              </div>
-
-              {showCartMandateDetail.payload?.shipping?.address && (
-                <>
-                  <Separator />
-                  <div>
-                    <h4 className="font-semibold mb-2">配送先</h4>
-                    <div className="text-sm space-y-1 p-3 bg-muted rounded">
-                      <p className="font-medium">
-                        {showCartMandateDetail.payload.shipping.address.recipient}
-                      </p>
-                      <p className="text-muted-foreground">
-                        〒{showCartMandateDetail.payload.shipping.address.postal_code}
-                      </p>
-                      <p className="text-muted-foreground">
-                        {showCartMandateDetail.payload.shipping.address.address_line1}
-                      </p>
-                      {showCartMandateDetail.payload.shipping.address.address_line2 && (
-                        <p className="text-muted-foreground">
-                          {showCartMandateDetail.payload.shipping.address.address_line2}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                </>
-              )}
+                    {shippingAddress && (
+                      <>
+                        <Separator />
+                        <div>
+                          <h4 className="font-semibold mb-2">配送先</h4>
+                          <div className="text-sm space-y-1 p-3 bg-muted rounded">
+                            <p className="font-medium">
+                              {shippingAddress.recipient_name || shippingAddress.recipient || ""}
+                            </p>
+                            <p className="text-muted-foreground">
+                              〒{shippingAddress.postal_code || ""}
+                            </p>
+                            {shippingAddress.address_line && shippingAddress.address_line.length > 0 && (
+                              <>
+                                <p className="text-muted-foreground">
+                                  {shippingAddress.address_line[0]}
+                                </p>
+                                {shippingAddress.address_line[1] && (
+                                  <p className="text-muted-foreground">
+                                    {shippingAddress.address_line[1]}
+                                  </p>
+                                )}
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      </>
+                    )}
+                  </>
+                );
+              })()}
             </div>
           )}
           <DialogFooter>
