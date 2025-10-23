@@ -169,3 +169,9 @@ demo_receipt.pdf
 .streamlit/secrets.toml
 
 transaction_history_*.json
+
+v2/data/did_documents
+
+refs
+
+.DS_Store
