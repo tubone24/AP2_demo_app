@@ -30,7 +30,7 @@ graph TB
 
     subgraph "Data Layer"
         DB[(SQLite Database)]
-        Keys[Keys Directory<br/>ECDSA Keypairs]
+        Keys[Keys Directory<br/>Ed25519 + ECDSA Keypairs]
     end
 
     UI -->|SSE Chat| SA
@@ -194,7 +194,7 @@ sequenceDiagram
    - 必須情報（intent, max_amount）を段階的に収集
 
 2. **A2A通信（Phase 3）**
-   - Shopping Agent → Merchant Agent間でECDSA署名付きメッセージ
+   - Shopping Agent → Merchant Agent間でEd25519/ECDSA署名付きメッセージ（デフォルト: Ed25519）
    - Merchant AgentがLangGraphで商品検索とカート最適化
    - Rule-based filtering → LLM-based optimization（2段階最適化）
 
@@ -213,7 +213,7 @@ v2/
 │   ├── a2a_handler.py           # A2Aメッセージ処理・署名検証・ルーティング
 │   ├── base_agent.py            # 全エージェントの基底クラス（POST /a2a/message実装）
 │   ├── database.py              # SQLAlchemyモデル＋CRUD操作
-│   ├── crypto.py                # 暗号化・署名・鍵管理（ECDSA, AES-256-CBC）
+│   ├── crypto.py                # 暗号化・署名・鍵管理（Ed25519/ECDSA, AES-256-CBC）
 │   ├── logger.py                # 統一ロギングシステム（JSON/Text対応）
 │   ├── seed_data.py             # サンプルデータ投入スクリプト
 │   └── receipt_generator.py    # PDF領収書生成（AP2準拠）
@@ -279,7 +279,7 @@ v2/
 - ✅ **LangGraph対話エンジン** - OpenAI GPT-4統合、段階的情報収集
 - ✅ **WebAuthn/Passkey署名** - ブラウザ認証デバイスによる安全な署名
 - ✅ **SSE Streaming** - リアルタイムチャット体験
-- ✅ **A2A通信** - マイクロサービス間ECDSA署名付きメッセージング
+- ✅ **A2A通信** - マイクロサービス間Ed25519/ECDSA署名付きメッセージング（デフォルト: Ed25519）
 - ✅ **Step-up認証** - 高額決済時の追加認証フロー
 - ✅ **PDF領収書生成** - ReportLabによるAP2準拠領収書
 

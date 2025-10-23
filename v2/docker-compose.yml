@@ -252,5 +252,14 @@ networks:
 
 volumes:
   keys:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./keys
   data:
-  ollama_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./data
