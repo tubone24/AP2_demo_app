@@ -52,29 +52,39 @@ graph TB
     end
 
     subgraph "Backend Services"
-        SA[Shopping Agent<br/>Port 8000]
-        MA[Merchant Agent<br/>Port 8001]
-        M[Merchant<br/>Port 8002]
-        CP[Credential Provider<br/>Port 8003]
-        PP[Payment Processor<br/>Port 8004]
+        SA[Shopping Agent<br/>Port 8000<br/>v2/services/shopping_agent/]
+        MA[Merchant Agent<br/>Port 8001<br/>v2/services/merchant_agent/]
+        M[Merchant<br/>Port 8002<br/>v2/services/merchant/]
+        CP[Credential Provider<br/>Port 8003<br/>v2/services/credential_provider/]
+        PP[Payment Processor<br/>Port 8004<br/>v2/services/payment_processor/]
     end
 
     subgraph "Data Layer"
-        DB1[(Shopping Agent DB<br/>SQLite)]
-        DB2[(Merchant Agent DB<br/>SQLite)]
-        DB3[(Credential Provider DB<br/>SQLite)]
-        DB4[(Payment Processor DB<br/>SQLite)]
+        DB1[(Shopping Agent DB<br/>SQLite<br/>v2/data/shopping_agent.db)]
+        DB2[(Merchant Agent DB<br/>SQLite<br/>v2/data/merchant_agent.db)]
+        DB3[(Credential Provider DB<br/>SQLite<br/>v2/data/credential_provider.db)]
+        DB4[(Payment Processor DB<br/>SQLite<br/>v2/data/payment_processor.db)]
     end
 
-    subgraph "Security"
-        KEYS[Keys Storage<br/>ECDSA + Ed25519<br/>AES-256 Encrypted]
-        DID[DID Documents<br/>JSON]
+    subgraph "Security & Crypto"
+        KEYS[Keys Storage<br/>ECDSA + Ed25519<br/>AES-256 Encrypted<br/>v2/keys/]
+        DID[DID Documents<br/>JSON<br/>v2/data/did_documents/]
+    end
+
+    subgraph "Common Modules<br/>v2/common/"
+        BASE[base_agent.py<br/>BaseAgent]
+        A2A[a2a_handler.py<br/>A2AMessageHandler]
+        CRYPTO[crypto.py<br/>KeyManager<br/>SignatureManager]
+        MODELS[models.py<br/>Pydantic Models]
+        DB[database.py<br/>DatabaseManager]
+        RISK[risk_assessment.py<br/>RiskEngine]
+        DID_RESOLVER[did_resolver.py<br/>DIDResolver]
     end
 
     UI -->|SSE/Stream| SA
     UI -->|REST API| M
 
-    SA -->|A2A Message| MA
+    SA -->|A2A Message<br/>POST /a2a/message| MA
     SA -->|A2A Message| CP
     SA -->|A2A Message| M
     MA -->|A2A Message| PP
@@ -93,12 +103,35 @@ graph TB
     SA -.->|Resolve DID| DID
     MA -.->|Resolve DID| DID
 
+    SA --> BASE
+    MA --> BASE
+    M --> BASE
+    CP --> BASE
+    PP --> BASE
+
+    BASE --> A2A
+    BASE --> CRYPTO
+    BASE --> MODELS
+
+    A2A --> CRYPTO
+    A2A --> DID_RESOLVER
+
+    SA --> DB
+    MA --> DB
+    CP --> DB
+    PP --> DB
+
+    SA --> RISK
+
     style UI fill:#e1f5ff
     style SA fill:#fff4e6
     style MA fill:#fff4e6
     style M fill:#fff4e6
     style CP fill:#e8f5e9
     style PP fill:#e8f5e9
+    style BASE fill:#ffe0b2
+    style A2A fill:#ffe0b2
+    style CRYPTO fill:#ffe0b2
 ```
 
 ### マイクロサービス一覧
@@ -564,37 +597,301 @@ curl -X POST http://localhost:8000/a2a/message \
 
 ```
 v2/
-├── common/                    # 共通モジュール
+├── common/                    # 共通モジュール（全サービスで共有）
 │   ├── models.py              # Pydanticモデル（A2Aメッセージ、API型）
+│   │                          # - A2AMessage, A2AMessageHeader, A2AProof
+│   │                          # - Signature, DeviceAttestation
+│   │                          # - DIDDocument, VerificationMethod
+│   │                          # - StreamEvent, ChatStreamRequest
 │   ├── a2a_handler.py         # A2Aメッセージ処理・署名検証
+│   │                          # クラス: A2AMessageHandler
+│   │                          # - verify_message_signature() : 署名検証（ECDSA/Ed25519）
+│   │                          # - handle_message() : メッセージルーティング
+│   │                          # - create_response_message() : レスポンス作成
 │   ├── base_agent.py          # 全エージェントの基底クラス
-│   ├── crypto.py              # 暗号化（ECDSA、Ed25519、AES-256）
+│   │                          # クラス: BaseAgent (抽象クラス)
+│   │                          # - 共通エンドポイント: POST /a2a/message
+│   │                          # - 鍵管理の初期化
+│   │                          # - A2AMessageHandlerの設定
+│   ├── crypto.py              # 暗号化モジュール（RFC 8785準拠）
+│   │                          # クラス: KeyManager
+│   │                          # - generate_key_pair() : ECDSA鍵生成
+│   │                          # - generate_ed25519_key_pair() : Ed25519鍵生成
+│   │                          # - save/load_private_key_encrypted() : AES-256-GCM暗号化
+│   │                          # クラス: SignatureManager
+│   │                          # - sign_data() : データ署名（ECDSA/Ed25519）
+│   │                          # - verify_signature() : 署名検証
+│   │                          # - sign_mandate() : Mandate署名
+│   │                          # - sign_a2a_message() : A2Aメッセージ署名
+│   │                          # 関数: canonicalize_json() : RFC 8785 JSON正規化
+│   │                          # クラス: WebAuthnChallengeManager
+│   │                          # - generate_challenge() : WebAuthn challenge生成
+│   │                          # - verify_and_consume_challenge() : challenge検証
+│   │                          # クラス: DeviceAttestationManager
+│   │                          # - verify_webauthn_signature() : WebAuthn署名検証
 │   ├── database.py            # SQLAlchemyモデル + CRUD
+│   │                          # クラス: DatabaseManager
+│   │                          # - init_db() : データベース初期化
+│   │                          # - get_session() : セッション取得
+│   │                          # クラス: MandateCRUD, ProductCRUD, TransactionCRUD
 │   ├── risk_assessment.py     # リスク評価エンジン
+│   │                          # クラス: RiskAssessmentEngine
+│   │                          # - assess_payment_mandate() : リスクスコア計算（0-100）
+│   │                          # - 8つの評価要素を統合
 │   ├── nonce_manager.py       # Nonce管理（リプレイ攻撃対策）
+│   │                          # クラス: NonceManager
+│   │                          # - is_valid_nonce() : Nonce検証（TTL付き）
 │   ├── did_resolver.py        # DID解決
-│   ├── logger.py              # 統一ロギング
-│   └── user_authorization.py  # User Authorization VP作成
-├── services/                  # マイクロサービス
-│   ├── shopping_agent/
-│   │   ├── agent.py           # ShoppingAgentビジネスロジック
+│   │                          # クラス: DIDResolver
+│   │                          # - resolve_public_key() : DIDから公開鍵を解決
+│   ├── logger.py              # 統一ロギング（JSON/テキスト）
+│   │                          # 機密データマスキング機能付き
+│   ├── user_authorization.py  # User Authorization VP作成
+│   │                          # - create_user_authorization_vp() : Verifiable Presentation
+│   ├── mandate_types.py       # AP2 Mandate型定義（5型）
+│   │                          # - IntentMandate, CartMandate, PaymentMandate
+│   ├── payment_types.py       # W3C Payment Request API型（11型）
+│   │                          # - PaymentCurrencyAmount, PaymentItem, PaymentRequest
+│   ├── jwt_utils.py           # JWT生成・検証
+│   │                          # - MerchantAuthorizationJWT, UserAuthorizationSDJWT
+│   └── seed_data.py           # サンプルデータ
+│                               # - seed_products() : 商品データシード
+│                               # - seed_users() : ユーザーデータシード
+│
+├── services/                  # マイクロサービス（各エージェント実装）
+│   ├── shopping_agent/        # Shopping Agent（ユーザー代理）
+│   │   ├── agent.py           # ShoppingAgentクラス
+│   │   │                      # - __init__() : DB/HTTPクライアント初期化（78行目）
+│   │   │                      # - register_endpoints() : 166行目
+│   │   │                      #   POST /chat/stream : 443行目（SSEストリーミング）
+│   │   │                      #   POST /intent/challenge : 171行目（WebAuthn）
+│   │   │                      #   POST /intent/submit : 215行目（署名検証）
+│   │   │                      # - _search_products_via_merchant_agent() : A2A通信
+│   │   │                      # - _create_payment_mandate() : Payment作成
+│   │   ├── main.py            # FastAPIエントリーポイント
+│   │   ├── langgraph_agent.py # LangGraph統合（AI機能）
+│   │   └── Dockerfile
+│   ├── merchant_agent/        # Merchant Agent（商品検索・Cart作成）
+│   │   ├── agent.py           # MerchantAgentクラス
+│   │   │                      # - handle_intent_mandate() : 286行目（IntentMandate処理）
+│   │   │                      # - _create_cart_mandate() : Cart作成（未署名）
+│   │   │                      # - handle_cart_request() : 商品検索＋Cart候補生成
+│   │   ├── main.py            # FastAPIエントリーポイント
+│   │   ├── langgraph_merchant.py # LangGraph統合（AI化）
+│   │   └── Dockerfile
+│   ├── merchant/              # Merchant（実店舗エンティティ）
+│   │   ├── service.py         # MerchantServiceクラス
+│   │   │                      # - sign_cart_mandate() : 106行目（Cart署名）
+│   │   │                      #   1. _validate_cart_mandate() : バリデーション（139行目）
+│   │   │                      #   2. _check_inventory() : 在庫確認（142行目）
+│   │   │                      #   3. _sign_cart_mandate() : ECDSA署名（151行目）
+│   │   │                      #   4. _generate_merchant_authorization_jwt() : JWT生成（156行目）
 │   │   ├── main.py            # FastAPIエントリーポイント
 │   │   └── Dockerfile
-│   ├── merchant_agent/
-│   ├── merchant/
-│   ├── credential_provider/
-│   └── payment_processor/
-├── scripts/
+│   ├── credential_provider/   # Credential Provider（認証・支払い方法管理）
+│   │   ├── provider.py        # CredentialProviderクラス
+│   │   │                      # - verify_webauthn_attestation() : WebAuthn検証
+│   │   │                      # - get_payment_methods() : 支払い方法取得
+│   │   ├── main.py            # FastAPIエントリーポイント
+│   │   └── Dockerfile
+│   └── payment_processor/     # Payment Processor（決済処理）
+│       ├── processor.py       # PaymentProcessorクラス
+│       │                      # - process_payment() : 決済処理
+│       │                      #   1. 3層署名検証（Shopping Agent, Merchant, User）
+│       │                      #   2. リスク評価確認
+│       │                      #   3. Authorize（txn_id生成）
+│       │                      #   4. Capture
+│       ├── main.py            # FastAPIエントリーポイント
+│       └── Dockerfile
+│
+├── scripts/                   # 初期化スクリプト
 │   ├── init_keys.py           # 鍵生成・DID作成
+│   │                          # - ECDSA鍵 + Ed25519鍵を全エージェント分生成
+│   │                          # - DIDドキュメント生成（W3C DID仕様準拠）
 │   └── init_db.py             # データベース初期化
-├── frontend/                  # Next.jsアプリ
-│   ├── app/
-│   ├── components/
-│   └── lib/
-├── data/                      # SQLiteデータベース格納
-├── keys/                      # 暗号鍵格納（Docker Volume）
-├── docker-compose.yml         # サービス定義
-└── pyproject.toml             # Python依存関係
+│
+├── frontend/                  # Next.jsフロントエンド
+│   ├── app/                   # App Router（Next.js 15）
+│   │   ├── chat/              # チャットUI
+│   │   └── merchant/          # Merchant Dashboard
+│   ├── components/            # React コンポーネント
+│   │   ├── auth/              # WebAuthn認証コンポーネント
+│   │   ├── cart/              # Cart表示コンポーネント
+│   │   ├── chat/              # Chat UI コンポーネント
+│   │   ├── product/           # 商品カルーセル
+│   │   └── shipping/          # 配送先フォーム
+│   ├── lib/                   # ユーティリティ
+│   │   ├── webauthn.ts        # WebAuthn関数（navigator.credentials.get）
+│   │   └── types/             # TypeScript型定義
+│   └── hooks/                 # React Hooks
+│       └── useSSEChat.ts      # SSE Chatフック（EventSource）
+│
+├── data/                      # データ永続化（Docker Volume）
+│   ├── shopping_agent.db      # Shopping Agent SQLite DB
+│   ├── merchant_agent.db      # Merchant Agent SQLite DB
+│   ├── merchant.db            # Merchant SQLite DB
+│   ├── credential_provider.db # Credential Provider SQLite DB
+│   ├── payment_processor.db   # Payment Processor SQLite DB
+│   ├── did_documents/         # DIDドキュメント格納
+│   │   ├── shopping_agent_did.json
+│   │   ├── merchant_agent_did.json
+│   │   ├── merchant_did.json
+│   │   ├── credential_provider_did.json
+│   │   └── payment_processor_did.json
+│   └── receipts/              # PDF領収書格納
+│
+├── keys/                      # 暗号鍵格納（Docker Volume、権限600）
+│   ├── shopping_agent_private.pem        # ECDSA秘密鍵（AES-256暗号化）
+│   ├── shopping_agent_public.pem         # ECDSA公開鍵
+│   ├── shopping_agent_ed25519_private.pem # Ed25519秘密鍵
+│   ├── shopping_agent_ed25519_public.pem  # Ed25519公開鍵
+│   ├── merchant_agent_private.pem
+│   ├── merchant_agent_public.pem
+│   └── ...（他のエージェント分も同様）
+│
+├── docker-compose.yml         # サービスオーケストレーション
+│                               # - 6コンテナ定義（frontend + 5 backend services）
+│                               # - Volume設定（data/、keys/）
+│                               # - 環境変数設定（パスフレーズなど）
+│
+├── pyproject.toml             # Python依存関係（uv管理）
+│                               # - fastapi, uvicorn, httpx
+│                               # - cryptography, fido2
+│                               # - sqlalchemy, aiosqlite
+│                               # - rfc8785, cbor2
+│                               # - sse-starlette
+│
+└── README.md                  # このファイル
+```
+
+### コードとシーケンスの対応表
+
+README.mdのシーケンス図と実装コードの対応を以下に示します：
+
+#### Phase 1: チャット開始と購買意図確立
+
+| ステップ | シーケンス図の説明 | 実装コード | ファイルパス |
+|---------|-------------------|-----------|-------------|
+| 1-2 | チャット開始、セッション作成 | `chat_stream()` 関数 | `v2/services/shopping_agent/agent.py:443` |
+| 3-6 | SSEイベント送信（agent_text） | `_generate_fixed_response()` | `v2/services/shopping_agent/agent.py:467` |
+| 9-11 | 金額パース、step更新 | セッション管理ロジック | `v2/services/shopping_agent/agent.py:460-462` |
+| 18-21 | Intent Mandate作成、ECDSA署名 | `sign_mandate()` | `v2/common/crypto.py:705-739` |
+
+#### Phase 2: 商品検索とCart候補作成
+
+| ステップ | シーケンス図の説明 | 実装コード | ファイルパス |
+|---------|-------------------|-----------|-------------|
+| 22-25 | A2A商品検索リクエスト | `_search_products_via_merchant_agent()` | `v2/services/shopping_agent/agent.py` |
+| 23 | A2A署名検証 | `verify_message_signature()` | `v2/common/a2a_handler.py:73-266` |
+| 24 | データベース商品検索 | `ProductCRUD.search()` | `v2/common/database.py` |
+| 31-33 | Cart候補生成 | `_create_cart_mandate()` | `v2/services/merchant_agent/agent.py` |
+| 34-38 | Merchant署名リクエスト | `sign_cart_mandate()` | `v2/services/merchant/service.py:106-196` |
+| 37 | ECDSA署名（Cart） | `_sign_cart_mandate()` | `v2/services/merchant/service.py:151` |
+
+#### Phase 3: Cart選択とユーザー署名
+
+| ステップ | シーケンス図の説明 | 実装コード | ファイルパス |
+|---------|-------------------|-----------|-------------|
+| 46 | Merchant署名検証 | `verify_mandate_signature()` | `v2/common/crypto.py:741-775` |
+| 50-53 | WebAuthn署名プロンプト | `generate_consent_challenge()` | `v2/services/shopping_agent/agent.py:291` |
+| 52 | navigator.credentials.get() | `webauthn.ts` | `v2/frontend/lib/webauthn.ts` |
+| 54-62 | WebAuthn署名検証 | `verify_webauthn_signature()` | `v2/common/crypto.py:1176-1339` |
+
+#### Phase 4: Credential Provider選択
+
+| ステップ | シーケンス図の説明 | 実装コード | ファイルパス |
+|---------|-------------------|-----------|-------------|
+| 70-73 | 支払い方法取得 | `get_payment_methods()` | `v2/services/credential_provider/provider.py` |
+
+#### Phase 5: 支払い方法選択と決済処理
+
+| ステップ | シーケンス図の説明 | 実装コード | ファイルパス |
+|---------|-------------------|-----------|-------------|
+| 85-88 | Payment Mandate作成、リスク評価 | `assess_payment_mandate()` | `v2/common/risk_assessment.py` |
+| 87 | Shopping Agent署名 | `sign_data()` (ED25519) | `v2/common/crypto.py:581-644` |
+| 94-96 | WebAuthn検証 | `verify_webauthn_signature()` | `v2/common/crypto.py:1176-1339` |
+| 99-108 | Payment処理依頼（A2A） | `process_payment()` | `v2/services/payment_processor/processor.py` |
+| 102 | 3層署名検証 | `verify_signature()` × 3回 | `v2/common/crypto.py:646-703` |
+
+### A2A通信の実装詳細
+
+#### A2Aメッセージ構造（コード実装）
+
+```python
+# v2/common/models.py:505-513
+class A2AMessage(BaseModel):
+    header: A2AMessageHeader  # 送信元/送信先/タイムスタンプ/署名
+    dataPart: A2ADataPart     # メッセージペイロード
+
+# v2/common/models.py:355-394
+class A2AMessageHeader(BaseModel):
+    message_id: str           # uuid-v4
+    sender: str               # DID (例: "did:ap2:agent:shopping_agent")
+    recipient: str            # DID
+    timestamp: str            # ISO 8601 (例: "2025-10-23T12:34:56Z")
+    nonce: str                # 32バイトhex（リプレイ攻撃対策）
+    proof: Optional[A2AProof] # 署名証明（W3C VC仕様準拠）
+```
+
+#### A2A署名検証フロー（コード実装）
+
+```python
+# v2/common/a2a_handler.py:73-266
+async def verify_message_signature(self, message: A2AMessage) -> bool:
+    # 1. Algorithm検証（ECDSA/Ed25519のみ許可）
+    if proof.algorithm.lower() not in ["ecdsa", "ed25519"]:
+        return False
+
+    # 2. KID検証（DID形式確認）
+    if not proof.kid.startswith("did:") or "#" not in proof.kid:
+        return False
+
+    # 3. Timestamp検証（±300秒の許容範囲）
+    msg_timestamp = datetime.fromisoformat(message.header.timestamp.replace('Z', '+00:00'))
+    now = datetime.now(timezone.utc)
+    time_diff = abs((now - msg_timestamp).total_seconds())
+    if time_diff > 300:
+        return False
+
+    # 4. Nonce検証（再利用チェック）
+    if not await self.nonce_manager.is_valid_nonce(message.header.nonce):
+        return False
+
+    # 5. DIDベースの公開鍵解決
+    resolved_public_key_pem = self.did_resolver.resolve_public_key(proof.kid)
+
+    # 6. RFC 8785正規化 + 署名検証
+    canonical_json = canonicalize_a2a_message(message_dict)
+    is_valid = self.signature_manager.verify_signature(canonical_json, signature_obj)
+
+    return is_valid
+```
+
+#### RFC 8785 JSON正規化（AP2準拠）
+
+```python
+# v2/common/crypto.py:65-122
+def canonicalize_json(data: Dict[str, Any], exclude_keys: Optional[list] = None) -> str:
+    """
+    RFC 8785 (JSON Canonicalization Scheme) 完全準拠
+
+    ✓ 1. キーをUnicodeコードポイント順にソート
+    ✓ 2. 余分な空白を削除
+    ✓ 3. UTF-8エンコーディング
+    ✓ 4. 数値の正規化（1.0 vs 1など）
+    ✓ 5. Unicode正規化
+    ✓ 6. Enumを.valueに変換
+    """
+    import rfc8785  # 外部ライブラリ使用（厳密な相互運用性のため）
+
+    # Enumを.valueに変換
+    converted_data = convert_enums(data_copy)
+
+    # RFC 8785準拠のCanonical JSON文字列を生成
+    canonical_bytes = rfc8785.dumps(converted_data)
+    canonical_json = canonical_bytes.decode('utf-8')
+
+    return canonical_json
 ```
 
 ### クラス図（主要コンポーネント）

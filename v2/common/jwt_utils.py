@@ -1,17 +1,3 @@
-# Copyright 2025 Google LLC
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 """JWT生成・検証ユーティリティ (AP2プロトコル準拠)
 
 このモジュールは、以下の機能を提供します:
@@ -209,9 +195,41 @@ class MerchantAuthorizationJWT:
         # 署名を検証（SignatureManagerを使用）
         signing_input = f"{header_b64}.{payload_b64}"
 
-        # TODO: SignatureManagerのverify_signatureメソッドを使用して署名を検証
-        # 現在のSignatureManagerは署名検証をサポートしていないため、
-        # ここではペイロードを返すのみとする
+        # ヘッダーからkidとalgを取得
+        kid = header.get('kid')
+        alg = header.get('alg')
+
+        if not kid:
+            raise ValueError("JWT header missing 'kid' field")
+
+        # SignatureオブジェクトをAP2準拠形式で構築
+        from v2.common.models import Signature
+
+        # 公開鍵を取得（kidから）
+        try:
+            public_key = self.key_manager.load_public_key(kid)
+            public_key_b64 = self.key_manager.public_key_to_base64(public_key)
+        except Exception as e:
+            raise ValueError(f"Failed to load public key for kid={kid}: {e}")
+
+        # アルゴリズム名を変換（ES256 -> ECDSA, EdDSA -> Ed25519）
+        algorithm = "ECDSA" if alg == "ES256" else "Ed25519"
+
+        signature_obj = Signature(
+            algorithm=algorithm,
+            key_id=kid,
+            public_key=public_key_b64,
+            signature=signature_bytes.hex()  # hex形式で格納
+        )
+
+        # SignatureManagerで検証（signing_inputをbytesで渡す）
+        is_valid = self.signature_manager.verify_signature(
+            signing_input.encode('utf-8'),
+            signature_obj
+        )
+
+        if not is_valid:
+            raise ValueError(f"JWT signature verification failed for kid={kid}")
 
         return payload
 
@@ -418,6 +436,50 @@ class UserAuthorizationSDJWT:
                 f"got {kb_payload.get('sd_hash')}"
             )
 
-        # TODO: SignatureManagerを使用して署名を検証
+        # Key-binding JWTの署名を検証（SignatureManagerを使用）
+        kb_header_b64_padded = kb_header_b64 + '=' * (4 - len(kb_header_b64) % 4)
+        kb_header = json.loads(base64.urlsafe_b64decode(kb_header_b64_padded))
+
+        kb_signature_b64_padded = kb_signature_b64 + '=' * (4 - len(kb_signature_b64) % 4)
+        kb_signature_bytes = base64.urlsafe_b64decode(kb_signature_b64_padded)
+
+        # ヘッダーからkidとalgを取得
+        kid = kb_header.get('kid')
+        alg = kb_header.get('alg')
+
+        if not kid:
+            raise ValueError("Key-binding JWT header missing 'kid' field")
+
+        # SignatureオブジェクトをAP2準拠形式で構築
+        from v2.common.models import Signature
+
+        # 公開鍵を取得（kidから）
+        try:
+            public_key = self.key_manager.load_public_key(kid)
+            public_key_b64 = self.key_manager.public_key_to_base64(public_key)
+        except Exception as e:
+            raise ValueError(f"Failed to load public key for kid={kid}: {e}")
+
+        # アルゴリズム名を変換（ES256 -> ECDSA, EdDSA -> Ed25519）
+        algorithm = "ECDSA" if alg == "ES256" else "Ed25519"
+
+        kb_signature_obj = Signature(
+            algorithm=algorithm,
+            key_id=kid,
+            public_key=public_key_b64,
+            signature=kb_signature_bytes.hex()  # hex形式で格納
+        )
+
+        # 署名対象データ
+        kb_signing_input = f"{kb_header_b64}.{kb_payload_b64}"
+
+        # SignatureManagerで検証（signing_inputをbytesで渡す）
+        is_valid = self.signature_manager.verify_signature(
+            kb_signing_input.encode('utf-8'),
+            kb_signature_obj
+        )
+
+        if not is_valid:
+            raise ValueError(f"Key-binding JWT signature verification failed for kid={kid}")
 
         return kb_payload

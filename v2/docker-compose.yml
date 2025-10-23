@@ -79,6 +79,7 @@ services:
       - DMR_MODEL=${DMR_MODEL:-ai/qwen3}
       - DMR_API_KEY=${DMR_API_KEY:-none}
       - MERCHANT_AI_MODE=${MERCHANT_AI_MODE:-true}
+      - MERCHANT_MCP_URL=http://merchant_agent_mcp:8011
       - LANGFUSE_ENABLED=${LANGFUSE_ENABLED:-false}
       - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY:-}
       - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY:-}
@@ -88,6 +89,35 @@ services:
     depends_on:
       init-keys:
         condition: service_completed_successfully
+      merchant_agent_mcp:
+        condition: service_started
+    restart: unless-stopped
+
+  # Merchant Agent MCP - MCPツール（LangGraphノード）
+  merchant_agent_mcp:
+    build:
+      context: ..
+      dockerfile: v2/services/merchant_agent_mcp/Dockerfile
+    container_name: ap2_merchant_agent_mcp
+    ports:
+      - "8011:8011"
+    volumes:
+      - data:/app/v2/data
+    env_file:
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+      - MERCHANT_ID=did:ap2:merchant:mugibo_merchant
+      - MERCHANT_NAME=Demo Merchant
+      - MERCHANT_URL=http://merchant:8002
+      - DATABASE_URL=sqlite+aiosqlite:////app/v2/data/merchant_agent.db
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_FORMAT=${LOG_FORMAT:-text}
+      - DMR_API_URL=${DMR_API_URL:-http://host.docker.internal:12434/engines/llama.cpp/v1}
+      - DMR_MODEL=${DMR_MODEL:-ai/qwen3}
+      - DMR_API_KEY=${DMR_API_KEY:-none}
+    networks:
+      - ap2_network
     restart: unless-stopped
 
   # Merchant - CartMandate署名
@@ -222,5 +252,14 @@ networks:
 
 volumes:
   keys:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./keys
   data:
-  ollama_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./data

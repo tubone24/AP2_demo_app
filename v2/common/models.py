@@ -51,7 +51,7 @@ class A2ASignature(BaseModel):
 
     非推奨: 新規実装ではA2AProofを使用してください
     """
-    algorithm: Literal["ed25519", "ecdsa"] = "ecdsa"
+    algorithm: Literal["ed25519", "ecdsa"] = "ed25519"
     public_key: str = Field(..., description="BASE64エンコードされた公開鍵")
     value: str = Field(..., description="BASE64エンコードされた署名値")
 
@@ -65,11 +65,11 @@ class A2AProof(BaseModel):
 
     専門家の指摘対応：
     - kid（鍵ID）を追加してDIDベースの鍵解決を可能に
-    - algorithmの検証を強化（ES256のみ許可など）
+    - algorithmの検証を強化（Ed25519/ES256のみ許可）
 
     Example:
     {
-      "algorithm": "ecdsa",
+      "algorithm": "ed25519",
       "signatureValue": "MEUCIQDx...",
       "publicKey": "LS0tLS1CRU...",
       "kid": "did:ap2:agent:shopping_agent#key-1",
@@ -77,7 +77,7 @@ class A2AProof(BaseModel):
       "proofPurpose": "authentication"
     }
     """
-    algorithm: Literal["ed25519", "ecdsa"] = Field(default="ecdsa", description="署名アルゴリズム（ES256/EdDSA）")
+    algorithm: Literal["ed25519", "ecdsa"] = Field(default="ed25519", description="署名アルゴリズム（EdDSA/ES256）")
     signatureValue: str = Field(..., description="BASE64エンコードされた署名値")
     publicKey: str = Field(..., description="BASE64エンコードされた公開鍵")
     kid: Optional[str] = Field(None, description="鍵ID（DIDフラグメント）例: did:ap2:agent:shopping_agent#key-1")
@@ -90,7 +90,7 @@ class A2AProof(BaseModel):
     class Config:
         json_schema_extra = {
             "example": {
-                "algorithm": "ecdsa",
+                "algorithm": "ed25519",
                 "signatureValue": "MEUCIQDx8yZ...",
                 "publicKey": "LS0tLS1CRU...",
                 "created": "2025-10-16T12:34:56Z",
@@ -107,9 +107,10 @@ class Signature(BaseModel):
     """
     暗号署名
 
-    AP2仕様に準拠したECDSA署名
+    AP2仕様に準拠したEd25519/ECDSA署名
+    デフォルト: Ed25519（2025年推奨アルゴリズム）
     """
-    algorithm: str = Field(default="ECDSA", description="署名アルゴリズム")
+    algorithm: str = Field(default="Ed25519", description="署名アルゴリズム（Ed25519/ECDSA）")
     value: str = Field(..., description="BASE64エンコードされた署名値")
     public_key: str = Field(..., description="BASE64エンコードされた公開鍵（PEM形式）")
     signed_at: str = Field(..., description="署名日時（ISO 8601）")
@@ -118,7 +119,7 @@ class Signature(BaseModel):
     class Config:
         json_schema_extra = {
             "example": {
-                "algorithm": "ECDSA",
+                "algorithm": "Ed25519",
                 "value": "MEUCIQDx...",
                 "public_key": "LS0tLS1CRU...",
                 "signed_at": "2025-10-16T12:34:56Z",
@@ -266,6 +267,24 @@ class VerificationMethod(BaseModel):
         }
 
 
+class ServiceEndpoint(BaseModel):
+    """
+    DIDドキュメントのサービスエンドポイント
+
+    W3C DID仕様準拠：エンティティが提供するサービスの情報
+
+    Example:
+    {
+      "id": "did:ap2:merchant:nike#merchant-agent",
+      "type": "AP2MerchantAgent",
+      "serviceEndpoint": "https://merchant-agent.nike.com"
+    }
+    """
+    id: str = Field(..., description="サービスID（DIDフラグメント形式）")
+    type: str = Field(..., description="サービスタイプ（例: AP2MerchantAgent, AP2ShoppingAgent）")
+    serviceEndpoint: str = Field(..., description="サービスエンドポイントURL")
+
+
 class DIDDocument(BaseModel):
     """
     DIDドキュメント
@@ -284,7 +303,14 @@ class DIDDocument(BaseModel):
           "publicKeyPem": "-----BEGIN PUBLIC KEY-----..."
         }
       ],
-      "authentication": ["#key-1"]
+      "authentication": ["#key-1"],
+      "service": [
+        {
+          "id": "did:ap2:merchant:nike#merchant-agent",
+          "type": "AP2MerchantAgent",
+          "serviceEndpoint": "https://merchant-agent.nike.com"
+        }
+      ]
     }
     """
     id: str = Field(..., description="DID（例: did:ap2:agent:shopping_agent）")
@@ -303,6 +329,10 @@ class DIDDocument(BaseModel):
     keyAgreement: Optional[List[str]] = Field(
         None,
         description="鍵共有に使用できる検証メソッドのIDリスト"
+    )
+    service: Optional[List[ServiceEndpoint]] = Field(
+        None,
+        description="サービスエンドポイントのリスト（AP2準拠）"
     )
 
     class Config:

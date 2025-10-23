@@ -69,7 +69,7 @@ def canonicalize_json(
     """
     JSONデータを正規化（Canonicalization）
 
-    RFC 8785 (JSON Canonicalization Scheme) 完全準拠：
+    RFC 8785 (JSON Canonicalization Scheme) 完全準拠
     ✓ 1. キーをUnicodeコードポイント順にソート
     ✓ 2. 余分な空白を削除
     ✓ 3. UTF-8エンコーディング
@@ -114,7 +114,7 @@ def canonicalize_json(
             "Please install it: uv add rfc8785 or pip install rfc8785>=0.1.4"
         )
 
-    # rfc8785.dumps() はUTF-8バイト列を返すため、文字列にデコード
+
     canonical_bytes = rfc8785.dumps(converted_data)
     canonical_json = canonical_bytes.decode('utf-8')
 
@@ -316,7 +316,6 @@ class KeyManager:
         key_file = self.keys_directory / f"{key_id}_private.pem"
         key_file.write_bytes(encrypted_pem)
 
-        # パーミッションを制限（所有者のみ読み書き可能）
         os.chmod(key_file, 0o600)
 
         logger.info(f"Private key saved: {key_file}")
@@ -350,7 +349,7 @@ class KeyManager:
         if not key_file.exists():
             raise CryptoError(f"秘密鍵ファイルが見つかりません: {key_file}")
 
-        # ファイルから読み込み
+
         encrypted_pem = key_file.read_bytes()
 
         try:
@@ -583,7 +582,7 @@ class SignatureManager:
         self,
         data: Any,
         key_id: str,
-        algorithm: str = 'ECDSA'
+        algorithm: str = 'ED25519'
     ) -> Signature:
         """
         データに署名（ECDSA/Ed25519両対応）
@@ -591,7 +590,7 @@ class SignatureManager:
         Args:
             data: 署名するデータ
             key_id: 使用する秘密鍵のID
-            algorithm: 署名アルゴリズム（'ECDSA' or 'ED25519'）
+            algorithm: 署名アルゴリズム（'ED25519' or 'ECDSA'）デフォルト: ED25519
 
         Returns:
             Signature: 署名オブジェクト
