@@ -290,7 +290,6 @@ SAMPLE_PRODUCTS = [
             "image_url": "/assets/むぎぼースマホケース.png"
         }
     },
-    # --- ここから新10商品 ---
     {
         "sku": "MUGI-UMBRELLA-001",
         "name": "むぎぼー折りたたみ傘",

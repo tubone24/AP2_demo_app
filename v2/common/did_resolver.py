@@ -22,12 +22,13 @@ logger = logging.getLogger(__name__)
 
 class DIDResolver:
     """
-    DID解決クラス
+    DID解決クラス（Phase 2実装）
 
     W3C DID仕様準拠：DIDからDIDドキュメントを解決し、公開鍵を取得
 
-    デモ実装：
-    - KeyManagerから公開鍵を読み込んでDIDドキュメントを生成
+    Phase 2実装（ハイブリッド型）：
+    - Agent DID: KeyManagerから公開鍵を読み込んでDIDドキュメントを生成
+    - Merchant DID: MerchantRegistryから解決（ローカルDB + 中央レジストリ）
     - インメモリキャッシュでDIDドキュメントを管理
 
     本番実装：
@@ -35,12 +36,18 @@ class DIDResolver:
     - IPFS、Ethereumなどの分散ストレージから解決
     """
 
-    def __init__(self, key_manager: KeyManager):
+    def __init__(
+        self,
+        key_manager: KeyManager,
+        merchant_registry: Optional["MerchantRegistry"] = None
+    ):
         """
         Args:
             key_manager: 公開鍵を取得するためのKeyManagerインスタンス
+            merchant_registry: Merchant Registry（Phase 2実装）
         """
         self.key_manager = key_manager
+        self.merchant_registry = merchant_registry
 
         # DIDドキュメントキャッシュ（デモ用インメモリストレージ）
         self._did_registry: Dict[str, DIDDocument] = {}
@@ -174,23 +181,87 @@ class DIDResolver:
 
     def resolve(self, did: str) -> Optional[DIDDocument]:
         """
-        DIDからDIDドキュメントを解決
+        DIDからDIDドキュメントを解決（Phase 2実装）
+
+        解決順序:
+        1. インメモリキャッシュから取得
+        2. Merchant DIDの場合: MerchantRegistryから解決
+        3. Agent DIDの場合: ローカルレジストリから取得
 
         Args:
-            did: 解決するDID（例: did:ap2:agent:shopping_agent）
+            did: 解決するDID（例: did:ap2:agent:shopping_agent, did:ap2:merchant:nike）
 
         Returns:
             Optional[DIDDocument]: DIDドキュメント（存在しない場合はNone）
         """
-        # レジストリから取得
+        # 1. インメモリキャッシュから取得
         did_doc = self._did_registry.get(did)
-
         if did_doc:
-            logger.debug(f"[DIDResolver] Resolved DID: {did}")
+            logger.debug(f"[DIDResolver] Resolved from cache: {did}")
             return did_doc
-        else:
-            logger.warning(f"[DIDResolver] DID not found: {did}")
-            return None
+
+        # 2. Merchant DIDの場合: MerchantRegistryから解決（Phase 2）
+        if did.startswith("did:ap2:merchant:") and self.merchant_registry:
+            try:
+                import asyncio
+                # 非同期関数を同期的に呼び出し
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # 既にイベントループが実行中の場合（非推奨だが互換性のため）
+                    logger.warning(f"[DIDResolver] Cannot resolve Merchant DID synchronously in running event loop: {did}")
+                    return None
+                else:
+                    did_doc = loop.run_until_complete(
+                        self.merchant_registry.resolve_merchant_did(did)
+                    )
+                    if did_doc:
+                        # キャッシュに保存
+                        self._did_registry[did] = did_doc
+                        logger.info(f"[DIDResolver] Resolved Merchant DID from registry: {did}")
+                        return did_doc
+            except Exception as e:
+                logger.error(f"[DIDResolver] Failed to resolve Merchant DID: {did}: {e}")
+
+        # 3. 見つからない場合
+        logger.warning(f"[DIDResolver] DID not found: {did}")
+        return None
+
+    async def resolve_async(self, did: str) -> Optional[DIDDocument]:
+        """
+        DIDからDIDドキュメントを解決（非同期版・Phase 2実装）
+
+        解決順序:
+        1. インメモリキャッシュから取得
+        2. Merchant DIDの場合: MerchantRegistryから解決
+        3. Agent DIDの場合: ローカルレジストリから取得
+
+        Args:
+            did: 解決するDID（例: did:ap2:agent:shopping_agent, did:ap2:merchant:nike）
+
+        Returns:
+            Optional[DIDDocument]: DIDドキュメント（存在しない場合はNone）
+        """
+        # 1. インメモリキャッシュから取得
+        did_doc = self._did_registry.get(did)
+        if did_doc:
+            logger.debug(f"[DIDResolver] Resolved from cache: {did}")
+            return did_doc
+
+        # 2. Merchant DIDの場合: MerchantRegistryから解決（Phase 2）
+        if did.startswith("did:ap2:merchant:") and self.merchant_registry:
+            try:
+                did_doc = await self.merchant_registry.resolve_merchant_did(did)
+                if did_doc:
+                    # キャッシュに保存
+                    self._did_registry[did] = did_doc
+                    logger.info(f"[DIDResolver] Resolved Merchant DID from registry: {did}")
+                    return did_doc
+            except Exception as e:
+                logger.error(f"[DIDResolver] Failed to resolve Merchant DID: {did}: {e}")
+
+        # 3. 見つからない場合
+        logger.warning(f"[DIDResolver] DID not found: {did}")
+        return None
 
     def resolve_public_key(self, kid: str) -> Optional[str]:
         """

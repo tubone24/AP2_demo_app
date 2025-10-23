@@ -31,41 +31,71 @@ class MCPIntentTools:
     """
 
     @staticmethod
-    async def validate_merchant(merchant_id: str) -> Dict[str, Any]:
-        """Merchantの検証
+    async def validate_merchant(
+        merchant_id: str,
+        merchant_registry: Optional["MerchantRegistry"] = None
+    ) -> Dict[str, Any]:
+        """Merchantの検証（Phase 2実装：DID Resolution対応）
 
         Args:
-            merchant_id: Merchant識別子（例: "merchant_demo_001"）
+            merchant_id: Merchant識別子（DID形式: "did:ap2:merchant:nike" または旧形式: "merchant_demo_001"）
+            merchant_registry: MerchantRegistry（Phase 2実装）
 
         Returns:
             {
                 "valid": bool,
                 "merchant_name": str,
-                "description": str
+                "description": str,
+                "agent_endpoint": str (optional)
             }
         """
-        # デモ実装: 既知のMerchantリスト
-        known_merchants = {
-            "merchant_demo_001": {
-                "valid": True,
-                "merchant_name": "AP2 Demo Merchant",
-                "description": "AP2デモ用のMerchant（電化製品、衣料品等）"
-            },
-            "merchant_demo_002": {
-                "valid": True,
-                "merchant_name": "Alternative Merchant",
-                "description": "代替Merchant"
-            }
-        }
+        # 1. DID形式の場合: MerchantRegistryから解決（Phase 2）
+        if merchant_id.startswith("did:ap2:merchant:"):
+            if merchant_registry:
+                try:
+                    did_doc = await merchant_registry.resolve_merchant_did(merchant_id)
+                    if did_doc:
+                        # ServiceEndpointから情報を取得
+                        service_endpoint = did_doc.service[0] if did_doc.service else None
+                        agent_endpoint = service_endpoint.serviceEndpoint if service_endpoint else ""
 
-        result = known_merchants.get(merchant_id, {
+                        # Merchant名をDIDから抽出（"did:ap2:merchant:nike" -> "Nike"）
+                        merchant_name = merchant_id.split(":")[-1].replace("_", " ").title()
+
+                        result = {
+                            "valid": True,
+                            "merchant_name": merchant_name,
+                            "description": f"Merchant resolved from registry: {merchant_id}",
+                            "agent_endpoint": agent_endpoint
+                        }
+                        logger.info(f"[validate_merchant] ✓ Resolved from MerchantRegistry: {merchant_id}")
+                        return result
+                except Exception as e:
+                    logger.error(f"[validate_merchant] Failed to resolve merchant DID: {e}")
+
+        # 2. 旧形式または環境変数から取得（後方互換性）
+        import os
+        default_merchant_did = os.getenv("MERCHANT_ID", "did:ap2:merchant:mugibo_merchant")
+
+        if merchant_id in ["merchant_demo_001", "mugibo_merchant", default_merchant_did]:
+            # デフォルトMerchantとして扱う
+            result = {
+                "valid": True,
+                "merchant_name": "Mugibo Merchant",
+                "description": "Default AP2 Demo Merchant",
+                "agent_endpoint": os.getenv("MERCHANT_AGENT_URL", "http://merchant_agent:8001")
+            }
+            logger.info(f"[validate_merchant] Using default merchant: {merchant_id}")
+            return result
+
+        # 3. 見つからない場合
+        logger.warning(f"[validate_merchant] Unknown merchant: {merchant_id}")
+        return {
             "valid": False,
             "merchant_name": "",
-            "description": "Unknown merchant"
-        })
-
-        logger.info(f"[validate_merchant] merchant_id={merchant_id}, valid={result['valid']}")
-        return result
+            "description": f"Unknown merchant: {merchant_id}",
+            "agent_endpoint": ""
+        }
 
     @staticmethod
     async def estimate_price_range(

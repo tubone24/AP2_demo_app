@@ -267,6 +267,24 @@ class VerificationMethod(BaseModel):
         }
 
 
+class ServiceEndpoint(BaseModel):
+    """
+    DIDドキュメントのサービスエンドポイント
+
+    W3C DID仕様準拠：エンティティが提供するサービスの情報
+
+    Example:
+    {
+      "id": "did:ap2:merchant:nike#merchant-agent",
+      "type": "AP2MerchantAgent",
+      "serviceEndpoint": "https://merchant-agent.nike.com"
+    }
+    """
+    id: str = Field(..., description="サービスID（DIDフラグメント形式）")
+    type: str = Field(..., description="サービスタイプ（例: AP2MerchantAgent, AP2ShoppingAgent）")
+    serviceEndpoint: str = Field(..., description="サービスエンドポイントURL")
+
+
 class DIDDocument(BaseModel):
     """
     DIDドキュメント
@@ -285,7 +303,14 @@ class DIDDocument(BaseModel):
           "publicKeyPem": "-----BEGIN PUBLIC KEY-----..."
         }
       ],
-      "authentication": ["#key-1"]
+      "authentication": ["#key-1"],
+      "service": [
+        {
+          "id": "did:ap2:merchant:nike#merchant-agent",
+          "type": "AP2MerchantAgent",
+          "serviceEndpoint": "https://merchant-agent.nike.com"
+        }
+      ]
     }
     """
     id: str = Field(..., description="DID（例: did:ap2:agent:shopping_agent）")
@@ -304,6 +329,10 @@ class DIDDocument(BaseModel):
     keyAgreement: Optional[List[str]] = Field(
         None,
         description="鍵共有に使用できる検証メソッドのIDリスト"
+    )
+    service: Optional[List[ServiceEndpoint]] = Field(
+        None,
+        description="サービスエンドポイントのリスト（AP2準拠）"
     )
 
     class Config:
