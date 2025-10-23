@@ -1165,7 +1165,8 @@ class PaymentProcessorService(BaseAgent):
             }
 
             # ユーザー名を取得（AP2仕様準拠：payer_idからDBで取得）
-            payer_id = payment_mandate.get("payer_id", "user_demo_001")
+            import os
+            payer_id = payment_mandate.get("payer_id") or os.getenv("DEFAULT_USER_ID", "user_demo_001")
             user_name = "デモユーザー"  # フォールバック用デフォルト値
 
             try:

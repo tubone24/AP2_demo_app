@@ -2253,7 +2253,8 @@ class ShoppingAgent(BaseAgent):
 
             try:
                 # 選択されたCredential Providerから支払い方法を取得
-                payment_methods = await self._get_payment_methods_from_cp("user_demo_001", selected_provider["url"])
+                user_id = session.get("user_id") or os.getenv("DEFAULT_USER_ID", "user_demo_001")
+                payment_methods = await self._get_payment_methods_from_cp(user_id, selected_provider["url"])
 
                 if not payment_methods:
                     yield StreamEvent(
@@ -2347,7 +2348,8 @@ class ShoppingAgent(BaseAgent):
             try:
                 # 選択されたCredential Providerから支払い方法を取得
                 selected_cp = session.get("selected_credential_provider", self.credential_providers[0])
-                payment_methods = await self._get_payment_methods_from_cp("user_demo_001", selected_cp["url"])
+                user_id = session.get("user_id") or os.getenv("DEFAULT_USER_ID", "user_demo_001")
+                payment_methods = await self._get_payment_methods_from_cp(user_id, selected_cp["url"])
 
                 if not payment_methods:
                     yield StreamEvent(
@@ -2627,8 +2629,9 @@ class ShoppingAgent(BaseAgent):
             try:
                 # 選択されたCredential Providerを使用してトークン化
                 selected_cp = session.get("selected_credential_provider", self.credential_providers[0])
+                user_id = session.get("user_id") or os.getenv("DEFAULT_USER_ID", "user_demo_001")
                 tokenized_payment_method = await self._tokenize_payment_method(
-                    "user_demo_001",
+                    user_id,
                     selected_payment_method['id'],
                     selected_cp["url"]
                 )
@@ -2787,7 +2790,16 @@ class ShoppingAgent(BaseAgent):
             IntentMandate（署名前、AP2仕様準拠の構造）
         """
         now = datetime.now(timezone.utc)
-        user_id = "user_demo_001"  # デモ用固定値
+        # AP2準拠：user_idはセッションから動的に取得（フロントエンドから提供）
+        user_id = session.get("user_id")
+        if not user_id:
+            # フォールバック：環境変数または開発用デフォルト値
+            import os
+            user_id = os.getenv("DEFAULT_USER_ID", "user_demo_001")
+            logger.warning(
+                f"[ShoppingAgent] user_id not found in session, using default: {user_id}. "
+                f"In production, user_id should be provided by frontend authentication."
+            )
 
         # LangGraphでAIインテント抽出を試行
         if self.langgraph_agent:
@@ -3002,7 +3014,7 @@ class ShoppingAgent(BaseAgent):
         from v2.common.user_authorization import compute_mandate_hash
         return compute_mandate_hash(payment_mandate_copy)
 
-    async def _get_or_create_session(self, session_id: str, user_id: str = "user_demo_001") -> Dict[str, Any]:
+    async def _get_or_create_session(self, session_id: str, user_id: Optional[str] = None) -> Dict[str, Any]:
         """
         セッションをデータベースから取得、または新規作成
 
@@ -3013,6 +3025,15 @@ class ShoppingAgent(BaseAgent):
         Returns:
             Dict[str, Any]: セッションデータ
         """
+        # AP2準拠：user_idがNoneの場合は環境変数から取得
+        if not user_id:
+            import os
+            user_id = os.getenv("DEFAULT_USER_ID", "user_demo_001")
+            logger.warning(
+                f"[ShoppingAgent] user_id not provided, using default: {user_id}. "
+                f"In production, user_id should be provided by frontend authentication."
+            )
+
         async with self.db_manager.get_session() as db_session:
             agent_session = await AgentSessionCRUD.get_by_session_id(db_session, session_id)
 
@@ -3209,7 +3230,7 @@ class ShoppingAgent(BaseAgent):
             "id": payment_mandate_id,  # 後方互換性
             "cart_mandate_id": cart_mandate.get("contents", {}).get("id"),  # AP2準拠
             "intent_mandate_id": session.get("intent_mandate", {}).get("id"),
-            "payer_id": "user_demo_001",
+            "payer_id": session.get("user_id") or os.getenv("DEFAULT_USER_ID", "user_demo_001"),
             "payee_id": cart_mandate.get("_metadata", {}).get("merchant_id", "did:ap2:merchant:mugibo_merchant"),  # AP2準拠
             "amount": {
                 "value": total_amount.get("value", "0.00"),
