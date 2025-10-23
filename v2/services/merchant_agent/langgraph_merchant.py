@@ -85,10 +85,10 @@ class MerchantAgentState(TypedDict):
 class MerchantLangGraphAgent:
     """Merchant Agent用LangGraphエンジン
 
-    フロー:
-    1. analyze_intent - IntentMandateを解析
+    フロー（全てMCP経由で実行）:
+    1. analyze_intent - IntentMandateをLLMで解析
     2. search_products - データベースから商品検索
-    3. check_inventory - 在庫確認（現在はDB、将来的にMCP）
+    3. check_inventory - 在庫確認（MCP経由）
     4. optimize_cart - LLMによるカート最適化（3プラン生成）
     5. build_cart_mandates - AP2準拠CartMandate構築
     6. rank_and_select - トップ3を選択
@@ -114,7 +114,7 @@ class MerchantLangGraphAgent:
         mcp_url = os.getenv("MERCHANT_MCP_URL", "http://merchant_agent_mcp:8011")
         self.mcp_client = MCPClient(
             base_url=mcp_url,
-            timeout=300.0,  # AP2準拠: LLM深い思考のため300秒（5分）タイムアウト
+            timeout=600.0,  # LLM応答遅延対応: 600秒（10分）タイムアウト
             http_client=http_client
         )
         self.mcp_initialized = False
@@ -295,15 +295,40 @@ class MerchantLangGraphAgent:
 
         except Exception as e:
             logger.error(f"[optimize_cart] MCP error: {e}")
-            # フォールバック: 単純な1商品プラン
+            # フォールバック: Rule-basedで複数プラン生成（タイムアウト時でもユーザーに選択肢を提供）
+            plans = []
+
             if products:
-                state["cart_plans"] = [
-                    {
-                        "name": "おすすめプラン",
-                        "description": "人気商品を選びました",
-                        "items": [{"product_id": products[0]["id"], "quantity": 1}]
-                    }
-                ]
+                # プラン1: 最安値の商品組み合わせ
+                sorted_by_price = sorted(products, key=lambda p: p.get("price_jpy", 0))
+                total_price = sum(p.get("price_jpy", 0) for p in sorted_by_price[:2])
+                plans.append({
+                    "name": f"予算内プラン ({int(total_price):,}円)",
+                    "description": "最安値の商品を組み合わせました",
+                    "items": [{"product_id": p["id"], "quantity": 1} for p in sorted_by_price[:2]]
+                })
+
+                # プラン2: 全商品を含むプラン
+                total_price = sum(p.get("price_jpy", 0) for p in products)
+                budget_diff = ""
+                if max_amount and total_price > max_amount:
+                    budget_diff = f" (予算+{int(total_price - max_amount):,}円)"
+                plans.append({
+                    "name": f"全商品プラン ({int(total_price):,}円{budget_diff})",
+                    "description": f"検索結果の全{len(products)}商品を含むカート",
+                    "items": [{"product_id": p["id"], "quantity": 1} for p in products]
+                })
+
+                # プラン3: 最初の1商品のみ
+                price = products[0].get("price_jpy", 0)
+                plans.append({
+                    "name": f"シンプルプラン ({int(price):,}円)",
+                    "description": "人気商品1点のみ",
+                    "items": [{"product_id": products[0]["id"], "quantity": 1}]
+                })
+
+                state["cart_plans"] = plans
+                logger.info(f"[optimize_cart] Fallback: Created {len(plans)} rule-based plans")
             else:
                 state["cart_plans"] = []
 
@@ -625,32 +650,8 @@ class MerchantLangGraphAgent:
         Returns:
             複数のCartMandate候補（通常3つ、署名済み）
         """
-        # Langfuseトレース開始（AP2準拠のIntentMandate構造）
-        # TODO: Langfuse SDK v3のAPI仕様を確認して修正
-        span = None
-        if LANGFUSE_ENABLED and langfuse_client:
-            try:
-                # Context manager形式で使用
-                span = langfuse_client.start_as_current_span(
-                    name="merchant_agent_cart_generation"
-                )
-                # __enter__を呼ぶと実際のspanオブジェクトが返される
-                actual_span = span.__enter__()
-                # user_id/session_idはmetadataに含める
-                if hasattr(actual_span, 'update_trace'):
-                    actual_span.update_trace(
-                        metadata={
-                            "user_id": user_id,
-                            "session_id": session_id,
-                            "natural_language_description": intent_mandate.get("natural_language_description", intent_mandate.get("intent", ""))[:100],
-                            "merchants": intent_mandate.get("merchants"),
-                            "requires_refundability": intent_mandate.get("requires_refundability", False)
-                        },
-                        input={"intent_mandate_id": intent_mandate.get("id")}
-                    )
-            except Exception as e:
-                logger.warning(f"[Langfuse] Failed to create span: {e}")
-                span = None
+        # Langfuseトレース（v3 APIではCallbackHandlerで自動的に作成される）
+        # 手動でのトレース管理は不要
 
         # 初期状態
         initial_state: MerchantAgentState = {
@@ -679,28 +680,6 @@ class MerchantLangGraphAgent:
         signed_candidates = cart_candidates
 
         logger.info(f"[create_cart_candidates] {len(signed_candidates)} carts ready (pre-signed via MCP)")
-
-        # Langfuseトレース終了
-        if span:
-            try:
-                span.update_trace(
-                    output={
-                        "cart_count": len(signed_candidates),
-                        "artifact_ids": [c.get("artifactId") for c in signed_candidates],
-                        "cart_names": [c.get("name") for c in signed_candidates]
-                    }
-                )
-                span.__exit__(None, None, None)
-            except Exception as e:
-                logger.warning(f"[Langfuse] Failed to close span: {e}")
-
-        # Langfuseトレースを即座に送信
-        if LANGFUSE_ENABLED and langfuse_client:
-            try:
-                langfuse_client.flush()
-                logger.debug("[Langfuse] Flushed traces")
-            except Exception as e:
-                logger.warning(f"[Langfuse] Failed to flush: {e}")
 
         return signed_candidates
 

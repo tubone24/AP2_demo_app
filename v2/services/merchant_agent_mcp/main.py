@@ -53,7 +53,7 @@ llm = ChatOpenAI(
     api_key=LLM_API_KEY,
     temperature=0.5,
     max_tokens=2048,
-    timeout=180.0,
+    timeout=600.0,  # LLM応答遅延対応: 600秒（10分）
     max_retries=2
 )
 
@@ -343,23 +343,47 @@ async def optimize_cart(params: Dict[str, Any]) -> Dict[str, Any]:
         return {"cart_plans": []}
 
     # LLMプロンプト
+    max_amount_text = f"{max_amount}円" if max_amount else "制限なし"
     prompt = f"""以下の商品リストから、ユーザーのニーズに合った3つのカートプランを提案してください。
 
 ユーザーの嗜好:
 - 主なニーズ: {user_preferences.get('primary_need', '')}
 - 予算戦略: {user_preferences.get('budget_strategy', 'balanced')}
 - 重視ポイント: {user_preferences.get('key_factors', [])}
-- 最大金額: {max_amount or '制限なし'}円
+- 最大金額: {max_amount_text}
 
 利用可能な商品（JSON）:
 {json.dumps(filtered_products[:10], ensure_ascii=False, indent=2)}
 
-以下のJSON形式で3つのプランを出力してください:
+必ず3つのプランを作成してください（予算を考慮）:
+1. **予算内プラン**: 最大金額以内に収める（プラン名に金額を明記）
+2. **おすすめプラン**: 予算ギリギリまで活用してベストな組み合わせ（プラン名に金額を明記）
+3. **プレミアムプラン**: 予算を少し超えても高品質・多機能（プラン名に「予算+XXX円」と明記）
+
+各プランの名前には合計金額を含めてください（例: "予算内プラン (5,200円)"）
+
+以下のJSON形式で出力してください:
 {{
   "cart_plans": [
     {{
-      "name": "プラン名（例: 予算重視プラン）",
-      "description": "プランの説明",
+      "name": "予算内プラン (5,200円)",
+      "description": "最大金額{max_amount_text}以内に収めた基本プラン",
+      "items": [
+        {{"product_id": 1, "quantity": 1}},
+        {{"product_id": 2, "quantity": 1}}
+      ]
+    }},
+    {{
+      "name": "おすすめプラン (5,850円)",
+      "description": "予算を最大限活用したベストバランスプラン",
+      "items": [
+        {{"product_id": 1, "quantity": 1}},
+        {{"product_id": 3, "quantity": 1}}
+      ]
+    }},
+    {{
+      "name": "プレミアムプラン (予算+800円で6,800円)",
+      "description": "予算を少し超えますが、より高品質な組み合わせ",
       "items": [
         {{"product_id": 1, "quantity": 2}},
         {{"product_id": 3, "quantity": 1}}
@@ -367,7 +391,8 @@ async def optimize_cart(params: Dict[str, Any]) -> Dict[str, Any]:
     }}
   ]
 }}
-"""
+
+JSONのみを出力し、説明文は含めないでください。"""
 
     try:
         messages = [
@@ -391,16 +416,42 @@ async def optimize_cart(params: Dict[str, Any]) -> Dict[str, Any]:
 
     except Exception as e:
         logger.error(f"[optimize_cart] Error: {e}", exc_info=True)
-        # フォールバック: シンプルな1商品プラン
-        return {
-            "cart_plans": [
-                {
-                    "name": "おすすめプラン",
-                    "description": "人気商品をセレクトしました",
-                    "items": [{"product_id": filtered_products[0]["id"], "quantity": 1}]
-                }
-            ]
-        }
+        # フォールバック: Rule-basedで複数プラン生成
+        plans = []
+
+        # プラン1: 最安値の商品
+        if len(filtered_products) > 0:
+            sorted_by_price = sorted(filtered_products, key=lambda p: p["price_jpy"])
+            total_price = sum(p["price_jpy"] for p in sorted_by_price[:2])
+            plans.append({
+                "name": f"予算内プラン ({int(total_price):,}円)",
+                "description": "最安値の商品を組み合わせました",
+                "items": [{"product_id": p["id"], "quantity": 1} for p in sorted_by_price[:2]]
+            })
+
+        # プラン2: 全商品を含むプラン
+        if len(filtered_products) > 0:
+            total_price = sum(p["price_jpy"] for p in filtered_products)
+            budget_diff = ""
+            if max_amount and total_price > max_amount:
+                budget_diff = f" (予算+{int(total_price - max_amount):,}円)"
+            plans.append({
+                "name": f"全商品プラン ({int(total_price):,}円{budget_diff})",
+                "description": f"検索結果の全{len(filtered_products)}商品を含むカート",
+                "items": [{"product_id": p["id"], "quantity": 1} for p in filtered_products]
+            })
+
+        # プラン3: 最初の1商品のみ
+        if len(filtered_products) > 0:
+            price = filtered_products[0]["price_jpy"]
+            plans.append({
+                "name": f"シンプルプラン ({int(price):,}円)",
+                "description": "人気商品1点のみ",
+                "items": [{"product_id": filtered_products[0]["id"], "quantity": 1}]
+            })
+
+        logger.info(f"[optimize_cart] Fallback: Generated {len(plans)} rule-based plans")
+        return {"cart_plans": plans}
 
 
 @mcp.tool(

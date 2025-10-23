@@ -1108,6 +1108,22 @@ class ShoppingAgent(BaseAgent):
         user_input_lower = user_input.lower()
         current_step = session.get("step", "initial")
 
+        # リセットキーワード検知：エラーや完了後に「こんにちは」で初期化
+        if any(word in user_input_lower for word in ["こんにちは", "hello", "hi", "はじめから", "やり直", "リセット", "reset"]):
+            if current_step in ["error", "completed"]:
+                # セッションを初期化
+                session.clear()
+                session["step"] = "initial"
+                session["session_id"] = session_id
+                logger.info(f"[ShoppingAgent] Session reset by user: session_id={session_id}")
+
+                yield StreamEvent(
+                    type="agent_text",
+                    content="セッションをリセットしました。新しい購入を始めましょう！"
+                )
+                await asyncio.sleep(0.3)
+                current_step = "initial"
+
         # Step-up認証完了の処理
         if user_input.startswith("step-up-completed:"):
             step_up_session_id = user_input.split(":", 1)[1].strip()
@@ -1592,25 +1608,28 @@ class ShoppingAgent(BaseAgent):
                     shipping_address = json_lib.loads(user_input)
                     logger.info(f"[intent_complete_ask_shipping] Parsed JSON shipping address: {shipping_address}")
                 else:
-                    logger.warning(f"[intent_complete_ask_shipping] user_input does not start with '{{', using demo address")
+                    logger.warning(f"[intent_complete_ask_shipping] user_input does not start with '{{'")
+                    yield StreamEvent(
+                        type="agent_text",
+                        content="配送先の入力形式が不正です。もう一度入力してください。"
+                    )
+                    return
 
             except json_lib.JSONDecodeError as e:
                 logger.error(f"[intent_complete_ask_shipping] JSON parse error: {e}, input: {user_input[:200]}")
+                yield StreamEvent(
+                    type="agent_text",
+                    content="配送先の入力形式が不正です。もう一度入力してください。"
+                )
+                return
             except Exception as e:
                 logger.error(f"[intent_complete_ask_shipping] Unexpected error: {e}", exc_info=True)
-
-            # フォールバック：デモ用固定値を使用
-            if not shipping_address:
-                shipping_address = {
-                    "recipient": "デモユーザー",
-                    "postal_code": "150-0001",
-                    "address_line1": "東京都渋谷区渋谷1-1-1",
-                    "address_line2": "",
-                    "city": "渋谷区",
-                    "region": "東京都",
-                    "country": "JP",
-                    "phone_number": "03-1234-5678"
-                }
+                yield StreamEvent(
+                    type="agent_text",
+                    content=f"配送先の処理中にエラーが発生しました: {str(e)}"
+                )
+                session["step"] = "error"
+                return
 
             # AP2準拠: ContactAddress形式に変換
             # address_line1とaddress_line2を配列に変換
@@ -1715,35 +1734,34 @@ class ShoppingAgent(BaseAgent):
                     shipping_address = json_lib.loads(user_input)
                     logger.info(f"[shipping_address_input] Parsed JSON shipping address: {shipping_address}")
                 else:
-                    logger.warning(f"[shipping_address_input] user_input does not start with '{{', using demo address")
+                    logger.warning(f"[shipping_address_input] user_input does not start with '{{'")
+                    yield StreamEvent(
+                        type="agent_text",
+                        content="配送先の入力形式が不正です。もう一度入力してください。"
+                    )
+                    return
 
             except json_lib.JSONDecodeError as e:
                 logger.error(f"[shipping_address_input] JSON parse error: {e}, input: {user_input[:200]}")
+                yield StreamEvent(
+                    type="agent_text",
+                    content="配送先の入力形式が不正です。もう一度入力してください。"
+                )
+                return
             except Exception as e:
                 logger.error(f"[shipping_address_input] Unexpected error: {e}", exc_info=True)
-
-            # フォールバック：デモ用固定値を使用
-            if not shipping_address:
-                shipping_address = {
-                    "recipient": "デモユーザー",
-                    "postal_code": "150-0001",
-                    "address_line1": "東京都渋谷区渋谷1-1-1",
-                    "address_line2": "",
-                    "city": "渋谷区",
-                    "state": "東京都",
-                    "country": "JP"
-                }
-                logger.info("[shipping_address_input] Using demo default shipping address")
-
                 yield StreamEvent(
                     type="agent_text",
-                    content="配送先を設定しました（デモ用固定値）。"
+                    content=f"配送先の処理中にエラーが発生しました: {str(e)}"
                 )
-            else:
-                yield StreamEvent(
-                    type="agent_text",
-                    content=f"配送先を設定しました：{shipping_address['recipient']} 様"
-                )
+                session["step"] = "error"
+                return
+
+            # 配送先設定完了メッセージ
+            yield StreamEvent(
+                type="agent_text",
+                content=f"配送先を設定しました：{shipping_address['recipient']} 様"
+            )
 
             session["shipping_address"] = shipping_address
             await asyncio.sleep(0.3)

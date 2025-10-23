@@ -135,6 +135,8 @@ class LangGraphIntentAgent:
 
 必須フィールド:
 - natural_language_description: ユーザーの意図の自然言語説明（1-2文）
+  ★重要: 最大金額、カテゴリー、ブランド、その他すべての制約を必ず含めてください
+
 - user_cart_confirmation_required: カート確認が必要か（通常はtrue）
 
 オプションフィールド:
@@ -144,7 +146,15 @@ class LangGraphIntentAgent:
 
 出力例:
 {
-  "natural_language_description": "赤いバスケットボールシューズを3万円以内で購入",
+  "natural_language_description": "赤いバスケットボールシューズを3万円以内で購入したい",
+  "user_cart_confirmation_required": true,
+  "merchants": null,
+  "skus": null,
+  "requires_refundability": false
+}
+
+{
+  "natural_language_description": "時計とステッカーを6000円以内で購入したい",
   "user_cart_confirmation_required": true,
   "merchants": null,
   "skus": null,
@@ -237,21 +247,8 @@ JSONのみを出力し、説明文は含めないでください。"""
         Raises:
             ValueError: インテント抽出に失敗した場合
         """
-        # Langfuseトレース開始
-        span = None
-        if LANGFUSE_ENABLED and langfuse_client:
-            try:
-                span = langfuse_client.start_as_current_span(
-                    name="shopping_agent_intent_extraction"
-                )
-                span.__enter__()
-                span.update_trace(
-                    metadata={"user_prompt": user_prompt[:100]},
-                    input={"user_prompt": user_prompt[:200]}
-                )
-            except Exception as e:
-                logger.warning(f"[Langfuse] Failed to create span: {e}")
-                span = None
+        # Langfuseトレース（v3 APIではCallbackHandlerで自動的に作成される）
+        # 手動でのトレース管理は不要
 
         initial_state: IntentExtractionState = {
             "user_prompt": user_prompt,
@@ -269,44 +266,12 @@ JSONのみを出力し、説明文は含めないでください。"""
         if final_state.get("error"):
             error_msg = final_state["error"]
             logger.error(f"[extract_intent_from_prompt] Error: {error_msg}")
-
-            # Langfuseトレース更新（エラー）
-            if span:
-                try:
-                    span.update_trace(output={"error": error_msg})
-                    span.__exit__(None, None, None)
-                except Exception as e:
-                    logger.warning(f"[Langfuse] Failed to close span: {e}")
-
             raise ValueError(error_msg)
 
         intent_data = final_state.get("intent_data")
         if not intent_data:
             error_msg = "Intent extraction returned no data"
-
-            # Langfuseトレース更新（エラー）
-            if span:
-                try:
-                    span.update_trace(output={"error": error_msg})
-                    span.__exit__(None, None, None)
-                except Exception as e:
-                    logger.warning(f"[Langfuse] Failed to close span: {e}")
-
             raise ValueError(error_msg)
-
-        # Langfuseトレース終了（成功）
-        if span:
-            try:
-                span.update_trace(
-                    output={
-                        "natural_language_description": intent_data.get("natural_language_description"),
-                        "merchants": intent_data.get("merchants"),
-                        "requires_refundability": intent_data.get("requires_refundability")
-                    }
-                )
-                span.__exit__(None, None, None)
-            except Exception as e:
-                logger.warning(f"[Langfuse] Failed to close span: {e}")
 
         # Langfuseトレースを即座に送信
         if LANGFUSE_ENABLED and langfuse_client:
