@@ -26,16 +26,19 @@
 - **3種類のMandate**: IntentMandate（購買意図）、CartMandate（カート）、PaymentMandate（決済）
 - **WebAuthn/Passkey**: ハードウェアベースの認証
 - **リスク評価**: 不正検知とリスクスコアリング
+- **Agent Token**: 決済ネットワークによるトークン化
 - **VDC (Verifiable Digital Credentials)**: 検証可能なデジタル資格情報
 
 ### v2アプリの特徴
 
 このv2実装は、AP2仕様を100%準拠した実装で、以下を提供します：
 
-✅ **6つのマイクロサービス**: Shopping Agent、Merchant Agent、Merchant、Credential Provider、Payment Processor、Frontend
+✅ **9つのマイクロサービス**: Shopping Agent、Merchant Agent、Merchant Agent MCP、Merchant、Credential Provider、Payment Processor、Payment Network、Meilisearch、Frontend
 ✅ **完全なA2A通信**: ECDSA/Ed25519署名、Nonce検証、DID解決
 ✅ **WebAuthn/Passkey対応**: FIDO2準拠の署名検証
 ✅ **SSE/Streaming Chat**: リアルタイムな対話型UI
+✅ **AI駆動の商品検索**: LangGraph + MCP統合、Meilisearch全文検索
+✅ **決済ネットワーク統合**: Agent Token発行・トークン化
 ✅ **Docker Compose**: ワンコマンドで全サービス起動
 ✅ **統一ロギング**: JSON/テキスト形式、機密データマスキング
 
@@ -54,9 +57,12 @@ graph TB
     subgraph "Backend Services"
         SA[Shopping Agent<br/>Port 8000<br/>v2/services/shopping_agent/]
         MA[Merchant Agent<br/>Port 8001<br/>v2/services/merchant_agent/]
+        MA_MCP[Merchant Agent MCP<br/>Port 8011<br/>v2/services/merchant_agent_mcp/]
         M[Merchant<br/>Port 8002<br/>v2/services/merchant/]
         CP[Credential Provider<br/>Port 8003<br/>v2/services/credential_provider/]
         PP[Payment Processor<br/>Port 8004<br/>v2/services/payment_processor/]
+        PN[Payment Network<br/>Port 8005<br/>v2/services/payment_network/]
+        MS[Meilisearch<br/>Port 7700<br/>全文検索エンジン]
     end
 
     subgraph "Data Layer"
@@ -88,6 +94,9 @@ graph TB
     SA -->|A2A Message| CP
     SA -->|A2A Message| M
     MA -->|A2A Message| PP
+    MA -->|LangGraph Tools| MA_MCP
+    MA_MCP -->|商品検索| MS
+    CP -->|Agent Token発行| PN
 
     SA -.->|Read/Write| DB1
     MA -.->|Read/Write| DB2
@@ -126,9 +135,12 @@ graph TB
     style UI fill:#e1f5ff
     style SA fill:#fff4e6
     style MA fill:#fff4e6
+    style MA_MCP fill:#e1bee7
     style M fill:#fff4e6
     style CP fill:#e8f5e9
     style PP fill:#e8f5e9
+    style PN fill:#b2dfdb
+    style MS fill:#ffccbc
     style BASE fill:#ffe0b2
     style A2A fill:#ffe0b2
     style CRYPTO fill:#ffe0b2
@@ -141,9 +153,12 @@ graph TB
 | **Frontend** | 3000 | ユーザーインターフェース | `/`, `/chat`, `/merchant` |
 | **Shopping Agent** | 8000 | ユーザー代理エージェント | `/chat/stream`, `/create-intent`, `/create-payment` |
 | **Merchant Agent** | 8001 | 商品検索・Cart作成 | `/products`, `/create-cart` |
+| **Merchant Agent MCP** | 8011 | MCPツールサーバー（LangGraph用） | `/mcp/tools/list`, `/mcp/tools/call` |
 | **Merchant** | 8002 | Cart署名・在庫管理 | `/sign/cart`, `/inventory/{sku}` |
 | **Credential Provider** | 8003 | WebAuthn検証・トークン発行 | `/verify/attestation`, `/payment-methods` |
 | **Payment Processor** | 8004 | 決済処理・トランザクション管理 | `/process`, `/transactions/{id}` |
+| **Payment Network** | 8005 | Agent Token発行・決済ネットワーク | `/tokenize`, `/validate-token` |
+| **Meilisearch** | 7700 | 全文検索エンジン（商品検索） | `/indexes/products/search` |
 
 ---
 
@@ -478,7 +493,19 @@ docker compose run --rm init-keys
 # 3. 全サービスを起動
 docker compose up --build
 
-# 4. ブラウザでアクセス
+# 4. Meilisearch商品インデックスの初期化（初回のみ、別ターミナル）
+# サービス起動後、商品データをMeilisearchにインデックス登録
+docker compose exec merchant_agent_mcp python -c "
+from common.search_engine import MeilisearchClient
+from common.seed_data import seed_products
+import asyncio
+async def init():
+    client = MeilisearchClient()
+    await client.create_index()
+asyncio.run(init())
+"
+
+# 5. ブラウザでアクセス
 open http://localhost:3000
 ```
 
@@ -488,11 +515,14 @@ open http://localhost:3000
 # 各サービスのヘルスチェック
 curl http://localhost:8000/  # Shopping Agent
 curl http://localhost:8001/  # Merchant Agent
+curl http://localhost:8011/  # Merchant Agent MCP
 curl http://localhost:8002/  # Merchant
 curl http://localhost:8003/  # Credential Provider
 curl http://localhost:8004/  # Payment Processor
+curl http://localhost:8005/  # Payment Network
+curl http://localhost:7700/health  # Meilisearch
 
-# すべて以下のようなレスポンスが返ればOK
+# 各エージェントは以下のようなレスポンスが返ればOK
 {
   "agent_id": "did:ap2:agent:shopping_agent",
   "agent_name": "Shopping Agent",
@@ -573,6 +603,16 @@ curl -X POST http://localhost:8000/a2a/message \
 | **sse-starlette** | 2.1.0 | Server-Sent Events |
 | **httpx** | 0.27.0 | 非同期HTTPクライアント |
 | **rfc8785** | 0.1.3 | JSON正規化（署名用） |
+| **LangGraph** | 0.2.x | エージェントワークフロー |
+| **LangChain** | 0.3.x | LLM統合 |
+| **Langfuse** | 2.x | LLM監視（オプション） |
+
+### 検索・AI
+
+| 技術 | 用途 |
+|------|------|
+| **Meilisearch** | 全文検索エンジン（商品検索） |
+| **MCP** | Model Context Protocol（ツールサーバー） |
 
 ### フロントエンド
 
@@ -587,7 +627,7 @@ curl -X POST http://localhost:8000/a2a/message \
 
 - **Docker Compose** - サービスオーケストレーション
 - **SQLite** - データベース（開発環境）
-- **Docker Volumes** - データ永続化
+- **Docker Volumes** - データ永続化（keys/、data/、meilisearch_data/）
 
 ---
 
@@ -654,6 +694,17 @@ v2/
 │   │                          # - PaymentCurrencyAmount, PaymentItem, PaymentRequest
 │   ├── jwt_utils.py           # JWT生成・検証
 │   │                          # - MerchantAuthorizationJWT, UserAuthorizationSDJWT
+│   ├── search_engine.py       # Meilisearch検索クライアント
+│   │                          # クラス: MeilisearchClient
+│   │                          # - search() : 全文検索
+│   │                          # - index_product() : 商品インデックス登録
+│   ├── mcp_server.py          # MCP (Model Context Protocol) サーバー
+│   │                          # クラス: MCPServer
+│   │                          # - JSON-RPC 2.0準拠
+│   │                          # - Streamable HTTP Transport
+│   ├── mcp_client.py          # MCPクライアント
+│   │                          # クラス: MCPClient
+│   │                          # - call_tool() : MCPツール呼び出し
 │   └── seed_data.py           # サンプルデータ
 │                               # - seed_products() : 商品データシード
 │                               # - seed_users() : ユーザーデータシード
@@ -679,6 +730,12 @@ v2/
 │   │   ├── main.py            # FastAPIエントリーポイント
 │   │   ├── langgraph_merchant.py # LangGraph統合（AI化）
 │   │   └── Dockerfile
+│   ├── merchant_agent_mcp/    # Merchant Agent MCP（MCPツールサーバー）
+│   │   ├── main.py            # MCPサーバー（LangGraph用ツール）
+│   │   │                      # - analyze_intent: Intent分析
+│   │   │                      # - search_products: Meilisearch検索
+│   │   │                      # - create_cart: Cart候補生成
+│   │   └── Dockerfile
 │   ├── merchant/              # Merchant（実店舗エンティティ）
 │   │   ├── service.py         # MerchantServiceクラス
 │   │   │                      # - sign_cart_mandate() : 106行目（Cart署名）
@@ -694,13 +751,19 @@ v2/
 │   │   │                      # - get_payment_methods() : 支払い方法取得
 │   │   ├── main.py            # FastAPIエントリーポイント
 │   │   └── Dockerfile
-│   └── payment_processor/     # Payment Processor（決済処理）
-│       ├── processor.py       # PaymentProcessorクラス
-│       │                      # - process_payment() : 決済処理
-│       │                      #   1. 3層署名検証（Shopping Agent, Merchant, User）
-│       │                      #   2. リスク評価確認
-│       │                      #   3. Authorize（txn_id生成）
-│       │                      #   4. Capture
+│   ├── payment_processor/     # Payment Processor（決済処理）
+│   │   ├── processor.py       # PaymentProcessorクラス
+│   │   │                      # - process_payment() : 決済処理
+│   │   │                      #   1. 3層署名検証（Shopping Agent, Merchant, User）
+│   │   │                      #   2. リスク評価確認
+│   │   │                      #   3. Authorize（txn_id生成）
+│   │   │                      #   4. Capture
+│   │   ├── main.py            # FastAPIエントリーポイント
+│   │   └── Dockerfile
+│   └── payment_network/       # Payment Network（Agent Token発行）
+│       ├── network.py         # PaymentNetworkクラス
+│       │                      # - tokenize() : Agent Token発行
+│       │                      # - validate_token() : トークン検証
 │       ├── main.py            # FastAPIエントリーポイント
 │       └── Dockerfile
 │
@@ -750,9 +813,12 @@ v2/
 │   └── ...（他のエージェント分も同様）
 │
 ├── docker-compose.yml         # サービスオーケストレーション
-│                               # - 6コンテナ定義（frontend + 5 backend services）
-│                               # - Volume設定（data/、keys/）
-│                               # - 環境変数設定（パスフレーズなど）
+│                               # - 9コンテナ定義:
+│                               #   frontend, shopping_agent, merchant_agent,
+│                               #   merchant_agent_mcp, merchant, credential_provider,
+│                               #   payment_processor, payment_network, meilisearch
+│                               # - Volume設定（data/、keys/、meilisearch_data/）
+│                               # - 環境変数設定（パスフレーズ、Langfuseなど）
 │
 ├── pyproject.toml             # Python依存関係（uv管理）
 │                               # - fastapi, uvicorn, httpx
@@ -760,6 +826,8 @@ v2/
 │                               # - sqlalchemy, aiosqlite
 │                               # - rfc8785, cbor2
 │                               # - sse-starlette
+│                               # - langgraph, langchain
+│                               # - langfuse（オプション）
 │
 └── README.md                  # このファイル
 ```
@@ -1093,6 +1161,24 @@ MERCHANT_AGENT_URL=http://merchant_agent:8001
 MERCHANT_URL=http://merchant:8002
 PAYMENT_PROCESSOR_URL=http://payment_processor:8004
 CREDENTIAL_PROVIDER_URL=http://credential_provider:8003
+PAYMENT_NETWORK_URL=http://payment_network:8005
+MERCHANT_MCP_URL=http://merchant_agent_mcp:8011
+
+# AI/LLM設定（オプション）
+DMR_API_URL=http://host.docker.internal:12434/engines/llama.cpp/v1
+DMR_MODEL=ai/qwen3
+DMR_API_KEY=none
+MERCHANT_AI_MODE=true             # Merchant AgentのAI機能を有効化
+
+# Meilisearch設定
+MEILISEARCH_URL=http://meilisearch:7700
+MEILISEARCH_MASTER_KEY=masterKey123
+
+# Langfuse設定（オプション：LLM監視）
+LANGFUSE_ENABLED=false
+LANGFUSE_PUBLIC_KEY=
+LANGFUSE_SECRET_KEY=
+LANGFUSE_HOST=https://cloud.langfuse.com
 ```
 
 ### トラブルシューティング
