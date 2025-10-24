@@ -1,14 +1,17 @@
 """
 v2/services/merchant_agent_mcp/main.py
 
-Merchant Agent MCP Server - LangGraphノードをMCPツールとして公開
+Merchant Agent MCP Server - データアクセスツール提供（AP2準拠）
 
-MCPツール:
-- analyze_intent: IntentMandateを解析
+MCP仕様準拠：
+- MCPサーバーは「ツール」のみを提供（LLM推論なし）
+- LangGraph側でLLMを使った推論とツール呼び出しをオーケストレーション
+
+提供ツール（データアクセス専用）:
 - search_products: データベースから商品検索
 - check_inventory: 在庫確認
-- optimize_cart: LLMによるカート最適化
-- build_cart_mandates: AP2準拠CartMandate構築
+- get_product_details: 商品詳細取得
+- build_cart_mandate: AP2準拠CartMandate構築（データ構造化のみ）
 """
 
 import os
@@ -25,10 +28,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from common.mcp_server import MCPServer
 from common.database import DatabaseManager, ProductCRUD
+from common.search_engine import MeilisearchClient
 from common.logger import get_logger
-
-from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_openai import ChatOpenAI
 
 logger = get_logger(__name__, service_name='merchant_agent_mcp')
 
@@ -38,121 +39,22 @@ MERCHANT_NAME = os.getenv("MERCHANT_NAME", "Demo Merchant")
 MERCHANT_URL = os.getenv("MERCHANT_URL", "http://merchant:8002")
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite+aiosqlite:////app/v2/data/merchant_agent.db")
 
-# LLM設定
-LLM_ENDPOINT = os.getenv("DMR_API_URL", "http://host.docker.internal:12434/engines/llama.cpp/v1")
-LLM_MODEL = os.getenv("DMR_MODEL", "ai/qwen3")
-LLM_API_KEY = os.getenv("DMR_API_KEY", "none")
+# AP2準拠設定
+SHIPPING_FEE = float(os.getenv("SHIPPING_FEE", "500.0"))  # 送料（円）
+FREE_SHIPPING_THRESHOLD = float(os.getenv("FREE_SHIPPING_THRESHOLD", "5000.0"))  # 送料無料の閾値（円）
+TAX_RATE = float(os.getenv("TAX_RATE", "0.1"))  # 税率（10%）
 
 # データベース初期化
 db_manager = DatabaseManager(DATABASE_URL)
 
-# LLM初期化
-llm = ChatOpenAI(
-    base_url=LLM_ENDPOINT,
-    model=LLM_MODEL,
-    api_key=LLM_API_KEY,
-    temperature=0.5,
-    max_tokens=2048,
-    timeout=600.0,  # LLM応答遅延対応: 600秒（10分）
-    max_retries=2
-)
+# Meilisearch初期化（全文検索エンジン）
+search_client = MeilisearchClient()
 
 # MCPサーバー初期化
 mcp = MCPServer(
     server_name="merchant_agent_mcp",
     version="1.0.0"
 )
-
-
-@mcp.tool(
-    name="analyze_intent",
-    description="IntentMandateを解析してユーザーの嗜好と検索キーワードを抽出",
-    input_schema={
-        "type": "object",
-        "properties": {
-            "intent_mandate": {
-                "type": "object",
-                "description": "AP2準拠のIntentMandate",
-                "properties": {
-                    "natural_language_description": {"type": "string"},
-                    "merchants": {"type": "array", "items": {"type": "string"}},
-                    "skus": {"type": "array", "items": {"type": "string"}},
-                    "requires_refundability": {"type": "boolean"}
-                },
-                "required": ["natural_language_description"]
-            }
-        },
-        "required": ["intent_mandate"]
-    }
-)
-async def analyze_intent(params: Dict[str, Any]) -> Dict[str, Any]:
-    """IntentMandateを解析してユーザー嗜好を抽出（LLM使用）
-
-    Args:
-        params: {"intent_mandate": {...}}
-
-    Returns:
-        {
-            "primary_need": str,
-            "budget_strategy": "budget_conscious" | "balanced" | "premium",
-            "key_factors": List[str],
-            "search_keywords": List[str]
-        }
-    """
-    intent_mandate = params["intent_mandate"]
-
-    # AP2準拠のフィールド抽出
-    natural_language_description = intent_mandate.get("natural_language_description", "")
-    merchants = intent_mandate.get("merchants", [])
-    skus = intent_mandate.get("skus", [])
-    requires_refundability = intent_mandate.get("requires_refundability", False)
-
-    # LLMプロンプト
-    prompt = f"""以下のIntent Mandateから、ユーザーの具体的なニーズと嗜好を抽出してください。
-
-ユーザーの意図: {natural_language_description}
-指定Merchant: {merchants if merchants else "制約なし"}
-指定SKU: {skus if skus else "制約なし"}
-返金可能性要件: {requires_refundability}
-
-以下をJSON形式で出力してください：
-{{
-  "primary_need": "主なニーズ（1文で）",
-  "budget_strategy": "budget_conscious" | "balanced" | "premium",
-  "key_factors": ["重視するポイント1", "重視するポイント2"],
-  "search_keywords": ["検索キーワード1", "キーワード2"]
-}}
-"""
-
-    try:
-        messages = [
-            SystemMessage(content="あなたは商品専門のアナリストです。ユーザーの購買意図を正確に理解してください。"),
-            HumanMessage(content=prompt)
-        ]
-
-        response = await llm.ainvoke(messages)
-        llm_output = response.content.strip()
-
-        # JSON抽出
-        if "```json" in llm_output:
-            llm_output = llm_output.split("```json")[1].split("```")[0].strip()
-        elif "```" in llm_output:
-            llm_output = llm_output.split("```")[1].split("```")[0].strip()
-
-        result = json.loads(llm_output)
-
-        logger.info(f"[analyze_intent] Analyzed: {result}")
-        return result
-
-    except Exception as e:
-        logger.error(f"[analyze_intent] Error: {e}", exc_info=True)
-        # フォールバック
-        return {
-            "primary_need": natural_language_description,
-            "budget_strategy": "balanced",
-            "key_factors": [],
-            "search_keywords": natural_language_description.split()[:3]
-        }
 
 
 @mcp.tool(
@@ -176,49 +78,58 @@ async def analyze_intent(params: Dict[str, Any]) -> Dict[str, Any]:
     }
 )
 async def search_products(params: Dict[str, Any]) -> Dict[str, Any]:
-    """データベースから商品を検索
+    """Meilisearch全文検索で商品を検索（AP2準拠、MCP仕様準拠）
+
+    アーキテクチャ:
+    1. Meilisearchで全文検索（商品名、説明、キーワード、カテゴリ、ブランド）
+    2. 商品IDリストを取得
+    3. Product DBから詳細情報を取得（価格、在庫、メタデータ）
 
     Args:
         params: {"keywords": [...], "limit": 20}
 
     Returns:
         {"products": [...]}
+
+    注意:
+    - keywords が空配列 or [""] の場合: 全商品を返す
+    - keywords が複数の場合: スペース区切りで結合してMeilisearchに渡す（OR検索）
     """
     keywords = params["keywords"]
     limit = params.get("limit", 20)
 
     try:
+        # キーワードを結合して検索クエリ作成
+        if not keywords or (len(keywords) == 1 and keywords[0] == ""):
+            # 空キーワード: 全商品取得
+            query = ""
+            logger.info("[search_products] Empty keywords, fetching all products via Meilisearch")
+        else:
+            # キーワード結合（例: ["かわいい", "グッズ"] → "かわいい グッズ"）
+            query = " ".join(keywords)
+            logger.info(f"[search_products] Searching with query: '{query}'")
+
+        # Step 1: Meilisearchで全文検索
+        product_ids = await search_client.search(query, limit=limit)
+
+        # Step 2: Product DBから詳細情報取得
         async with db_manager.get_session() as session:
-            # 各キーワードで個別に検索し、結果を統合（重複除去）
-            all_products = {}  # product.id -> product
-
-            # キーワードを展開：複合語を分解して個別検索も実施
-            expanded_keywords = []
-            for keyword in keywords:
-                expanded_keywords.append(keyword)
-                # 日本語の複合語を分解（例: 「高品質時計」→「時計」）
-                # 一般的なパターン: 形容詞+名詞
-                if len(keyword) > 2:
-                    # 後ろから2文字以上を追加（名詞部分の可能性が高い）
-                    expanded_keywords.append(keyword[-2:])
-                    if len(keyword) > 3:
-                        expanded_keywords.append(keyword[-3:])
-
-            for keyword in expanded_keywords:
-                products = await ProductCRUD.search(session, keyword, limit=limit)
-                for product in products:
-                    if product.id not in all_products:
-                        all_products[product.id] = product
-
-            # 在庫がある商品のみに絞り込み
-            products_with_stock = [p for p in all_products.values() if p.inventory_count > 0]
-
-            # limit数まで制限
-            products_with_stock = products_with_stock[:limit]
-
-            # AP2準拠: 価格をfloat型（円単位）に変換
             products_list = []
-            for product in products_with_stock:
+
+            if not product_ids:
+                logger.warning(f"[search_products] No products found in Meilisearch for query: '{query}'")
+                # フォールバック: 全商品を返す（ユーザー体験向上）
+                all_products = await ProductCRUD.get_all_with_stock(session, limit=limit)
+                product_ids = [p.id for p in all_products]
+                logger.info(f"[search_products] Fallback to all products: {len(product_ids)} products")
+
+            for product_id in product_ids:
+                product = await ProductCRUD.get_by_id(session, product_id)
+
+                if not product or product.inventory_count <= 0:
+                    # 在庫なしはスキップ
+                    continue
+
                 # metadataがSQLAlchemyのMetaDataオブジェクトの場合は空辞書に
                 if hasattr(product.metadata, '__class__') and product.metadata.__class__.__name__ == 'MetaData':
                     metadata = {}
@@ -239,12 +150,40 @@ async def search_products(params: Dict[str, Any]) -> Dict[str, Any]:
                     "refund_period_days": metadata.get("refund_period_days", 30)
                 })
 
-            logger.info(f"[search_products] Found {len(products_list)} products for keywords: {keywords} (expanded: {expanded_keywords})")
+            logger.info(f"[search_products] Returned {len(products_list)} products for keywords: {keywords}")
             return {"products": products_list}
 
     except Exception as e:
         logger.error(f"[search_products] Error: {e}", exc_info=True)
-        return {"products": []}
+        # エラー時はフォールバック: 全商品を返す
+        try:
+            async with db_manager.get_session() as session:
+                all_products = await ProductCRUD.get_all_with_stock(session, limit=limit)
+                products_list = []
+                for product in all_products:
+                    if hasattr(product.metadata, '__class__') and product.metadata.__class__.__name__ == 'MetaData':
+                        metadata = {}
+                    else:
+                        metadata = product.metadata or {}
+
+                    products_list.append({
+                        "id": product.id,
+                        "sku": product.sku,
+                        "name": product.name,
+                        "description": product.description,
+                        "price_cents": product.price,
+                        "price_jpy": product.price / 100.0,
+                        "inventory_count": product.inventory_count,
+                        "category": metadata.get("category"),
+                        "brand": metadata.get("brand"),
+                        "image_url": metadata.get("image_url"),
+                        "refund_period_days": metadata.get("refund_period_days", 30)
+                    })
+                logger.info(f"[search_products] Fallback returned {len(products_list)} products")
+                return {"products": products_list}
+        except Exception as fallback_error:
+            logger.error(f"[search_products] Fallback also failed: {fallback_error}", exc_info=True)
+            return {"products": []}
 
 
 @mcp.tool(
@@ -289,169 +228,6 @@ async def check_inventory(params: Dict[str, Any]) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"[check_inventory] Error: {e}", exc_info=True)
         return {"inventory": {pid: 0 for pid in product_ids}}
-
-
-@mcp.tool(
-    name="optimize_cart",
-    description="LLMによるカート最適化（3つのプラン生成）",
-    input_schema={
-        "type": "object",
-        "properties": {
-            "products": {
-                "type": "array",
-                "items": {"type": "object"},
-                "description": "検索結果の商品リスト"
-            },
-            "user_preferences": {
-                "type": "object",
-                "description": "ユーザーの嗜好（analyze_intentの結果）"
-            },
-            "max_amount": {
-                "type": "number",
-                "description": "最大金額（円）"
-            }
-        },
-        "required": ["products", "user_preferences"]
-    }
-)
-async def optimize_cart(params: Dict[str, Any]) -> Dict[str, Any]:
-    """LLMによるカート最適化
-
-    Args:
-        params: {"products": [...], "user_preferences": {...}, "max_amount": 3000}
-
-    Returns:
-        {"cart_plans": [{name, description, items: [{product_id, quantity}]}]}
-    """
-    products = params["products"]
-    user_preferences = params["user_preferences"]
-    max_amount = params.get("max_amount")
-
-    if not products:
-        return {"cart_plans": []}
-
-    # Rule-basedフィルタリング
-    filtered_products = []
-    for product in products:
-        if max_amount and product["price_jpy"] > max_amount:
-            continue
-        if product["inventory_count"] <= 0:
-            continue
-        filtered_products.append(product)
-
-    if not filtered_products:
-        return {"cart_plans": []}
-
-    # LLMプロンプト
-    max_amount_text = f"{max_amount}円" if max_amount else "制限なし"
-    prompt = f"""以下の商品リストから、ユーザーのニーズに合った3つのカートプランを提案してください。
-
-ユーザーの嗜好:
-- 主なニーズ: {user_preferences.get('primary_need', '')}
-- 予算戦略: {user_preferences.get('budget_strategy', 'balanced')}
-- 重視ポイント: {user_preferences.get('key_factors', [])}
-- 最大金額: {max_amount_text}
-
-利用可能な商品（JSON）:
-{json.dumps(filtered_products[:10], ensure_ascii=False, indent=2)}
-
-必ず3つのプランを作成してください（予算を考慮）:
-1. **予算内プラン**: 最大金額以内に収める（プラン名に金額を明記）
-2. **おすすめプラン**: 予算ギリギリまで活用してベストな組み合わせ（プラン名に金額を明記）
-3. **プレミアムプラン**: 予算を少し超えても高品質・多機能（プラン名に「予算+XXX円」と明記）
-
-各プランの名前には合計金額を含めてください（例: "予算内プラン (5,200円)"）
-
-以下のJSON形式で出力してください:
-{{
-  "cart_plans": [
-    {{
-      "name": "予算内プラン (5,200円)",
-      "description": "最大金額{max_amount_text}以内に収めた基本プラン",
-      "items": [
-        {{"product_id": 1, "quantity": 1}},
-        {{"product_id": 2, "quantity": 1}}
-      ]
-    }},
-    {{
-      "name": "おすすめプラン (5,850円)",
-      "description": "予算を最大限活用したベストバランスプラン",
-      "items": [
-        {{"product_id": 1, "quantity": 1}},
-        {{"product_id": 3, "quantity": 1}}
-      ]
-    }},
-    {{
-      "name": "プレミアムプラン (予算+800円で6,800円)",
-      "description": "予算を少し超えますが、より高品質な組み合わせ",
-      "items": [
-        {{"product_id": 1, "quantity": 2}},
-        {{"product_id": 3, "quantity": 1}}
-      ]
-    }}
-  ]
-}}
-
-JSONのみを出力し、説明文は含めないでください。"""
-
-    try:
-        messages = [
-            SystemMessage(content="あなたは優秀なショッピングアシスタントです。ユーザーに最適な商品の組み合わせを提案してください。"),
-            HumanMessage(content=prompt)
-        ]
-
-        response = await llm.ainvoke(messages)
-        llm_output = response.content.strip()
-
-        # JSON抽出
-        if "```json" in llm_output:
-            llm_output = llm_output.split("```json")[1].split("```")[0].strip()
-        elif "```" in llm_output:
-            llm_output = llm_output.split("```")[1].split("```")[0].strip()
-
-        result = json.loads(llm_output)
-
-        logger.info(f"[optimize_cart] Generated {len(result.get('cart_plans', []))} plans")
-        return result
-
-    except Exception as e:
-        logger.error(f"[optimize_cart] Error: {e}", exc_info=True)
-        # フォールバック: Rule-basedで複数プラン生成
-        plans = []
-
-        # プラン1: 最安値の商品
-        if len(filtered_products) > 0:
-            sorted_by_price = sorted(filtered_products, key=lambda p: p["price_jpy"])
-            total_price = sum(p["price_jpy"] for p in sorted_by_price[:2])
-            plans.append({
-                "name": f"予算内プラン ({int(total_price):,}円)",
-                "description": "最安値の商品を組み合わせました",
-                "items": [{"product_id": p["id"], "quantity": 1} for p in sorted_by_price[:2]]
-            })
-
-        # プラン2: 全商品を含むプラン
-        if len(filtered_products) > 0:
-            total_price = sum(p["price_jpy"] for p in filtered_products)
-            budget_diff = ""
-            if max_amount and total_price > max_amount:
-                budget_diff = f" (予算+{int(total_price - max_amount):,}円)"
-            plans.append({
-                "name": f"全商品プラン ({int(total_price):,}円{budget_diff})",
-                "description": f"検索結果の全{len(filtered_products)}商品を含むカート",
-                "items": [{"product_id": p["id"], "quantity": 1} for p in filtered_products]
-            })
-
-        # プラン3: 最初の1商品のみ
-        if len(filtered_products) > 0:
-            price = filtered_products[0]["price_jpy"]
-            plans.append({
-                "name": f"シンプルプラン ({int(price):,}円)",
-                "description": "人気商品1点のみ",
-                "items": [{"product_id": filtered_products[0]["id"], "quantity": 1}]
-            })
-
-        logger.info(f"[optimize_cart] Fallback: Generated {len(plans)} rule-based plans")
-        return {"cart_plans": plans}
 
 
 @mcp.tool(
@@ -532,16 +308,17 @@ async def build_cart_mandates(params: Dict[str, Any]) -> Dict[str, Any]:
 
         subtotal += total_price_jpy
 
-    # 税金（10%）
-    tax = round(subtotal * 0.1, 2)
+    # 税金（AP2準拠：環境変数から税率取得）
+    tax = round(subtotal * TAX_RATE, 2)
+    tax_label = f"消費税（{int(TAX_RATE * 100)}%）"
     display_items.append({
-        "label": "消費税（10%）",
+        "label": tax_label,
         "amount": {"value": tax, "currency": "JPY"},
         "refund_period": 0
     })
 
-    # 送料
-    shipping_fee = 500.0 if subtotal < 5000 else 0.0
+    # 送料（AP2準拠：環境変数から取得）
+    shipping_fee = SHIPPING_FEE if subtotal < FREE_SHIPPING_THRESHOLD else 0.0
     if shipping_fee > 0:
         display_items.append({
             "label": "送料",

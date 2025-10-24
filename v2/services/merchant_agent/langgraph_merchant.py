@@ -1,13 +1,23 @@
 """
 v2/services/merchant_agent/langgraph_merchant.py
 
-Merchant Agent用LangGraphエンジン
+Merchant Agent用LangGraphエンジン（AP2完全準拠、MCP仕様準拠）
 
 役割:
-- IntentMandate解析
-- 商品検索とフィルタリング
-- カート最適化（複数プラン生成）
-- AP2準拠CartMandate構築
+- IntentMandate解析（LLM直接実行）
+- 商品検索とフィルタリング（MCPツール）
+- カート最適化・複数プラン生成（LLM直接実行）
+- AP2準拠CartMandate構築（MCPツール + Merchant署名）
+
+アーキテクチャ原則:
+- LLM推論: LangGraph内で直接実行（ChatOpenAI使用）
+- データアクセス: MCPツールを呼び出し（search_products, check_inventory, build_cart_mandates）
+- MCPサーバーはツールのみを提供、LLM推論は行わない
+
+AP2仕様準拠:
+- IntentMandate: natural_language_description, constraints, merchants等
+- CartMandate: PaymentRequest, CartContents, merchant_authorization
+- 価格: float型、円単位（PaymentCurrencyAmount）
 """
 
 import os
@@ -83,15 +93,28 @@ class MerchantAgentState(TypedDict):
 
 
 class MerchantLangGraphAgent:
-    """Merchant Agent用LangGraphエンジン
+    """Merchant Agent用LangGraphエンジン（AP2完全準拠、MCP仕様準拠）
 
-    フロー（全てMCP経由で実行）:
-    1. analyze_intent - IntentMandateをLLMで解析
-    2. search_products - データベースから商品検索
-    3. check_inventory - 在庫確認（MCP経由）
-    4. optimize_cart - LLMによるカート最適化（3プラン生成）
-    5. build_cart_mandates - AP2準拠CartMandate構築
+    アーキテクチャ:
+    - LLM: LangGraph内で直接実行（analyze_intent, optimize_cart）
+    - MCP: データアクセスツールのみ（search_products, check_inventory, build_cart_mandates）
+
+    フロー:
+    1. analyze_intent - IntentMandateをLLMで解析（LLM直接実行）
+    2. search_products - データベースから商品検索（MCPツール）
+    3. check_inventory - 在庫確認（MCPツール）
+    4. optimize_cart - LLMによるカート最適化3プラン生成（LLM直接実行）
+    5. build_cart_mandates - AP2準拠CartMandate構築（MCPツール + Merchant署名）
     6. rank_and_select - トップ3を選択
+
+    MCP仕様準拠:
+    - MCPサーバーはツールのみを提供（LLM推論なし）
+    - LangGraphでLLM推論とツール呼び出しをオーケストレーション
+
+    AP2仕様準拠:
+    - IntentMandate: natural_language_description, constraints, merchants等
+    - CartMandate: PaymentRequest, CartContents, merchant_authorization
+    - 価格: float型、円単位（PaymentCurrencyAmount）
     """
 
     def __init__(self, db_manager, merchant_id: str, merchant_name: str, merchant_url: str, http_client):
@@ -109,12 +132,31 @@ class MerchantLangGraphAgent:
         self.merchant_url = merchant_url
         self.http_client = http_client
 
-        # MCP Client初期化（MCPサーバー経由でLLM処理）
+        # LLM初期化（LangGraph内で直接実行）
+        # DMR (Docker Model Runner) - OpenAI互換APIエンドポイント
+        dmr_api_url = os.getenv("DMR_API_URL")
+        dmr_model = os.getenv("DMR_MODEL", "ai/qwen3")
+        dmr_api_key = os.getenv("DMR_API_KEY", "none")
+
+        if not dmr_api_url:
+            logger.warning("[MerchantLangGraphAgent] DMR_API_URL not set, LLM features disabled")
+            self.llm = None
+        else:
+            # ChatOpenAIをDMRエンドポイントに向ける（OpenAI互換API）
+            self.llm = ChatOpenAI(
+                model=dmr_model,
+                temperature=0.7,
+                openai_api_key=dmr_api_key,  # DMRは認証不要だが、ChatOpenAIは必須なので"none"を渡す
+                base_url=dmr_api_url  # DMRエンドポイント
+            )
+            logger.info(f"[MerchantLangGraphAgent] LLM initialized with DMR: {dmr_api_url}, model: {dmr_model}")
+
+        # MCP Client初期化（データアクセスツールのみ）
         from v2.common.mcp_client import MCPClient
         mcp_url = os.getenv("MERCHANT_MCP_URL", "http://merchant_agent_mcp:8011")
         self.mcp_client = MCPClient(
             base_url=mcp_url,
-            timeout=600.0,  # LLM応答遅延対応: 600秒（10分）タイムアウト
+            timeout=60.0,  # データアクセスのみ: 60秒タイムアウト
             http_client=http_client
         )
         self.mcp_initialized = False
@@ -122,7 +164,7 @@ class MerchantLangGraphAgent:
         # グラフ構築
         self.graph = self._build_graph()
 
-        logger.info(f"[MerchantLangGraphAgent] Initialized with MCP: {mcp_url}")
+        logger.info(f"[MerchantLangGraphAgent] Initialized with LLM: {self.llm.model_name if self.llm else 'disabled'}, MCP: {mcp_url}")
 
     def _build_graph(self) -> CompiledStateGraph:
         """LangGraphのグラフを構築"""
@@ -148,7 +190,7 @@ class MerchantLangGraphAgent:
         return workflow.compile()
 
     async def _analyze_intent(self, state: MerchantAgentState) -> MerchantAgentState:
-        """IntentMandateを解析してユーザー嗜好を抽出（MCP経由）
+        """IntentMandateを解析してユーザー嗜好を抽出（LLM直接実行）
 
         AP2準拠のIntentMandate構造:
         - natural_language_description: ユーザーの意図
@@ -156,7 +198,7 @@ class MerchantLangGraphAgent:
         - skus: 特定のSKUリスト（オプション）
         - requires_refundability: 返金可能性要件（オプション）
         """
-        # MCP初期化（初回のみ）
+        # MCP初期化（初回のみ、データアクセスツール用）
         if not self.mcp_initialized:
             try:
                 await self.mcp_client.initialize()
@@ -164,40 +206,109 @@ class MerchantLangGraphAgent:
                 logger.info("[analyze_intent] MCP client initialized")
             except Exception as e:
                 logger.error(f"[analyze_intent] MCP initialization failed: {e}")
-                # フォールバック処理
-                intent_mandate = state["intent_mandate"]
-                natural_language_description = intent_mandate.get("natural_language_description", intent_mandate.get("intent", ""))
-                state["user_preferences"] = {
-                    "primary_need": natural_language_description,
-                    "budget_strategy": "balanced",
-                    "key_factors": [],
-                    "search_keywords": natural_language_description.split()[:3]
-                }
-                return state
 
-        # MCP経由でIntent解析（AP2準拠）
         intent_mandate = state["intent_mandate"]
+        natural_language_description = intent_mandate.get("natural_language_description", intent_mandate.get("intent", ""))
+
+        # LLMが無効な場合はフォールバック（AP2準拠）
+        if not self.llm:
+            # natural_language_descriptionからキーワード抽出
+            # 簡易的な形態素解析: カッコや助詞を除去し、名詞的な単語を抽出
+            keywords = self._extract_keywords_simple(natural_language_description)
+
+            # 汎用的なキーワード（「グッズ」「商品」「アイテム」等）を追加
+            # データベースの商品名に含まれる可能性が高い汎用語を補完
+            generic_keywords = []
+            desc_lower = natural_language_description.lower()
+
+            # カテゴリヒント
+            if any(word in desc_lower for word in ['グッズ', 'ぐっず', '商品', 'アイテム', '製品']):
+                generic_keywords.extend(['グッズ', '商品'])
+            if any(word in desc_lower for word in ['tシャツ', 'シャツ', '服', '衣類']):
+                generic_keywords.extend(['tシャツ', 'シャツ'])
+            if any(word in desc_lower for word in ['マグカップ', 'マグ', 'カップ']):
+                generic_keywords.append('マグ')
+
+            # 汎用キーワードがあれば優先、なければ空文字列で全商品検索
+            if generic_keywords:
+                keywords = generic_keywords
+            elif not keywords:
+                keywords = [""]  # 空文字列で全商品検索
+
+            state["user_preferences"] = {
+                "primary_need": natural_language_description,
+                "budget_strategy": "balanced",
+                "key_factors": ["品質", "価格"],
+                "search_keywords": keywords
+            }
+            state["llm_reasoning"] = f"LLM disabled, using fallback keywords: {keywords}"
+            logger.info(f"[analyze_intent] Fallback keywords extracted: {keywords} from '{natural_language_description}'")
+            return state
+
+        # LLMプロンプト構築（AP2準拠、日本語商品対応）
+        system_prompt = """あなたはMerchant Agentのインテント分析エキスパートです。
+ユーザーのIntentMandate（購入意図）を解析し、以下の情報を抽出してください:
+
+1. primary_need: ユーザーの主な要求（1文で簡潔に、日本語）
+2. budget_strategy: 予算戦略（"low"=最安値優先、"balanced"=バランス型、"premium"=高品質優先）
+3. key_factors: 重視する要素のリスト（例: ["品質", "価格", "ブランド", "デザイン"]）
+4. search_keywords: 商品検索用のキーワードリスト（日本語、3-5個、商品名に含まれそうな単語）
+
+**重要**:
+- search_keywordsは必ず日本語で返してください（例: ["かわいい", "グッズ", "Tシャツ"]）
+- 商品データベースは日本語の商品名（例: "むぎぼーTシャツ", "むぎぼーマグカップ"）なので、日本語キーワードが必須です
+
+必ずJSON形式で返答してください。"""
+
+        user_prompt = f"""以下のIntentMandateを分析してください:
+
+自然言語説明: {natural_language_description}
+制約条件: {json.dumps(intent_mandate.get('constraints', {}), ensure_ascii=False)}
+
+JSON形式で返答してください（search_keywordsは必ず日本語）:
+{{
+  "primary_need": "...",
+  "budget_strategy": "low/balanced/premium",
+  "key_factors": ["...", "..."],
+  "search_keywords": ["...", "...", "..."]
+}}"""
 
         try:
-            # MCPツール呼び出し
-            preferences = await self.mcp_client.call_tool("analyze_intent", {
-                "intent_mandate": intent_mandate
-            })
+            # LangfuseハンドラーをLLM呼び出しに渡す
+            llm_config = {}
+            if LANGFUSE_ENABLED and langfuse_handler:
+                llm_config["callbacks"] = [langfuse_handler]
+
+            # LLM呼び出し
+            messages = [
+                SystemMessage(content=system_prompt),
+                HumanMessage(content=user_prompt)
+            ]
+            response = await self.llm.ainvoke(messages, config=llm_config)
+            response_text = response.content
+
+            # JSON抽出
+            preferences = self._parse_json_from_llm(response_text)
+
+            # 必須フィールドのバリデーション
+            if not preferences.get("search_keywords"):
+                preferences["search_keywords"] = [natural_language_description] if natural_language_description else []
 
             state["user_preferences"] = preferences
-            state["llm_reasoning"] = f"Intent分析完了（MCP経由）: {preferences.get('primary_need', '')}"
+            state["llm_reasoning"] = f"Intent分析完了（LLM直接実行）: {preferences.get('primary_need', '')}"
 
-            logger.info(f"[analyze_intent] MCP result: {preferences}")
+            logger.info(f"[analyze_intent] LLM result: {preferences}")
+
         except Exception as e:
-            logger.error(f"[analyze_intent] MCP error: {e}")
+            logger.error(f"[analyze_intent] LLM error: {e}", exc_info=True)
             # フォールバック（AP2準拠）
-            natural_language_description = intent_mandate.get("natural_language_description", intent_mandate.get("intent", ""))
             state["user_preferences"] = {
                 "primary_need": natural_language_description,
                 "budget_strategy": "balanced",
                 "key_factors": ["品質", "価格"],
                 "search_keywords": [natural_language_description] if natural_language_description else []
             }
+            state["llm_reasoning"] = f"LLM error, using fallback: {str(e)}"
 
         return state
 
@@ -214,7 +325,19 @@ class MerchantLangGraphAgent:
         # キーワード抽出（AP2準拠）
         search_keywords = preferences.get("search_keywords", [])
 
+        # Langfuseトレーシング（MCPツール呼び出し）
+        trace_id = state.get("session_id", "unknown")
+        span = None  # スパン初期化
+
         try:
+            # Langfuseスパン開始（可観測性向上）
+            if LANGFUSE_ENABLED and langfuse_client:
+                span = langfuse_client.start_span(
+                    name="mcp_search_products",
+                    input={"keywords": search_keywords, "limit": 20},
+                    metadata={"tool": "search_products", "mcp_server": "merchant_agent_mcp", "session_id": trace_id}
+                )
+
             # MCP経由で商品検索
             result = await self.mcp_client.call_tool("search_products", {
                 "keywords": search_keywords,
@@ -225,9 +348,19 @@ class MerchantLangGraphAgent:
             state["available_products"] = products
             logger.info(f"[search_products] MCP returned {len(products)} products")
 
+            # Langfuseスパン終了（成功時）
+            if span:
+                span.update(output={"products_count": len(products), "products": products[:5]})  # 最初の5件のみ記録
+                span.end()
+
         except Exception as e:
             logger.error(f"[search_products] MCP error: {e}")
             state["available_products"] = []
+
+            # Langfuseスパン終了（エラー時）
+            if span:
+                span.update(level="ERROR", status_message=str(e))
+                span.end()
 
         return state
 
@@ -238,7 +371,19 @@ class MerchantLangGraphAgent:
         # 商品IDリスト抽出
         product_ids = [p["id"] for p in products]
 
+        # Langfuseトレーシング（MCPツール呼び出し）
+        trace_id = state.get("session_id", "unknown")
+        span = None  # スパン初期化
+
         try:
+            # Langfuseスパン開始（可観測性向上）
+            if LANGFUSE_ENABLED and langfuse_client:
+                span = langfuse_client.start_span(
+                    name="mcp_check_inventory",
+                    input={"product_ids": product_ids},
+                    metadata={"tool": "check_inventory", "mcp_server": "merchant_agent_mcp", "session_id": trace_id}
+                )
+
             # MCP経由で在庫確認
             result = await self.mcp_client.call_tool("check_inventory", {
                 "product_ids": product_ids
@@ -248,6 +393,11 @@ class MerchantLangGraphAgent:
             state["inventory_status"] = inventory_status
             logger.info(f"[check_inventory] MCP checked {len(inventory_status)} products")
 
+            # Langfuseスパン終了（成功時）
+            if span:
+                span.update(output={"inventory_status": inventory_status})
+                span.end()
+
         except Exception as e:
             logger.error(f"[check_inventory] MCP error: {e}")
             # フォールバック: 商品データから在庫情報取得
@@ -256,93 +406,193 @@ class MerchantLangGraphAgent:
                 inventory_status[product["id"]] = product.get("stock", 0)
             state["inventory_status"] = inventory_status
 
+            # Langfuseスパン終了（エラー時）
+            if span:
+                span.update(level="ERROR", status_message=str(e), output={"fallback_inventory": inventory_status})
+                span.end()
+
         return state
 
     async def _optimize_cart(self, state: MerchantAgentState) -> MerchantAgentState:
-        """LLMによるカート最適化（MCP経由） - 3プラン生成（AP2準拠）
-
-        MCPサーバー経由でLLMに深く思考させユーザーに最適なカートプランを提案
-        十分な時間（180秒×2回リトライ）を確保
-        """
+        """LLMによるカート最適化（LLM直接実行） - 3プラン生成（AP2準拠）"""
         preferences = state["user_preferences"]
         products = state["available_products"]
+        intent_mandate = state["intent_mandate"]
 
         if not products:
             state["cart_plans"] = []
             logger.warning("[optimize_cart] No products available")
             return state
 
-        # AP2準拠: 予算制限を計算（商品価格帯から推定）
-        if products:
-            avg_price = sum(p.get("price_jpy", 0) for p in products) / len(products)
-            max_amount = avg_price * 3
-        else:
-            max_amount = None
+        # AP2準拠: IntentMandateから予算制限を取得
+        constraints = intent_mandate.get("constraints", {})
+        max_amount = constraints.get("max_amount", {}).get("value") if constraints.get("max_amount") else None
 
-        try:
-            # MCP経由でカート最適化
-            result = await self.mcp_client.call_tool("optimize_cart", {
-                "products": products,
-                "user_preferences": preferences,
-                "max_amount": max_amount
+        # LLMが無効な場合はRule-basedフォールバック
+        if not self.llm:
+            plans = self._create_rule_based_plans(products, max_amount)
+            state["cart_plans"] = plans
+            state["llm_reasoning"] = "LLM disabled, using rule-based plans"
+            logger.info(f"[optimize_cart] Fallback: Created {len(plans)} rule-based plans")
+            return state
+
+        # LLMプロンプト構築（AP2準拠）
+        system_prompt = """あなたはMerchant Agentのカート最適化エキスパートです。
+ユーザーの購入意図と商品リストから、最適なカートプラン3つを提案してください。
+
+各プランには以下を含めてください:
+1. name: プラン名（予算や特徴を含む、例: "予算内プラン (5,000円)"）
+2. description: プランの説明（1-2文）
+3. items: 商品リスト [{"product_id": 123, "quantity": 1}, ...]
+
+プラン設計のガイドライン:
+- プラン1: 予算内で最もコスパが良いプラン
+- プラン2: 予算を少し超えても高品質なプラン
+- プラン3: シンプルに1-2商品のみのプラン
+
+必ずJSON配列形式で返答してください。"""
+
+        # 商品リストを簡潔に要約（トークン節約）
+        products_summary = []
+        for p in products[:20]:  # 最大20商品まで
+            products_summary.append({
+                "id": p["id"],
+                "name": p["name"],
+                "price_jpy": p["price_jpy"],
+                "category": p.get("category", ""),
+                "inventory": p.get("inventory_count", 0)
             })
 
-            cart_plans = result.get("cart_plans", [])
-            state["cart_plans"] = cart_plans
-            state["llm_reasoning"] = "Cart optimization completed via MCP"
+        user_prompt = f"""以下の条件でカートプランを3つ提案してください:
 
-            logger.info(f"[optimize_cart] MCP generated {len(cart_plans)} cart plans")
+ユーザーの要求: {preferences.get('primary_need', '')}
+予算戦略: {preferences.get('budget_strategy', 'balanced')}
+重視要素: {', '.join(preferences.get('key_factors', []))}
+予算上限: {f"{max_amount:,.0f}円" if max_amount else "指定なし"}
+
+商品リスト（{len(products_summary)}件）:
+{json.dumps(products_summary, ensure_ascii=False, indent=2)}
+
+JSON配列形式で返答してください:
+[
+  {{
+    "name": "プラン名（価格含む）",
+    "description": "プラン説明",
+    "items": [{{"product_id": 123, "quantity": 1}}]
+  }},
+  ...
+]"""
+
+        try:
+            # LangfuseハンドラーをLLM呼び出しに渡す
+            llm_config = {}
+            if LANGFUSE_ENABLED and langfuse_handler:
+                llm_config["callbacks"] = [langfuse_handler]
+
+            # LLM呼び出し
+            messages = [
+                SystemMessage(content=system_prompt),
+                HumanMessage(content=user_prompt)
+            ]
+            response = await self.llm.ainvoke(messages, config=llm_config)
+            response_text = response.content
+
+            # JSON抽出
+            cart_plans = self._parse_json_from_llm(response_text)
+
+            # リストでない場合はリストにラップ
+            if isinstance(cart_plans, dict):
+                cart_plans = [cart_plans]
+            elif not isinstance(cart_plans, list):
+                raise ValueError(f"Invalid cart_plans format: {type(cart_plans)}")
+
+            # 各プランに価格情報を追加
+            for plan in cart_plans:
+                total_price = sum(
+                    next((p["price_jpy"] for p in products if p["id"] == item["product_id"]), 0) * item.get("quantity", 1)
+                    for item in plan.get("items", [])
+                )
+                # nameに価格が含まれていなければ追加
+                if "円" not in plan.get("name", ""):
+                    plan["name"] = f"{plan.get('name', 'プラン')} ({int(total_price):,}円)"
+
+            state["cart_plans"] = cart_plans[:3]  # 最大3プラン
+            state["llm_reasoning"] = f"Cart optimization completed via LLM: {len(cart_plans)} plans"
+
+            logger.info(f"[optimize_cart] LLM generated {len(cart_plans)} cart plans")
 
         except Exception as e:
-            logger.error(f"[optimize_cart] MCP error: {e}")
-            # フォールバック: Rule-basedで複数プラン生成（タイムアウト時でもユーザーに選択肢を提供）
-            plans = []
-
-            if products:
-                # プラン1: 最安値の商品組み合わせ
-                sorted_by_price = sorted(products, key=lambda p: p.get("price_jpy", 0))
-                total_price = sum(p.get("price_jpy", 0) for p in sorted_by_price[:2])
-                plans.append({
-                    "name": f"予算内プラン ({int(total_price):,}円)",
-                    "description": "最安値の商品を組み合わせました",
-                    "items": [{"product_id": p["id"], "quantity": 1} for p in sorted_by_price[:2]]
-                })
-
-                # プラン2: 全商品を含むプラン
-                total_price = sum(p.get("price_jpy", 0) for p in products)
-                budget_diff = ""
-                if max_amount and total_price > max_amount:
-                    budget_diff = f" (予算+{int(total_price - max_amount):,}円)"
-                plans.append({
-                    "name": f"全商品プラン ({int(total_price):,}円{budget_diff})",
-                    "description": f"検索結果の全{len(products)}商品を含むカート",
-                    "items": [{"product_id": p["id"], "quantity": 1} for p in products]
-                })
-
-                # プラン3: 最初の1商品のみ
-                price = products[0].get("price_jpy", 0)
-                plans.append({
-                    "name": f"シンプルプラン ({int(price):,}円)",
-                    "description": "人気商品1点のみ",
-                    "items": [{"product_id": products[0]["id"], "quantity": 1}]
-                })
-
-                state["cart_plans"] = plans
-                logger.info(f"[optimize_cart] Fallback: Created {len(plans)} rule-based plans")
-            else:
-                state["cart_plans"] = []
+            logger.error(f"[optimize_cart] LLM error: {e}", exc_info=True)
+            # フォールバック: Rule-basedで複数プラン生成
+            plans = self._create_rule_based_plans(products, max_amount)
+            state["cart_plans"] = plans
+            state["llm_reasoning"] = f"LLM error, using rule-based fallback: {str(e)}"
+            logger.info(f"[optimize_cart] Fallback: Created {len(plans)} rule-based plans")
 
         return state
+
+    def _create_rule_based_plans(self, products: List[Dict[str, Any]], max_amount: Optional[float]) -> List[Dict[str, Any]]:
+        """ルールベースでカートプランを生成（フォールバック用）"""
+        plans = []
+
+        if not products:
+            return plans
+
+        # プラン1: 最安値の商品組み合わせ
+        sorted_by_price = sorted(products, key=lambda p: p.get("price_jpy", 0))
+        top_products = sorted_by_price[:2]
+        total_price = sum(p.get("price_jpy", 0) for p in top_products)
+        plans.append({
+            "name": f"予算内プラン ({int(total_price):,}円)",
+            "description": "最安値の商品を組み合わせました",
+            "items": [{"product_id": p["id"], "quantity": 1} for p in top_products]
+        })
+
+        # プラン2: バランス型（中間価格の商品2-3個）
+        if len(products) >= 3:
+            mid_index = len(products) // 2
+            mid_products = products[mid_index:mid_index+2]
+            total_price = sum(p.get("price_jpy", 0) for p in mid_products)
+            budget_diff = ""
+            if max_amount and total_price > max_amount:
+                budget_diff = f" (予算+{int(total_price - max_amount):,}円)"
+            plans.append({
+                "name": f"バランスプラン ({int(total_price):,}円{budget_diff})",
+                "description": "品質と価格のバランスを重視",
+                "items": [{"product_id": p["id"], "quantity": 1} for p in mid_products]
+            })
+
+        # プラン3: シンプルプラン（最初の1商品のみ）
+        price = products[0].get("price_jpy", 0)
+        plans.append({
+            "name": f"シンプルプラン ({int(price):,}円)",
+            "description": "人気商品1点のみ",
+            "items": [{"product_id": products[0]["id"], "quantity": 1}]
+        })
+
+        return plans
 
     async def _build_cart_mandates(self, state: MerchantAgentState) -> MerchantAgentState:
         """AP2準拠のCartMandateを構築（MCP経由でベース作成、Merchant署名は別途）"""
         cart_plans = state["cart_plans"]
         products = state["available_products"]
 
+        # Langfuseトレーシング（MCPツール呼び出し）
+        trace_id = state.get("session_id", "unknown")
+
         cart_candidates = []
 
         for plan in cart_plans:
+            span = None
             try:
+                # Langfuseスパン開始（可観測性向上）
+                if LANGFUSE_ENABLED and langfuse_client:
+                    span = langfuse_client.start_span(
+                        name="mcp_build_cart_mandates",
+                        input={"cart_plan": plan, "products_count": len(products)},
+                        metadata={"tool": "build_cart_mandates", "mcp_server": "merchant_agent_mcp", "plan_name": plan.get("name"), "session_id": trace_id}
+                    )
+
                 # MCP経由でCartMandate構築（未署名）
                 result = await self.mcp_client.call_tool("build_cart_mandates", {
                     "cart_plan": plan,
@@ -384,8 +634,19 @@ class MerchantLangGraphAgent:
 
                 logger.info(f"[build_cart_mandates] Built CartMandate for plan: {plan.get('name')}")
 
+                # Langfuseスパン終了（成功時）
+                if span:
+                    span.update(output={"artifact_id": artifact["artifactId"], "plan_name": plan.get("name")})
+                    span.end()
+
             except Exception as e:
                 logger.error(f"[build_cart_mandates] Failed for plan {plan.get('name')}: {e}")
+
+                # Langfuseスパン終了（エラー時）
+                if span:
+                    span.update(level="ERROR", status_message=str(e))
+                    span.end()
+
                 continue
 
         state["cart_candidates"] = cart_candidates
@@ -613,6 +874,55 @@ class MerchantLangGraphAgent:
         logger.info(f"[rank_and_select] Selected top {len(selected)} carts")
 
         return state
+
+    def _extract_keywords_simple(self, text: str) -> List[str]:
+        """自然言語から検索キーワードを抽出（簡易版）
+
+        LLM無効時のフォールバック用。カッコや助詞を除去し、名詞的な単語を抽出。
+
+        Args:
+            text: 自然言語テキスト（例: "かわいいグッズを購入したい（価格・カテゴリ・ブランド等の制約なし）"）
+
+        Returns:
+            検索キーワードリスト（例: ["グッズ"]）
+        """
+        import re
+
+        if not text:
+            return []
+
+        # カッコ内を削除
+        text = re.sub(r'[（(].*?[）)]', '', text)
+
+        # 助詞・助動詞を除去（日本語の一般的なパターン）
+        # 語末の助詞のみ除去（語中の文字を誤削除しないように）
+        # 例: 「かわいいグッズを」→「かわいいグッズ」（「か」は残す）
+        remove_particles = ['を', 'が', 'に', 'で', 'と', 'から', 'まで', 'の', 'は', 'も', 'や', 'へ', 'より']
+        for particle in remove_particles:
+            text = text.replace(particle, ' ')
+
+        # 動詞的な語尾を除去（"たい"、"した"、"する"等）
+        text = re.sub(r'(したい|した|する|ない|なる|れる|られる|せる|させる)(?=[、。\s]|$)', '', text)
+
+        # 記号・句読点を除去
+        text = re.sub(r'[、。！？!?　\s]+', ' ', text)
+
+        # 単語分割（空白区切り）
+        words = [w.strip() for w in text.split() if w.strip()]
+
+        # 2文字以上の単語のみ抽出（「を」「が」等の1文字は除外）
+        keywords = [w for w in words if len(w) >= 2]
+
+        # 汎用的な単語（「グッズ」「商品」「アイテム」等）を優先
+        # データベースに「むぎぼー」商品しかない場合でも、空文字列で全商品検索できるようにする
+        if not keywords:
+            # キーワードが抽出できない場合は空文字列で全商品検索
+            return [""]
+
+        # 重複除去
+        keywords = list(dict.fromkeys(keywords))
+
+        return keywords
 
     def _parse_json_from_llm(self, text: str) -> Any:
         """LLMの応答からJSON部分を抽出してパース"""

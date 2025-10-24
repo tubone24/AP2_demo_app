@@ -246,11 +246,29 @@ services:
       - payment_processor
     restart: unless-stopped
 
+  # Meilisearch - 全文検索エンジン（商品検索用）
+  meilisearch:
+    image: getmeili/meilisearch:v1.11
+    container_name: ap2_meilisearch
+    ports:
+      - "7700:7700"
+    environment:
+      - MEILI_ENV=development
+      - MEILI_MASTER_KEY=masterKey123
+      - MEILI_NO_ANALYTICS=true
+    volumes:
+      - meilisearch_data:/meili_data
+    networks:
+      - ap2_network
+    restart: unless-stopped
+
 networks:
   ap2_network:
     driver: bridge
 
 volumes:
+  meilisearch_data:
+    driver: local
   keys:
     driver: local
     driver_opts:
