@@ -435,6 +435,13 @@ class ProductCRUD:
         return list(result.scalars().all())
 
     @staticmethod
+    async def get_all_with_stock(session: AsyncSession, limit: int = 100) -> List[Product]:
+        """在庫がある商品のみ取得（AP2準拠）"""
+        stmt = select(Product).where(Product.inventory_count > 0).limit(limit)
+        result = await session.execute(stmt)
+        return list(result.scalars().all())
+
+    @staticmethod
     async def delete(session: AsyncSession, product_id: str) -> bool:
         """商品削除"""
         product = await ProductCRUD.get_by_id(session, product_id)
