@@ -135,7 +135,10 @@ class LangGraphIntentAgent:
 
 必須フィールド:
 - natural_language_description: ユーザーの意図の自然言語説明（1-2文）
-  ★重要: 最大金額、カテゴリー、ブランド、その他すべての制約を必ず含めてください
+  ★★★最重要★★★: ユーザーが指定した最大金額制約を**必ず**含めてください
+  - 「〜を〜円以内で購入したい」のように、金額制約を明示的に記載
+  - 金額が指定されていない場合は「予算制約なし」と記載
+  - カテゴリー、ブランド、その他すべての制約も含める
 
 - user_cart_confirmation_required: カート確認が必要か（通常はtrue）
 
@@ -145,6 +148,8 @@ class LangGraphIntentAgent:
 - requires_refundability: 返金可能性が必要か（デフォルトfalse）
 
 出力例:
+入力: 「赤いバスケットボールシューズがほしい。3万円以内」
+出力:
 {
   "natural_language_description": "赤いバスケットボールシューズを3万円以内で購入したい",
   "user_cart_confirmation_required": true,
@@ -153,8 +158,20 @@ class LangGraphIntentAgent:
   "requires_refundability": false
 }
 
+入力: 「かわいいグッズがほしい。5000円以内」
+出力:
 {
-  "natural_language_description": "時計とステッカーを6000円以内で購入したい",
+  "natural_language_description": "かわいいグッズを5000円以内で購入したい",
+  "user_cart_confirmation_required": true,
+  "merchants": null,
+  "skus": null,
+  "requires_refundability": false
+}
+
+入力: 「時計とステッカーがほしい」
+出力:
+{
+  "natural_language_description": "時計とステッカーを購入したい（予算制約なし）",
   "user_cart_confirmation_required": true,
   "merchants": null,
   "skus": null,

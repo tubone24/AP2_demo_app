@@ -78,7 +78,8 @@ class ShoppingAgent(BaseAgent):
         self.db_manager = DatabaseManager(database_url=database_url)
 
         # HTTPクライアント（他エージェントとの通信用）
-        self.http_client = httpx.AsyncClient(timeout=30.0)
+        # タイムアウト600秒: DMR LLM処理が長時間かかる場合に対応
+        self.http_client = httpx.AsyncClient(timeout=600.0)
 
         # エージェントエンドポイント（Docker Compose環境想定）
         self.merchant_agent_url = "http://merchant_agent:8001"
@@ -129,6 +130,15 @@ class ShoppingAgent(BaseAgent):
         except Exception as e:
             logger.warning(f"[{self.agent_name}] LangGraph conversation agent initialization failed (will use fallback): {e}")
             self.conversation_agent = None
+
+        # LangGraph Shoppingエンジン（フルフロー：Intent→Cart→Payment）
+        try:
+            from v2.services.shopping_agent.langgraph_shopping import get_langgraph_shopping_agent
+            self.langgraph_shopping_agent = get_langgraph_shopping_agent(self.http_client)
+            logger.info(f"[{self.agent_name}] LangGraph shopping agent initialized successfully")
+        except Exception as e:
+            logger.warning(f"[{self.agent_name}] LangGraph shopping agent initialization failed: {e}")
+            self.langgraph_shopping_agent = None
 
         # 起動イベントハンドラー登録
         @self.app.on_event("startup")
@@ -1652,71 +1662,135 @@ class ShoppingAgent(BaseAgent):
             # AP2 ContactAddress形式でセッションに保存
             session["shipping_address"] = contact_address
 
-            # IntentMandate生成（LangGraphで収集した情報を使用）
-            intent_mandate = await self._create_intent_mandate(
-                session["intent"],
-                session
-            )
-            session["intent_mandate"] = intent_mandate
-
-            # IntentMandateをDB永続化
-            await self._persist_intent_mandate(intent_mandate, session)
-
             yield StreamEvent(
                 type="agent_text",
                 content=f"配送先を設定しました：{shipping_address['recipient']} 様"
             )
             await asyncio.sleep(0.3)
 
-            # AP2仕様準拠：配送先が確定したので、Merchant Agentにカート候補を依頼
-            yield StreamEvent(
-                type="agent_text",
-                content="Merchant Agentにカート候補を依頼中..."
-            )
-            await asyncio.sleep(0.5)
-
-            # Merchant AgentにIntentMandateと配送先を送信してカート候補を取得（A2A通信）
-            try:
-                cart_candidates = await self._search_products_via_merchant_agent(
-                    session["intent_mandate"],
-                    session  # intent_message_idと shipping_addressを参照
+            # LangGraph Shoppingエンジンを使用（Intent→Cart候補取得）
+            if self.langgraph_shopping_agent:
+                yield StreamEvent(
+                    type="agent_text",
+                    content="AI分析でカート候補を作成中..."
                 )
+                await asyncio.sleep(0.5)
 
-                if not cart_candidates:
+                try:
+                    # LangGraphエンジンで処理（Intent抽出→Merchant Agent呼び出し→カート分析）
+                    result = await self.langgraph_shopping_agent.process_intent_to_carts(
+                        user_prompt=session["intent"],
+                        session_id=session_id,
+                        user_id=session.get("user_id", "user_demo_001"),
+                        shipping_address=contact_address
+                    )
+
+                    if result.get("error"):
+                        yield StreamEvent(
+                            type="agent_text",
+                            content=f"申し訳ありません。エラーが発生しました: {result['error']}"
+                        )
+                        return
+
+                    intent_mandate = result.get("intent_mandate")
+                    cart_candidates = result.get("cart_candidates", [])
+
+                    if not intent_mandate:
+                        yield StreamEvent(
+                            type="agent_text",
+                            content="申し訳ありません。インテント抽出に失敗しました。"
+                        )
+                        return
+
+                    session["intent_mandate"] = intent_mandate
+                    await self._persist_intent_mandate(intent_mandate, session)
+
+                    logger.info(f"[chat_stream] LangGraph処理完了: {len(cart_candidates)} carts")
+
+                except Exception as e:
+                    logger.error(f"[chat_stream] LangGraph処理エラー: {e}", exc_info=True)
                     yield StreamEvent(
                         type="agent_text",
-                        content="申し訳ありません。条件に合うカート候補が見つかりませんでした。"
+                        content=f"申し訳ありません。処理中にエラーが発生しました: {str(e)}"
                     )
-                    session["step"] = "error"
+                    return
+            else:
+                # フォールバック: 既存の処理
+                intent_mandate = await self._create_intent_mandate(session["intent"], session)
+                session["intent_mandate"] = intent_mandate
+                await self._persist_intent_mandate(intent_mandate, session)
+
+                yield StreamEvent(
+                    type="agent_text",
+                    content="Merchant Agentにカート候補を依頼中..."
+                )
+                await asyncio.sleep(0.5)
+
+                try:
+                    cart_candidates = await self._search_products_via_merchant_agent(
+                        session["intent_mandate"],
+                        session
+                    )
+                except Exception as e:
+                    logger.error(f"[chat_stream] Merchant Agent呼び出しエラー: {e}", exc_info=True)
+                    yield StreamEvent(
+                        type="agent_text",
+                        content=f"申し訳ありません。カート候補の取得に失敗しました: {str(e)}"
+                    )
                     return
 
-                logger.info(f"[ShoppingAgent] Received {len(cart_candidates)} signed cart candidates from Merchant Agent")
-
-                # カート候補をセッションに保存
-                session["cart_candidates"] = cart_candidates
-
-                # AP2/A2A仕様準拠：複数のカート候補をカルーセル表示
-                yield StreamEvent(
-                    type="cart_options",
-                    items=cart_candidates
-                )
-
+            if not cart_candidates:
                 yield StreamEvent(
                     type="agent_text",
-                    content=f"{len(cart_candidates)}つのカート候補が見つかりました。お好みのカートを選択してください。"
-                )
-
-                session["step"] = "cart_selection"
-                return
-
-            except Exception as e:
-                logger.error(f"[intent_complete_ask_shipping] Cart candidates request failed: {e}", exc_info=True)
-                yield StreamEvent(
-                    type="agent_text",
-                    content=f"申し訳ありません。カート候補の取得に失敗しました: {str(e)}"
+                    content="申し訳ありません。条件に合うカート候補が見つかりませんでした。"
                 )
                 session["step"] = "error"
                 return
+
+            logger.info(f"[ShoppingAgent] Received {len(cart_candidates)} signed cart candidates from Merchant Agent")
+
+            # AP2/A2A仕様準拠: Artifact構造をフロントエンド用にCartCandidate形式に変換
+            # Artifact構造: {"artifactId": "...", "name": "...", "parts": [{"data": {"ap2.mandates.CartMandate": {...}}}]}
+            logger.info(f"[ShoppingAgent] First cart structure sample: {json.dumps(cart_candidates[0] if cart_candidates else {}, ensure_ascii=False)[:500]}")
+
+            frontend_cart_candidates = []
+            for i, cart_artifact in enumerate(cart_candidates):
+                try:
+                    # Artifact構造からCartMandateを抽出
+                    cart_mandate = cart_artifact["parts"][0]["data"]["ap2.mandates.CartMandate"]
+
+                    # フロントエンド用のCartCandidate形式に変換
+                    cart_candidate = {
+                        "artifact_id": cart_artifact.get("artifactId", f"artifact_{i}"),
+                        "artifact_name": cart_artifact.get("name", f"カート{i+1}"),
+                        "cart_mandate": cart_mandate
+                    }
+                    frontend_cart_candidates.append(cart_candidate)
+                    logger.info(f"[ShoppingAgent] Successfully converted Artifact {i} to CartCandidate")
+                except (KeyError, IndexError) as e:
+                    logger.error(f"[ShoppingAgent] Failed to extract CartMandate {i} from Artifact: {e}, keys: {list(cart_artifact.keys()) if isinstance(cart_artifact, dict) else 'not a dict'}")
+
+            logger.info(f"[ShoppingAgent] Converted {len(frontend_cart_candidates)} carts to frontend format")
+
+            # カート候補をセッションに保存
+            # - cart_candidates_raw: 元のArtifact構造（A2A準拠、署名検証用）
+            # - cart_candidates: CartCandidate形式（カート選択処理用）
+            session["cart_candidates_raw"] = cart_candidates
+            session["cart_candidates"] = frontend_cart_candidates
+
+            # フロントエンドにはCartCandidate形式で送信
+            yield StreamEvent(
+                type="cart_options",
+                items=frontend_cart_candidates
+            )
+
+            yield StreamEvent(
+                type="agent_text",
+                content=f"{len(cart_candidates)}つのカート候補が見つかりました。お好みのカートを選択してください。"
+            )
+
+            session["step"] = "cart_selection"
+            return
 
         # ステップ6.1: 配送先入力完了後、商品検索（Merchant AgentへA2A通信）
         elif current_step == "shipping_address_input":
@@ -1792,13 +1866,39 @@ class ShoppingAgent(BaseAgent):
                 # ここに到達した時点で全てのCartMandateは署名済みである
                 logger.info(f"[ShoppingAgent] Received {len(cart_candidates)} signed cart candidates from Merchant Agent")
 
-                # カート候補をセッションに保存
-                session["cart_candidates"] = cart_candidates
+                # AP2/A2A仕様準拠: Artifact構造をフロントエンド用にCartCandidate形式に変換
+                # Artifact構造: {"artifactId": "...", "name": "...", "parts": [{"data": {"ap2.mandates.CartMandate": {...}}}]}
+                logger.info(f"[ShoppingAgent] First cart structure sample: {json.dumps(cart_candidates[0] if cart_candidates else {}, ensure_ascii=False)[:500]}")
 
-                # AP2/A2A仕様準拠：複数のカート候補をカルーセル表示
+                frontend_cart_candidates = []
+                for i, cart_artifact in enumerate(cart_candidates):
+                    try:
+                        # Artifact構造からCartMandateを抽出
+                        cart_mandate = cart_artifact["parts"][0]["data"]["ap2.mandates.CartMandate"]
+
+                        # フロントエンド用のCartCandidate形式に変換
+                        cart_candidate = {
+                            "artifact_id": cart_artifact.get("artifactId", f"artifact_{i}"),
+                            "artifact_name": cart_artifact.get("name", f"カート{i+1}"),
+                            "cart_mandate": cart_mandate
+                        }
+                        frontend_cart_candidates.append(cart_candidate)
+                        logger.info(f"[ShoppingAgent] Successfully converted Artifact {i} to CartCandidate")
+                    except (KeyError, IndexError) as e:
+                        logger.error(f"[ShoppingAgent] Failed to extract CartMandate {i} from Artifact: {e}, keys: {list(cart_artifact.keys()) if isinstance(cart_artifact, dict) else 'not a dict'}")
+
+                logger.info(f"[ShoppingAgent] Converted {len(frontend_cart_candidates)} carts to frontend format")
+
+                # カート候補をセッションに保存
+                # - cart_candidates_raw: 元のArtifact構造（A2A準拠、署名検証用）
+                # - cart_candidates: CartCandidate形式（カート選択処理用）
+                session["cart_candidates_raw"] = cart_candidates
+                session["cart_candidates"] = frontend_cart_candidates
+
+                # フロントエンドにはCartCandidate形式で送信
                 yield StreamEvent(
                     type="cart_options",
-                    items=cart_candidates
+                    items=frontend_cart_candidates
                 )
 
                 yield StreamEvent(
@@ -1851,7 +1951,8 @@ class ShoppingAgent(BaseAgent):
             # Artifact IDで選択
             if not selected_cart:
                 for cart in cart_candidates:
-                    if cart.get("artifact_id") in user_input:
+                    artifact_id = cart.get("artifact_id")
+                    if artifact_id and artifact_id in user_input:
                         selected_cart = cart
                         break
 

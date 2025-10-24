@@ -16,7 +16,7 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 # v2の暗号化モジュールをインポート
-from v2.common.crypto import KeyManager, SignatureManager
+from common.crypto import KeyManager, SignatureManager
 
 from .models import A2AMessage
 from .a2a_handler import A2AMessageHandler

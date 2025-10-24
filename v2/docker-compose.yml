@@ -44,6 +44,7 @@ services:
       - DMR_API_URL=${DMR_API_URL:-http://host.docker.internal:12434/engines/llama.cpp/v1}
       - DMR_MODEL=${DMR_MODEL:-ai/qwen3}
       - DMR_API_KEY=${DMR_API_KEY:-none}
+      - SHOPPING_MCP_URL=http://shopping_agent_mcp:8010
       - LANGFUSE_ENABLED=${LANGFUSE_ENABLED:-false}
       - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY:-}
       - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY:-}
@@ -53,6 +54,34 @@ services:
     depends_on:
       init-keys:
         condition: service_completed_successfully
+      shopping_agent_mcp:
+        condition: service_started
+    restart: unless-stopped
+
+  # Shopping Agent MCP - MCPツール（LangGraphノード）
+  shopping_agent_mcp:
+    build:
+      context: ..
+      dockerfile: v2/services/shopping_agent_mcp/Dockerfile
+    container_name: ap2_shopping_agent_mcp
+    ports:
+      - "8010:8010"
+    volumes:
+      - keys:/app/v2/keys
+      - data:/app/v2/data
+    env_file:
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+      - AGENT_ID=did:ap2:agent:shopping_agent
+      - AP2_KEYS_DIRECTORY=/app/v2/keys
+      - DATABASE_URL=sqlite+aiosqlite:////app/v2/data/shopping_agent.db
+      - MERCHANT_AGENT_URL=http://merchant_agent:8001
+      - PAYMENT_PROCESSOR_URL=http://payment_processor:8004
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_FORMAT=${LOG_FORMAT:-text}
+    networks:
+      - ap2_network
     restart: unless-stopped
 
   # Merchant Agent - 商品検索・CartMandate作成

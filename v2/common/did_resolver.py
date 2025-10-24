@@ -14,8 +14,8 @@ import logging
 from typing import Optional, Dict
 from pathlib import Path
 
-from v2.common.models import DIDDocument, VerificationMethod
-from v2.common.crypto import KeyManager
+from common.models import DIDDocument, VerificationMethod
+from common.crypto import KeyManager
 
 logger = logging.getLogger(__name__)
 

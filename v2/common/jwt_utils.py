@@ -203,7 +203,7 @@ class MerchantAuthorizationJWT:
             raise ValueError("JWT header missing 'kid' field")
 
         # SignatureオブジェクトをAP2準拠形式で構築
-        from v2.common.models import Signature
+        from common.models import Signature
 
         # 公開鍵を取得（kidから）
         try:
@@ -451,7 +451,7 @@ class UserAuthorizationSDJWT:
             raise ValueError("Key-binding JWT header missing 'kid' field")
 
         # SignatureオブジェクトをAP2準拠形式で構築
-        from v2.common.models import Signature
+        from common.models import Signature
 
         # 公開鍵を取得（kidから）
         try:

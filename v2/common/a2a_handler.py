@@ -13,13 +13,13 @@ import uuid
 import logging
 
 # v2の暗号化モジュールとモデルをインポート
-from v2.common.crypto import SignatureManager, KeyManager
-from v2.common.models import (
+from common.crypto import SignatureManager, KeyManager
+from common.models import (
     A2AMessage, A2AMessageHeader, A2ADataPart, A2ASignature, A2AProof, Signature,
     A2AArtifact, A2AArtifactPart
 )
-from v2.common.did_resolver import DIDResolver
-from v2.common.nonce_manager import NonceManager
+from common.did_resolver import DIDResolver
+from common.nonce_manager import NonceManager
 
 logger = logging.getLogger(__name__)
 
