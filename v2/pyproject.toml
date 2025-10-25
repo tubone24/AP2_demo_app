@@ -21,6 +21,9 @@ dependencies = [
     "pyjwt>=2.9.0",
     "sd-jwt>=0.10.0",
     "rfc8785>=0.1.4",
+    # Password Hashing (OWASP Best Practices - Argon2id)
+    "passlib[argon2]>=1.7.4",
+    "argon2-cffi>=23.1.0",
     # Data Validation
     "pydantic>=2.9.0",
     "pydantic-settings>=2.5.0",

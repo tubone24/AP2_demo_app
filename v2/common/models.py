@@ -744,6 +744,198 @@ class AttestationDB(BaseModel):
 
 
 # ========================================
+# Passkey認証用モデル（AP2仕様準拠）
+# ========================================
+
+class UserCreate(BaseModel):
+    """
+    ユーザー登録リクエスト（メール/パスワード認証）
+
+    AP2仕様準拠:
+    - email: payer_emailとして使用（リファレンス実装: bugsbunny@gmail.com）
+    - username: 表示名
+    - password: bcryptでハッシュ化して保存
+
+    AP2仕様: HTTPセッション認証方式は仕様外（実装の自由度あり）
+    Mandate署名はCredential ProviderのPasskeyで実施（AP2準拠）
+    """
+    username: str = Field(..., min_length=3, max_length=50, description="ユーザー名（3-50文字）")
+    email: str = Field(..., description="メールアドレス（AP2 payer_emailとして使用）")
+    password: str = Field(..., min_length=8, description="パスワード（8文字以上）")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "username": "bugsbunny",
+                "email": "bugsbunny@gmail.com",
+                "password": "securepassword123"
+            }
+        }
+
+
+class UserLogin(BaseModel):
+    """
+    ユーザーログインリクエスト（メール/パスワード認証）
+
+    AP2仕様: HTTPセッション認証方式は仕様外（実装の自由度あり）
+    """
+    email: str = Field(..., description="メールアドレス")
+    password: str = Field(..., description="パスワード")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "email": "bugsbunny@gmail.com",
+                "password": "securepassword123"
+            }
+        }
+
+
+class UserInDB(BaseModel):
+    """
+    データベース内のユーザー情報
+
+    AP2仕様準拠:
+    - email: PaymentMandate.payer_emailとして使用
+    - id: 内部識別子（UUID）
+    - hashed_password: bcryptハッシュ（メール/パスワード認証用）
+    """
+    id: str = Field(..., description="ユーザーID（UUID）")
+    username: str = Field(..., description="ユーザー名")
+    email: str = Field(..., description="メールアドレス（AP2 payer_email）")
+    hashed_password: str = Field(..., description="bcryptハッシュ化パスワード")
+    created_at: datetime = Field(..., description="作成日時")
+    is_active: bool = Field(default=True, description="アカウント有効フラグ")
+
+
+class UserResponse(BaseModel):
+    """ユーザー情報レスポンス"""
+    id: str
+    username: str
+    email: str
+    created_at: datetime
+    is_active: bool
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "id": "usr_abc123",
+                "username": "bugsbunny",
+                "email": "bugsbunny@gmail.com",
+                "created_at": "2025-10-24T10:00:00Z",
+                "is_active": True
+            }
+        }
+
+
+class PasskeyCredential(BaseModel):
+    """
+    Passkey認証情報（WebAuthn Credential）
+
+    WebAuthn/FIDO2仕様準拠:
+    - credential_id: 認証器が生成した一意のID
+    - public_key: COSE形式の公開鍵
+    - sign_count: リプレイ攻撃検出用カウンター
+    """
+    id: str = Field(..., description="Credential ID（プライマリキー）")
+    user_id: str = Field(..., description="ユーザーID（外部キー）")
+    credential_id: str = Field(..., description="WebAuthn credential ID（Base64URL）")
+    public_key: str = Field(..., description="COSE形式公開鍵（Base64URL）")
+    sign_count: int = Field(default=0, description="署名カウンター（リプレイ攻撃検出）")
+    transports: List[str] = Field(default_factory=list, description="トランスポート（usb, nfc, ble, internal）")
+    created_at: datetime = Field(..., description="作成日時")
+    last_used_at: Optional[datetime] = Field(None, description="最終使用日時")
+
+
+class PasskeyRegistrationChallenge(BaseModel):
+    """Passkey登録用チャレンジリクエスト"""
+    username: str
+    email: str
+
+
+class PasskeyRegistrationChallengeResponse(BaseModel):
+    """Passkey登録用チャレンジレスポンス"""
+    challenge: str = Field(..., description="Base64URL encoded challenge")
+    user_id: str = Field(..., description="User ID")
+    rp_id: str = Field(..., description="Relying Party ID（例: localhost）")
+    rp_name: str = Field(default="AP2 Demo", description="Relying Party名")
+    timeout: int = Field(default=60000, description="タイムアウト（ミリ秒）")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "challenge": "Y2hhbGxlbmdl...",
+                "user_id": "usr_abc123",
+                "rp_id": "localhost",
+                "rp_name": "AP2 Demo",
+                "timeout": 60000
+            }
+        }
+
+
+class PasskeyRegistrationRequest(BaseModel):
+    """Passkey登録リクエスト（WebAuthn Registration Response）"""
+    username: str
+    email: str
+    credential_id: str = Field(..., description="Base64URL encoded credential ID")
+    public_key: str = Field(..., description="Base64URL encoded COSE public key")
+    attestation_object: str = Field(..., description="Base64URL encoded attestation object")
+    client_data_json: str = Field(..., description="Base64URL encoded client data JSON")
+    transports: Optional[List[str]] = Field(default=None, description="Authenticator transports")
+
+
+class PasskeyLoginChallenge(BaseModel):
+    """Passkeyログイン用チャレンジリクエスト"""
+    email: str = Field(..., description="メールアドレス")
+
+
+class PasskeyLoginChallengeResponse(BaseModel):
+    """Passkeyログイン用チャレンジレスポンス"""
+    challenge: str = Field(..., description="Base64URL encoded challenge")
+    rp_id: str = Field(..., description="Relying Party ID")
+    timeout: int = Field(default=60000, description="タイムアウト（ミリ秒）")
+    allowed_credentials: List[Dict[str, Any]] = Field(..., description="許可されたcredential IDリスト")
+
+
+class PasskeyLoginRequest(BaseModel):
+    """Passkeyログインリクエスト（WebAuthn Authentication Response）"""
+    email: str
+    credential_id: str = Field(..., description="Base64URL encoded credential ID")
+    authenticator_data: str = Field(..., description="Base64URL encoded authenticator data")
+    client_data_json: str = Field(..., description="Base64URL encoded client data JSON")
+    signature: str = Field(..., description="Base64URL encoded signature")
+    user_handle: Optional[str] = Field(None, description="Base64URL encoded user handle")
+
+
+class Token(BaseModel):
+    """JWT認証トークン"""
+    access_token: str = Field(..., description="JWTアクセストークン")
+    token_type: str = Field(default="bearer", description="トークンタイプ（常にbearer）")
+    user: UserResponse = Field(..., description="ユーザー情報")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+                "token_type": "bearer",
+                "user": {
+                    "id": "usr_abc123",
+                    "username": "bugsbunny",
+                    "email": "bugsbunny@gmail.com",
+                    "created_at": "2025-10-24T10:00:00Z",
+                    "is_active": True
+                }
+            }
+        }
+
+
+class TokenData(BaseModel):
+    """JWTペイロードデータ"""
+    user_id: Optional[str] = Field(None, description="ユーザーID")
+    email: Optional[str] = Field(None, description="メールアドレス（AP2 payer_email）")
+
+
+# ========================================
 # エクスポート（AP2型定義を含む）
 # ========================================
 

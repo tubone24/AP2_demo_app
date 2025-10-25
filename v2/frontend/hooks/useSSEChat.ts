@@ -1,7 +1,18 @@
 "use client";
 
+/**
+ * v2/frontend/hooks/useSSEChat.ts
+ *
+ * SSEチャットフック（AP2仕様準拠 + JWT認証）
+ *
+ * AP2要件:
+ * - JWTをAuthorizationヘッダーに追加
+ * - payer_email = JWT.email
+ */
+
 import { useState, useCallback, useRef } from "react";
 import { ChatMessage, ChatSSEEvent, SignatureRequestEvent, Product } from "@/lib/types/chat";
+import { getAuthHeaders } from "@/lib/passkey";
 
 export function useSSEChat() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -54,10 +65,15 @@ export function useSSEChat() {
     try {
       // 環境変数から直接Shopping Agent URLを取得
       const shoppingAgentUrl = process.env.NEXT_PUBLIC_SHOPPING_AGENT_URL || "http://localhost:8000";
+
+      // AP2準拠: JWTをAuthorizationヘッダーに追加
+      const authHeaders = getAuthHeaders();
+
       const response = await fetch(`${shoppingAgentUrl}/chat/stream`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          ...authHeaders,  // JWT Authorization header
         },
         body: JSON.stringify({
           user_input: userInput,
