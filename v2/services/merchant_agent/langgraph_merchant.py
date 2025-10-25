@@ -35,8 +35,10 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from v2.common.logger import get_logger
+from v2.common.telemetry import get_tracer, create_http_span, is_telemetry_enabled
 
 logger = get_logger(__name__, service_name='langgraph_merchant')
+tracer = get_tracer(__name__)
 
 # Langfuseトレーシング設定
 LANGFUSE_ENABLED = os.getenv("LANGFUSE_ENABLED", "false").lower() == "true"
@@ -603,13 +605,24 @@ JSON配列形式で返答してください:
                 cart_mandate = result.get("cart_mandate")
 
                 # Merchant署名依頼（HTTPリクエスト）
-                response = await self.http_client.post(
+                # OpenTelemetry 手動トレーシング: Merchant通信
+                with create_http_span(
+                    tracer,
+                    "POST",
                     f"{self.merchant_url}/sign/cart",
-                    json={"cart_mandate": cart_mandate},
-                    timeout=30.0
-                )
-                response.raise_for_status()
-                signed_cart_response = response.json()
+                    **{
+                        "merchant.cart_mandate_id": cart_mandate.get("id"),
+                        "merchant.operation": "sign_cart"
+                    }
+                ) as span:
+                    response = await self.http_client.post(
+                        f"{self.merchant_url}/sign/cart",
+                        json={"cart_mandate": cart_mandate},
+                        timeout=30.0
+                    )
+                    response.raise_for_status()
+                    span.set_attribute("http.status_code", response.status_code)
+                    signed_cart_response = response.json()
 
                 # AP2準拠：Merchantからのレスポンスから署名済みCartMandateを取り出し
                 signed_cart_mandate = signed_cart_response.get("signed_cart_mandate")
@@ -1003,13 +1016,24 @@ JSON配列形式で返答してください:
             署名済みCartMandate（merchant_signature付き）
         """
         try:
-            response = await self.http_client.post(
+            # OpenTelemetry 手動トレーシング: Merchant通信
+            with create_http_span(
+                tracer,
+                "POST",
                 f"{self.merchant_url}/sign/cart",
-                json={"cart_mandate": cart_mandate},
-                timeout=10.0
-            )
-            response.raise_for_status()
-            result = response.json()
+                **{
+                    "merchant.cart_mandate_id": cart_mandate.get("id"),
+                    "merchant.operation": "sign_cart"
+                }
+            ) as span:
+                response = await self.http_client.post(
+                    f"{self.merchant_url}/sign/cart",
+                    json={"cart_mandate": cart_mandate},
+                    timeout=10.0
+                )
+                response.raise_for_status()
+                span.set_attribute("http.status_code", response.status_code)
+                result = response.json()
 
             signed_cart_mandate = result.get("signed_cart_mandate")
             if not signed_cart_mandate:

@@ -25,8 +25,10 @@ from v2.common.models import A2AMessage, ProcessPaymentRequest, ProcessPaymentRe
 from v2.common.database import DatabaseManager, TransactionCRUD
 from v2.common.user_authorization import verify_user_authorization_vp, compute_mandate_hash
 from v2.common.logger import get_logger, log_a2a_message, log_database_operation
+from v2.common.telemetry import get_tracer, create_http_span, is_telemetry_enabled
 
 logger = get_logger(__name__, service_name='payment_processor')
+tracer = get_tracer(__name__)
 
 
 class PaymentProcessorService(BaseAgent):
@@ -1012,17 +1014,28 @@ class PaymentProcessorService(BaseAgent):
 
         try:
             # Credential ProviderにPOST /credentials/verifyでトークン検証依頼
-            response = await self.http_client.post(
+            # OpenTelemetry 手動トレーシング: Credential Provider通信
+            with create_http_span(
+                tracer,
+                "POST",
                 f"{self.credential_provider_url}/credentials/verify",
-                json={
-                    "token": token,
-                    "payer_id": payer_id,
-                    "amount": amount
-                },
-                timeout=10.0
-            )
-            response.raise_for_status()
-            result = response.json()
+                **{
+                    "credential_provider.operation": "verify_credential",
+                    "credential_provider.payer_id": payer_id
+                }
+            ) as span:
+                response = await self.http_client.post(
+                    f"{self.credential_provider_url}/credentials/verify",
+                    json={
+                        "token": token,
+                        "payer_id": payer_id,
+                        "amount": amount
+                    },
+                    timeout=10.0
+                )
+                response.raise_for_status()
+                span.set_attribute("http.status_code", response.status_code)
+                result = response.json()
 
             # 検証結果を取得
             if not result.get("verified"):
@@ -1067,18 +1080,30 @@ class PaymentProcessorService(BaseAgent):
             )
 
             # Credential ProviderにPOST /receiptsで領収書通知
-            response = await self.http_client.post(
+            # OpenTelemetry 手動トレーシング: Credential Provider通信
+            with create_http_span(
+                tracer,
+                "POST",
                 f"{self.credential_provider_url}/receipts",
-                json={
-                    "transaction_id": transaction_id,
-                    "receipt_url": receipt_url,
-                    "payer_id": payer_id,
-                    "amount": payment_mandate.get("amount"),
-                    "timestamp": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
-                },
-                timeout=10.0
-            )
-            response.raise_for_status()
+                **{
+                    "credential_provider.operation": "send_receipt",
+                    "credential_provider.transaction_id": transaction_id,
+                    "credential_provider.payer_id": payer_id
+                }
+            ) as span:
+                response = await self.http_client.post(
+                    f"{self.credential_provider_url}/receipts",
+                    json={
+                        "transaction_id": transaction_id,
+                        "receipt_url": receipt_url,
+                        "payer_id": payer_id,
+                        "amount": payment_mandate.get("amount"),
+                        "timestamp": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
+                    },
+                    timeout=10.0
+                )
+                response.raise_for_status()
+                span.set_attribute("http.status_code", response.status_code)
 
             logger.info(
                 f"[PaymentProcessor] Receipt notification sent successfully: "

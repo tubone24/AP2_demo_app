@@ -33,7 +33,7 @@
 
 このv2実装は、AP2仕様を100%準拠した実装で、以下を提供します：
 
-✅ **9つのマイクロサービス**: Shopping Agent、Merchant Agent、Merchant Agent MCP、Merchant、Credential Provider、Payment Processor、Payment Network、Meilisearch、Frontend
+✅ **11つのマイクロサービス**: Shopping Agent、Shopping Agent MCP、Merchant Agent、Merchant Agent MCP、Merchant、Credential Provider、Payment Processor、Payment Network、Meilisearch、Jaeger、Frontend
 ✅ **完全なA2A通信**: ECDSA/Ed25519署名、Nonce検証、DID解決
 ✅ **WebAuthn/Passkey対応**: FIDO2準拠の署名検証
 ✅ **SSE/Streaming Chat**: リアルタイムな対話型UI
@@ -151,14 +151,16 @@ graph TB
 | サービス | ポート | 役割 | 主要エンドポイント |
 |---------|--------|------|-------------------|
 | **Frontend** | 3000 | ユーザーインターフェース | `/`, `/chat`, `/merchant` |
-| **Shopping Agent** | 8000 | ユーザー代理エージェント | `/chat/stream`, `/create-intent`, `/create-payment` |
-| **Merchant Agent** | 8001 | 商品検索・Cart作成 | `/products`, `/create-cart` |
+| **Shopping Agent** | 8000 | ユーザー代理エージェント、LangGraph統合 | `/chat/stream`, `/intent/challenge`, `/consent/submit` |
+| **Shopping Agent MCP** | 8010 | MCPツールサーバー（LangGraph用） | `/mcp/tools/list`, `/mcp/tools/call` |
+| **Merchant Agent** | 8001 | 商品検索・Cart作成、LangGraph統合 | `/search`, `/create-cart`, `/a2a/message` |
 | **Merchant Agent MCP** | 8011 | MCPツールサーバー（LangGraph用） | `/mcp/tools/list`, `/mcp/tools/call` |
-| **Merchant** | 8002 | Cart署名・在庫管理 | `/sign/cart`, `/inventory/{sku}` |
-| **Credential Provider** | 8003 | WebAuthn検証・トークン発行 | `/verify/attestation`, `/payment-methods` |
-| **Payment Processor** | 8004 | 決済処理・トランザクション管理 | `/process`, `/transactions/{id}` |
-| **Payment Network** | 8005 | Agent Token発行・決済ネットワーク | `/tokenize`, `/validate-token` |
+| **Merchant** | 8002 | Cart署名・在庫管理（Agentと分離） | `/sign/cart`, `/inventory/{sku}` |
+| **Credential Provider** | 8003 | WebAuthn検証・トークン発行・Step-up | `/verify/attestation`, `/payment-methods/tokenize` |
+| **Payment Processor** | 8004 | 決済処理・Mandate連鎖検証・領収書生成 | `/process`, `/transactions/{id}`, `/receipts/{id}.pdf` |
+| **Payment Network** | 8005 | Agent Token発行・決済ネットワークスタブ | `/network/tokenize`, `/network/validate-token` |
 | **Meilisearch** | 7700 | 全文検索エンジン（商品検索） | `/indexes/products/search` |
+| **Jaeger** | 16686 | OpenTelemetry分散トレーシングUI | `/search` |
 
 ---
 
@@ -698,13 +700,22 @@ v2/
 │   │                          # クラス: MeilisearchClient
 │   │                          # - search() : 全文検索
 │   │                          # - index_product() : 商品インデックス登録
+│   │                          # - create_index() : インデックス作成
 │   ├── mcp_server.py          # MCP (Model Context Protocol) サーバー
 │   │                          # クラス: MCPServer
 │   │                          # - JSON-RPC 2.0準拠
 │   │                          # - Streamable HTTP Transport
+│   │                          # - tool() デコレーター: MCPツール登録
 │   ├── mcp_client.py          # MCPクライアント
 │   │                          # クラス: MCPClient
 │   │                          # - call_tool() : MCPツール呼び出し
+│   │                          # - list_tools() : 利用可能ツール一覧取得
+│   ├── receipt_generator.py   # PDF領収書生成
+│   │                          # 関数: generate_receipt_pdf()
+│   │                          # - ReportLab使用、CartMandate必須（VDC交換原則）
+│   ├── agent_passphrase_manager.py # Passphrase管理
+│   │                          # クラス: AgentPassphraseManager
+│   │                          # - 環境変数から各エージェントのパスフレーズを取得
 │   └── seed_data.py           # サンプルデータ
 │                               # - seed_products() : 商品データシード
 │                               # - seed_users() : ユーザーデータシード
@@ -712,19 +723,31 @@ v2/
 ├── services/                  # マイクロサービス（各エージェント実装）
 │   ├── shopping_agent/        # Shopping Agent（ユーザー代理）
 │   │   ├── agent.py           # ShoppingAgentクラス
-│   │   │                      # - __init__() : DB/HTTPクライアント初期化（78行目）
-│   │   │                      # - register_endpoints() : 166行目
-│   │   │                      #   POST /chat/stream : 443行目（SSEストリーミング）
-│   │   │                      #   POST /intent/challenge : 171行目（WebAuthn）
-│   │   │                      #   POST /intent/submit : 215行目（署名検証）
+│   │   │                      # - __init__() : DB/HTTPクライアント初期化
+│   │   │                      # - register_endpoints() : エンドポイント登録
+│   │   │                      #   POST /chat/stream : SSEストリーミングチャット
+│   │   │                      #   POST /intent/challenge : WebAuthn Challenge生成
+│   │   │                      #   POST /intent/submit : Intent署名検証・保存
+│   │   │                      #   POST /consent/challenge : Cart Consent Challenge生成
+│   │   │                      #   POST /consent/submit : Cart署名検証・保存
 │   │   │                      # - _search_products_via_merchant_agent() : A2A通信
-│   │   │                      # - _create_payment_mandate() : Payment作成
+│   │   │                      # - _create_payment_mandate() : PaymentMandate作成
 │   │   ├── main.py            # FastAPIエントリーポイント
 │   │   ├── langgraph_agent.py # LangGraph統合（AI機能）
+│   │   ├── langgraph_conversation.py # 対話エージェント（AI）
+│   │   ├── mcp_tools.py       # MCPツール定義
+│   │   └── Dockerfile
+│   ├── shopping_agent_mcp/    # Shopping Agent MCP（MCPツールサーバー）
+│   │   ├── main.py            # MCPサーバー（LangGraph用ツール）
+│   │   │                      # - build_intent_mandate: IntentMandate構築
+│   │   │                      # - request_cart_candidates: Cart候補取得
+│   │   │                      # - assess_payment_risk: リスク評価
+│   │   │                      # - build_payment_mandate: PaymentMandate構築
+│   │   │                      # - execute_payment: 決済実行
 │   │   └── Dockerfile
 │   ├── merchant_agent/        # Merchant Agent（商品検索・Cart作成）
 │   │   ├── agent.py           # MerchantAgentクラス
-│   │   │                      # - handle_intent_mandate() : 286行目（IntentMandate処理）
+│   │   │                      # - handle_intent_mandate() : IntentMandate処理
 │   │   │                      # - _create_cart_mandate() : Cart作成（未署名）
 │   │   │                      # - handle_cart_request() : 商品検索＋Cart候補生成
 │   │   ├── main.py            # FastAPIエントリーポイント

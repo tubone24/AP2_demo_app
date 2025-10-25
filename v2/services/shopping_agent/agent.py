@@ -83,11 +83,17 @@ from v2.common.logger import (
     log_database_operation
 )
 
+# OpenTelemetry 手動トレーシング
+from v2.common.telemetry import get_tracer, create_http_span, is_telemetry_enabled
+
 # LangGraph統合（AI化）
 from langgraph_agent import get_langgraph_agent
 from langgraph_conversation import get_conversation_agent
 
 logger = get_logger(__name__, service_name='shopping_agent')
+
+# OpenTelemetryトレーサー（手動計装用）
+tracer = get_tracer(__name__)
 
 
 class ShoppingAgent(BaseAgent):
@@ -4116,13 +4122,26 @@ class ShoppingAgent(BaseAgent):
             # AP2準拠: Merchant AgentのAI処理時間を考慮して300秒（5分）タイムアウト
             # LangGraph処理（Intent分析→商品検索→カート最適化→署名）に時間がかかる
             # LLMのリトライも含めて十分な時間を確保
-            response = await self.http_client.post(
+
+            # OpenTelemetry 手動トレーシング: A2A通信
+            with create_http_span(
+                tracer,
+                "POST",
                 f"{self.merchant_agent_url}/a2a/message",
-                json=message.model_dump(by_alias=True),
-                timeout=300.0
-            )
-            response.raise_for_status()
-            result = response.json()
+                **{
+                    "a2a.message_type": "ap2.mandates.PaymentMandate",
+                    "a2a.recipient": "did:ap2:agent:merchant_agent",
+                    "a2a.message_id": message.header.message_id
+                }
+            ) as span:
+                response = await self.http_client.post(
+                    f"{self.merchant_agent_url}/a2a/message",
+                    json=message.model_dump(by_alias=True),
+                    timeout=300.0
+                )
+                response.raise_for_status()
+                span.set_attribute("http.status_code", response.status_code)
+                result = response.json()
 
             logger.info(
                 f"\n{'='*80}\n"
@@ -4219,13 +4238,26 @@ class ShoppingAgent(BaseAgent):
             # AP2準拠: Merchant AgentのAI処理時間を考慮して300秒（5分）タイムアウト
             # LangGraph処理（Intent分析→商品検索→カート最適化→署名）に時間がかかる
             # LLMのリトライも含めて十分な時間を確保
-            response = await self.http_client.post(
+
+            # OpenTelemetry 手動トレーシング: A2A通信
+            with create_http_span(
+                tracer,
+                "POST",
                 f"{self.merchant_agent_url}/a2a/message",
-                json=message.model_dump(by_alias=True),
-                timeout=300.0
-            )
-            response.raise_for_status()
-            result = response.json()
+                **{
+                    "a2a.message_type": "ap2.mandates.IntentMandate",
+                    "a2a.recipient": "did:ap2:agent:merchant_agent",
+                    "a2a.message_id": message.header.message_id
+                }
+            ) as span:
+                response = await self.http_client.post(
+                    f"{self.merchant_agent_url}/a2a/message",
+                    json=message.model_dump(by_alias=True),
+                    timeout=300.0
+                )
+                response.raise_for_status()
+                span.set_attribute("http.status_code", response.status_code)
+                result = response.json()
 
             logger.info(
                 f"\n{'='*80}\n"
@@ -4361,13 +4393,26 @@ class ShoppingAgent(BaseAgent):
             # AP2準拠: Merchant AgentのAI処理時間を考慮して300秒（5分）タイムアウト
             # LangGraph処理（Intent分析→商品検索→カート最適化→署名）に時間がかかる
             # LLMのリトライも含めて十分な時間を確保
-            response = await self.http_client.post(
+
+            # OpenTelemetry 手動トレーシング: A2A通信
+            with create_http_span(
+                tracer,
+                "POST",
                 f"{self.merchant_agent_url}/a2a/message",
-                json=message.model_dump(by_alias=True),
-                timeout=300.0
-            )
-            response.raise_for_status()
-            result = response.json()
+                **{
+                    "a2a.message_type": "ap2.requests.CartRequest",
+                    "a2a.recipient": "did:ap2:agent:merchant_agent",
+                    "a2a.message_id": message.header.message_id
+                }
+            ) as span:
+                response = await self.http_client.post(
+                    f"{self.merchant_agent_url}/a2a/message",
+                    json=message.model_dump(by_alias=True),
+                    timeout=300.0
+                )
+                response.raise_for_status()
+                span.set_attribute("http.status_code", response.status_code)
+                result = response.json()
 
             logger.info(
                 f"\n{'='*80}\n"
