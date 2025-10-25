@@ -591,7 +591,11 @@ class CredentialProviderService(BaseAgent):
 
                 logger.info(f"[tokenize_payment_method] Generated secure token for payment method: {payment_method_id}")
 
-                return {
+                # AP2完全準拠: Stepup認証が必要かチェック
+                requires_stepup = payment_method.get("requires_stepup", False)
+                stepup_method = payment_method.get("stepup_method", None)
+
+                response_data = {
                     "token": secure_token,
                     "payment_method_id": payment_method_id,
                     "brand": payment_method.get("brand", "unknown"),
@@ -600,11 +604,190 @@ class CredentialProviderService(BaseAgent):
                     "expires_at": expires_at.isoformat().replace('+00:00', 'Z')
                 }
 
+                # Stepup認証が必要な場合はフラグを追加
+                if requires_stepup:
+                    response_data["requires_stepup"] = True
+                    response_data["stepup_method"] = stepup_method
+                    logger.info(
+                        f"[tokenize_payment_method] Stepup authentication required: "
+                        f"method={stepup_method}, payment_method_id={payment_method_id}"
+                    )
+
+                return response_data
+
             except HTTPException:
                 raise
             except Exception as e:
                 logger.error(f"[tokenize_payment_method] Error: {e}", exc_info=True)
                 raise HTTPException(status_code=400, detail=str(e))
+
+        @self.app.get("/payment-methods/step-up-challenge")
+        async def step_up_challenge():
+            """
+            POST /payment-methods/step-up-challenge - 3D Secure認証チャレンジ開始
+
+            AP2完全準拠: 簡易的な3DS認証画面を返す
+            """
+            try:
+                from fastapi.responses import HTMLResponse
+
+                # 簡易的な3DS認証画面HTML
+                html_content = """
+                <html>
+                    <head>
+                        <title>3D Secure 2.0 Authentication</title>
+                        <meta charset="utf-8">
+                        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                        <style>
+                            body {
+                                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+                                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                                padding: 20px;
+                                margin: 0;
+                                display: flex;
+                                align-items: center;
+                                justify-content: center;
+                                min-height: 100vh;
+                            }
+                            .container {
+                                max-width: 450px;
+                                background: white;
+                                border-radius: 16px;
+                                box-shadow: 0 10px 40px rgba(0,0,0,0.3);
+                                padding: 40px;
+                                text-align: center;
+                            }
+                            .logo {
+                                width: 80px;
+                                height: 80px;
+                                background: linear-gradient(135deg, #667eea, #764ba2);
+                                border-radius: 50%;
+                                margin: 0 auto 24px;
+                                display: flex;
+                                align-items: center;
+                                justify-content: center;
+                                font-size: 36px;
+                            }
+                            h1 {
+                                color: #333;
+                                font-size: 24px;
+                                margin: 0 0 12px;
+                            }
+                            .subtitle {
+                                color: #666;
+                                font-size: 14px;
+                                margin-bottom: 32px;
+                            }
+                            .info-box {
+                                background: #f7f7f7;
+                                padding: 20px;
+                                border-radius: 12px;
+                                margin: 24px 0;
+                            }
+                            .info-row {
+                                display: flex;
+                                justify-content: space-between;
+                                margin: 12px 0;
+                                font-size: 14px;
+                            }
+                            .label {
+                                color: #666;
+                            }
+                            .value {
+                                color: #333;
+                                font-weight: 600;
+                            }
+                            button {
+                                width: 100%;
+                                padding: 16px;
+                                background: linear-gradient(135deg, #667eea, #764ba2);
+                                color: white;
+                                border: none;
+                                border-radius: 12px;
+                                font-size: 16px;
+                                font-weight: 600;
+                                cursor: pointer;
+                                margin-top: 24px;
+                                transition: transform 0.2s;
+                            }
+                            button:hover {
+                                transform: translateY(-2px);
+                            }
+                            button:active {
+                                transform: translateY(0);
+                            }
+                            .cancel-btn {
+                                background: #e0e0e0;
+                                color: #666;
+                                margin-top: 12px;
+                            }
+                            .security-badge {
+                                margin-top: 32px;
+                                padding-top: 24px;
+                                border-top: 1px solid #e0e0e0;
+                                color: #999;
+                                font-size: 12px;
+                            }
+                        </style>
+                    </head>
+                    <body>
+                        <div class="container">
+                            <div class="logo">🔒</div>
+                            <h1>3D Secure 2.0</h1>
+                            <p class="subtitle">カード会員認証が必要です</p>
+
+                            <div class="info-box">
+                                <div class="info-row">
+                                    <span class="label">カードブランド</span>
+                                    <span class="value">American Express</span>
+                                </div>
+                                <div class="info-row">
+                                    <span class="label">カード番号</span>
+                                    <span class="value">**** **** **** 1005</span>
+                                </div>
+                                <div class="info-row">
+                                    <span class="label">加盟店</span>
+                                    <span class="value">Demo Merchant</span>
+                                </div>
+                            </div>
+
+                            <p style="color: #666; font-size: 14px; line-height: 1.6;">
+                                このトランザクションを承認するには、下のボタンをタップしてください。
+                                これにより、カード発行会社がお客様の本人確認を行います。
+                            </p>
+
+                            <button onclick="authenticate()">認証する</button>
+                            <button class="cancel-btn" onclick="cancel()">キャンセル</button>
+
+                            <div class="security-badge">
+                                🔐 この認証はSSL/TLSで保護されています<br>
+                                AP2 Protocol - 3D Secure 2.0
+                            </div>
+                        </div>
+
+                        <script>
+                            function authenticate() {
+                                // 認証完了をシミュレート（デモ用）
+                                alert('✅ 3D Secure認証が完了しました！\\n\\nウィンドウを閉じて決済を続行します。');
+                                window.close();
+                            }
+
+                            function cancel() {
+                                if (confirm('認証をキャンセルしますか？')) {
+                                    alert('❌ 認証がキャンセルされました。');
+                                    window.close();
+                                }
+                            }
+                        </script>
+                    </body>
+                </html>
+                """
+
+                return HTMLResponse(content=html_content)
+
+            except Exception as e:
+                logger.error(f"[step_up_challenge] Error: {e}", exc_info=True)
+                raise HTTPException(status_code=500, detail=str(e))
 
         @self.app.post("/payment-methods/initiate-step-up")
         async def initiate_step_up(request: Dict[str, Any]):

@@ -17,6 +17,7 @@ export type SSEEventType =
   | "shipping_form_request"
   | "payment_method_selection"
   | "webauthn_request"
+  | "stepup_authentication_request"  // AP2完全準拠: 3D Secure 2.0認証リクエスト
   | "step_up_redirect"
   | "done"
   | "error";
@@ -101,6 +102,16 @@ export interface WebAuthnRequestEvent extends SSEEvent {
   timeout: number;
 }
 
+// Stepup認証リクエストイベント（AP2完全準拠: 3D Secure 2.0）
+export interface StepupAuthenticationRequestEvent extends SSEEvent {
+  type: "stepup_authentication_request";
+  stepup_method: string;
+  payment_method_id: string;
+  brand: string;
+  last4: string;
+  challenge_url: string;
+}
+
 // Step-upリダイレクトイベント（AP2 Step 13対応）
 export interface StepUpRedirectEvent extends SSEEvent {
   type: "step_up_redirect";
@@ -134,6 +145,7 @@ export type ChatSSEEvent =
   | ShippingFormRequestEvent
   | PaymentMethodSelectionEvent
   | WebAuthnRequestEvent
+  | StepupAuthenticationRequestEvent
   | StepUpRedirectEvent
   | DoneEvent
   | ErrorEvent;

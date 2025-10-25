@@ -246,6 +246,45 @@ export function useSSEChat() {
                   });
                   break;
 
+                case "stepup_authentication_request":
+                  // AP2完全準拠: 3D Secure 2.0認証リクエスト
+                  const stepupAuthEvent = event as any;
+                  const stepupContent = stepupAuthEvent.content || stepupAuthEvent;
+                  const stepupMethod = stepupContent.stepup_method || "3ds2";
+                  const challengeUrl = stepupContent.challenge_url;
+
+                  console.log("[3DS Authentication Request]", {
+                    stepupMethod,
+                    challengeUrl,
+                    paymentMethodId: stepupContent.payment_method_id,
+                    fullEvent: stepupAuthEvent
+                  });
+
+                  // 3DS認証画面を新しいウィンドウで開く
+                  const threeDSWindow = window.open(
+                    challengeUrl,
+                    "ap2_3ds_auth",
+                    "width=600,height=700,scrollbars=yes,resizable=yes"
+                  );
+
+                  if (!threeDSWindow) {
+                    console.error("Failed to open 3DS window. Please allow pop-ups.");
+                    agentMessageContent += "\n\n❌ ポップアップがブロックされました。ブラウザの設定でポップアップを許可してください。";
+                    setCurrentAgentMessage(agentMessageContent);
+                  } else {
+                    // ウィンドウが閉じられるのを監視
+                    const check3DSWindowClosed = setInterval(() => {
+                      if (threeDSWindow.closed) {
+                        clearInterval(check3DSWindowClosed);
+                        console.log("[3DS Window] Closed");
+
+                        // 3DS認証完了後、フローを継続
+                        sendMessage("3ds-completed");
+                      }
+                    }, 500);
+                  }
+                  break;
+
                 case "step_up_redirect":
                   // AP2 Step 13: Step-upリダイレクト
                   const stepUpEvent = event as any;

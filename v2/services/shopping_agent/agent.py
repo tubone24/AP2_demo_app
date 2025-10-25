@@ -3241,8 +3241,46 @@ class ShoppingAgent(BaseAgent):
                 session["tokenized_payment_method"] = {
                     **selected_payment_method,
                     "token": tokenized_payment_method["token"],
-                    "token_expires_at": tokenized_payment_method["expires_at"]
+                    "token_expires_at": tokenized_payment_method["expires_at"],
+                    "requires_stepup": tokenized_payment_method.get("requires_stepup", False),
+                    "stepup_method": tokenized_payment_method.get("stepup_method")
                 }
+
+                # AP2完全準拠: Stepup認証が必要な場合は3DSフローを開始
+                if tokenized_payment_method.get("requires_stepup"):
+                    stepup_method = tokenized_payment_method.get("stepup_method", "3ds2")
+                    yield StreamEvent(
+                        type="agent_text",
+                        content=f"💳 この支払い方法には追加認証（{stepup_method.upper()}）が必要です。"
+                    )
+                    await asyncio.sleep(0.3)
+
+                    # 3DS認証フローを開始
+                    yield StreamEvent(
+                        type="agent_text",
+                        content="🔐 3D Secure認証を開始します..."
+                    )
+                    await asyncio.sleep(0.3)
+
+                    # 3DS認証リクエストを送信
+                    session["step"] = "stepup_authentication_required"
+                    session["stepup_method"] = stepup_method
+
+                    # AP2完全準拠: ブラウザからアクセス可能なURLに変換
+                    # Docker内部URL（http://credential_provider:8003）→ localhost URL
+                    cp_url = selected_cp['url'].replace('credential_provider', 'localhost')
+
+                    yield StreamEvent(
+                        type="stepup_authentication_request",
+                        content={
+                            "stepup_method": stepup_method,
+                            "payment_method_id": selected_payment_method['id'],
+                            "brand": selected_payment_method.get('brand', 'unknown'),
+                            "last4": selected_payment_method.get('last4', '****'),
+                            "challenge_url": f"{cp_url}/payment-methods/step-up-challenge"
+                        }
+                    )
+                    return
 
                 yield StreamEvent(
                     type="agent_text",
@@ -3348,7 +3386,126 @@ class ShoppingAgent(BaseAgent):
             # フロントエンドはPOST /payment/submit-attestationを呼び出す
             return
 
-        # ステップ7.6: WebAuthn認証待機中
+        # ステップ7.6: 3DS認証待機中
+        elif current_step == "stepup_authentication_required":
+            # AP2完全準拠: 3DS認証完了を待機
+            if user_input and user_input.lower() in ["3ds-completed", "3ds completed"]:
+                yield StreamEvent(
+                    type="agent_text",
+                    content="✅ 3D Secure認証が完了しました。"
+                )
+                await asyncio.sleep(0.3)
+
+                # AP2完全準拠: 3DS認証完了後、PaymentMandate作成とWebAuthn認証へ進む
+                tokenized_payment_method = session.get("tokenized_payment_method")
+                cart_mandate = session.get("cart_mandate")
+                intent_mandate = session.get("intent_mandate")
+
+                # デバッグログ追加
+                cart_webauthn_assertion = session.get("cart_webauthn_assertion")
+                logger.info(
+                    f"[3DS Completion] Session data check: "
+                    f"tokenized_payment_method={bool(tokenized_payment_method)}, "
+                    f"cart_mandate={bool(cart_mandate)}, "
+                    f"intent_mandate={bool(intent_mandate)}, "
+                    f"cart_webauthn_assertion={bool(cart_webauthn_assertion)}"
+                )
+
+                if not tokenized_payment_method:
+                    yield StreamEvent(
+                        type="agent_text",
+                        content="エラー: トークン化された支払い方法が見つかりません。"
+                    )
+                    session["step"] = "error"
+                    return
+
+                if not cart_mandate:
+                    yield StreamEvent(
+                        type="agent_text",
+                        content="エラー: CartMandateが見つかりません。"
+                    )
+                    session["step"] = "error"
+                    return
+
+                if not intent_mandate:
+                    yield StreamEvent(
+                        type="agent_text",
+                        content="エラー: IntentMandateが見つかりません。"
+                    )
+                    session["step"] = "error"
+                    return
+
+                # AP2完全準拠: CartMandateが署名済みかチェック
+                # CartMandate自体は変更せず、WebAuthn assertionは別途保存される
+                if not cart_webauthn_assertion:
+                    yield StreamEvent(
+                        type="agent_text",
+                        content="エラー: CartMandateが署名されていません。先にCartMandateを署名してください。"
+                    )
+                    session["step"] = "error"
+                    return
+
+                # PaymentMandate作成
+                yield StreamEvent(
+                    type="agent_text",
+                    content="💳 PaymentMandateを作成中..."
+                )
+                await asyncio.sleep(0.3)
+
+                try:
+                    # AP2完全準拠: PaymentMandate作成（リスク評価含む）
+                    # _create_payment_mandateメソッドは内部でリスク評価も実行する
+                    payment_mandate = self._create_payment_mandate(session)
+
+                    session["payment_mandate"] = payment_mandate
+                    session["risk_assessment"] = {
+                        "risk_score": payment_mandate.get("risk_score", 50),
+                        "fraud_indicators": payment_mandate.get("fraud_indicators", [])
+                    }
+
+                    # WebAuthn認証リクエスト
+                    yield StreamEvent(
+                        type="agent_text",
+                        content="🔐 決済を実行するため、デバイス認証（WebAuthn/Passkey）を実行してください。"
+                    )
+                    await asyncio.sleep(0.3)
+
+                    # AP2完全準拠: WebAuthn challengeを生成
+                    import secrets
+                    challenge = secrets.token_urlsafe(32)
+                    session["webauthn_challenge"] = challenge
+                    session["step"] = "webauthn_attestation_requested"
+                    session["will_use_passkey"] = True
+
+                    yield StreamEvent(
+                        type="webauthn_request",
+                        challenge=challenge,
+                        rp_id="localhost",
+                        timeout=60000
+                    )
+
+                    yield StreamEvent(
+                        type="agent_text",
+                        content="デバイス認証を完了してください。\n\n認証後、自動的に決済処理が開始されます。"
+                    )
+                    return
+
+                except Exception as e:
+                    logger.error(f"[3DS completion] Failed to create PaymentMandate: {e}")
+                    yield StreamEvent(
+                        type="agent_text",
+                        content=f"エラー: PaymentMandate作成に失敗しました: {str(e)}"
+                    )
+                    session["step"] = "error"
+                    return
+            else:
+                yield StreamEvent(
+                    type="agent_text",
+                    content="🔐 3D Secure認証を完了してください。\n\n"
+                            "ポップアップウィンドウで認証を完了すると、自動的に処理が続行されます。"
+                )
+                return
+
         elif current_step == "webauthn_attestation_requested":
             # フロントエンドがPOST /payment/submit-attestationを呼び出すまで待機
             # ユーザーがチャット入力してしまった場合の対応
@@ -3633,7 +3790,7 @@ class ShoppingAgent(BaseAgent):
         Raises:
             ValueError: user_idが提供されていない場合
         """
-        # AP2仕様準拠: 本番環境ではuser_idは必須（JWT認証から取得）
+
         if not user_id:
             raise ValueError(
                 "user_id is required. User must be authenticated via Passkey/JWT before creating a session. "

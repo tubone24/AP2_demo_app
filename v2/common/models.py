@@ -553,11 +553,12 @@ class StreamEvent(BaseModel):
         "payment_method_selection",
         "credential_provider_selection",
         "webauthn_request",
+        "stepup_authentication_request",  # AP2完全準拠: 3D Secure 2.0認証リクエスト
         "step_up_redirect",
         "error",
         "done"
     ]
-    content: Optional[str] = None
+    content: Optional[str | Dict[str, Any]] = None  # AP2: stepup_authentication_requestはDict
     mandate: Optional[Dict[str, Any]] = None
     mandate_type: Optional[Literal["intent", "cart", "payment"]] = None
     items: Optional[List[Dict[str, Any]]] = None
