@@ -74,7 +74,6 @@ from v2.common.auth import (
     validate_password_strength,
     # [DEPRECATED] WebAuthn/Passkey認証（削除予定）
     verify_webauthn_attestation,
-    verify_webauthn_assertion,
 )
 from v2.common.logger import (
     get_logger,

@@ -719,7 +719,7 @@ class MerchantService(BaseAgent):
             "sub": "did:ap2:merchant:xxx",  // Same as iss
             "aud": "did:ap2:agent:payment_processor",  // Payment Processor
             "iat": <timestamp>,
-            "exp": <timestamp + 900>,  // 15分後（AP2仕様では5-15分推奨）
+            "exp": <timestamp + 3600>,  // 1時間後（AP2準拠）
             "jti": <unique_id>,  // リプレイ攻撃防止
             "cart_hash": "<cart_contents_hash>"
           }
@@ -750,12 +750,14 @@ class MerchantService(BaseAgent):
         }
 
         # 3. JWTのPayload
+        # AP2準拠: JWTの有効期限は1時間（3600秒）に設定
+        # CartMandateのcart_expiry（15分）とは独立して、署名の有効性を保証
         payload = {
             "iss": merchant_id,  # Issuer: Merchant
             "sub": merchant_id,  # Subject: Merchant (same as issuer)
             "aud": "did:ap2:agent:payment_processor",  # Audience: Payment Processor
             "iat": int(now.timestamp()),  # Issued At
-            "exp": int(now.timestamp()) + 900,  # Expiry: 15分後（AP2仕様推奨）
+            "exp": int(now.timestamp()) + 3600,  # Expiry: 1時間後（AP2準拠）
             "jti": str(uuid.uuid4()),  # JWT ID（リプレイ攻撃防止）
             "cart_hash": cart_hash  # CartContentsのハッシュ
         }
