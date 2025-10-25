@@ -23,8 +23,8 @@ from cryptography.hazmat.backends import default_backend
 from cryptography.exceptions import InvalidSignature
 
 try:
-    from v2.common.models import Signature, DeviceAttestation, AttestationType
-    from v2.common.logger import get_logger, log_crypto_operation
+    from common.models import Signature, DeviceAttestation, AttestationType
+    from common.logger import get_logger, log_crypto_operation
 except ModuleNotFoundError:
     from common.models import Signature, DeviceAttestation, AttestationType
     from common.logger import get_logger, log_crypto_operation

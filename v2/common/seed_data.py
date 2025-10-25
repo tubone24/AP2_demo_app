@@ -12,7 +12,7 @@ from pathlib import Path
 # 親ディレクトリを追加
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from v2.common.database import DatabaseManager, ProductCRUD, User
+from common.database import DatabaseManager, ProductCRUD, User
 
 
 # ========================================

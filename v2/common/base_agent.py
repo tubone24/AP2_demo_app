@@ -16,10 +16,16 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 # v2の暗号化モジュールをインポート
-from v2.common.crypto import KeyManager, SignatureManager
+from common.crypto import KeyManager, SignatureManager
 
 from .models import A2AMessage
 from .a2a_handler import A2AMessageHandler
+
+# OpenTelemetry分散トレーシング
+from .telemetry import (
+    setup_telemetry,
+    is_telemetry_enabled
+)
 
 logger = logging.getLogger(__name__)
 
@@ -62,8 +68,21 @@ class BaseAgent(ABC):
         # CORS設定
         self._setup_cors()
 
+        # OpenTelemetry分散トレーシング設定（手動計装）
+        # サービス名を環境変数から取得、なければagent_idから生成
+        service_name = os.getenv("OTEL_SERVICE_NAME", agent_id.split(":")[-1])
+        setup_telemetry(service_name)
+
+        # 注意: 自動計装は使用しない（Langfuseとの競合を避けるため）
+        # A2A通信、MCP通信、エンティティ間通信は手動でトレースを追加
+
+        if is_telemetry_enabled():
+            logger.info(
+                f"[{self.agent_name}] OpenTelemetry distributed tracing enabled "
+                f"(service: {service_name}, manual instrumentation only)"
+            )
+
         # 環境変数からkeys_directoryを取得（Docker環境対応）
-        import os
         keys_dir = os.getenv("AP2_KEYS_DIRECTORY", keys_directory)
 
         # 鍵管理と署名管理の初期化

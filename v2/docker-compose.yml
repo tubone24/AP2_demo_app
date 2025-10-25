@@ -44,15 +44,49 @@ services:
       - DMR_API_URL=${DMR_API_URL:-http://host.docker.internal:12434/engines/llama.cpp/v1}
       - DMR_MODEL=${DMR_MODEL:-ai/qwen3}
       - DMR_API_KEY=${DMR_API_KEY:-none}
+      - SHOPPING_MCP_URL=http://shopping_agent_mcp:8010
       - LANGFUSE_ENABLED=${LANGFUSE_ENABLED:-false}
       - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY:-}
       - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY:-}
       - LANGFUSE_HOST=${LANGFUSE_HOST:-https://cloud.langfuse.com}
+      # OpenTelemetry設定
+      - OTEL_ENABLED=${OTEL_ENABLED:-true}
+      - OTEL_SERVICE_NAME=shopping_agent
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
+      - OTEL_EXPORTER_OTLP_INSECURE=true
     networks:
       - ap2_network
     depends_on:
       init-keys:
         condition: service_completed_successfully
+      shopping_agent_mcp:
+        condition: service_started
+    restart: unless-stopped
+
+  # Shopping Agent MCP - MCPツール（LangGraphノード）
+  shopping_agent_mcp:
+    build:
+      context: ..
+      dockerfile: v2/services/shopping_agent_mcp/Dockerfile
+    container_name: ap2_shopping_agent_mcp
+    ports:
+      - "8010:8010"
+    volumes:
+      - keys:/app/v2/keys
+      - data:/app/v2/data
+    env_file:
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+      - AGENT_ID=did:ap2:agent:shopping_agent
+      - AP2_KEYS_DIRECTORY=/app/v2/keys
+      - DATABASE_URL=sqlite+aiosqlite:////app/v2/data/shopping_agent.db
+      - MERCHANT_AGENT_URL=http://merchant_agent:8001
+      - PAYMENT_PROCESSOR_URL=http://payment_processor:8004
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_FORMAT=${LOG_FORMAT:-text}
+    networks:
+      - ap2_network
     restart: unless-stopped
 
   # Merchant Agent - 商品検索・CartMandate作成
@@ -84,6 +118,11 @@ services:
       - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY:-}
       - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY:-}
       - LANGFUSE_HOST=${LANGFUSE_HOST:-https://cloud.langfuse.com}
+      # OpenTelemetry設定
+      - OTEL_ENABLED=${OTEL_ENABLED:-true}
+      - OTEL_SERVICE_NAME=merchant_agent
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
+      - OTEL_EXPORTER_OTLP_INSECURE=true
     networks:
       - ap2_network
     depends_on:
@@ -140,6 +179,11 @@ services:
       - DATABASE_URL=sqlite+aiosqlite:////app/v2/data/merchant.db
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - LOG_FORMAT=${LOG_FORMAT:-text}
+      # OpenTelemetry設定
+      - OTEL_ENABLED=${OTEL_ENABLED:-true}
+      - OTEL_SERVICE_NAME=merchant
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
+      - OTEL_EXPORTER_OTLP_INSECURE=true
     networks:
       - ap2_network
     depends_on:
@@ -168,6 +212,11 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - LOG_FORMAT=${LOG_FORMAT:-text}
       - PAYMENT_NETWORK_URL=http://payment_network:8005
+      # OpenTelemetry設定
+      - OTEL_ENABLED=${OTEL_ENABLED:-true}
+      - OTEL_SERVICE_NAME=credential_provider
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
+      - OTEL_EXPORTER_OTLP_INSECURE=true
     networks:
       - ap2_network
     depends_on:
@@ -197,6 +246,11 @@ services:
       - DATABASE_URL=sqlite+aiosqlite:////app/v2/data/payment_processor.db
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - LOG_FORMAT=${LOG_FORMAT:-text}
+      # OpenTelemetry設定
+      - OTEL_ENABLED=${OTEL_ENABLED:-true}
+      - OTEL_SERVICE_NAME=payment_processor
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
+      - OTEL_EXPORTER_OTLP_INSECURE=true
     networks:
       - ap2_network
     depends_on:
@@ -258,6 +312,20 @@ services:
       - MEILI_NO_ANALYTICS=true
     volumes:
       - meilisearch_data:/meili_data
+    networks:
+      - ap2_network
+    restart: unless-stopped
+
+  # Jaeger - 分散トレーシングバックエンド（OpenTelemetry）
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: ap2_jaeger
+    ports:
+      - "16686:16686"  # Jaeger UI
+      - "4317:4317"    # OTLP gRPC receiver
+      - "4318:4318"    # OTLP HTTP receiver
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
     networks:
       - ap2_network
     restart: unless-stopped

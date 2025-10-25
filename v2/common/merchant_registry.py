@@ -18,8 +18,8 @@ from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy.future import select
 import httpx
 
-from v2.common.models import DIDDocument, ServiceEndpoint, VerificationMethod
-from v2.common.logger import get_logger
+from common.models import DIDDocument, ServiceEndpoint, VerificationMethod
+from common.logger import get_logger
 
 logger = get_logger(__name__)
 

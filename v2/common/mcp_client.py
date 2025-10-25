@@ -15,8 +15,10 @@ from typing import Dict, Any, Optional
 import httpx
 
 from common.logger import get_logger
+from common.telemetry import get_tracer, create_http_span, is_telemetry_enabled
 
 logger = get_logger(__name__, service_name='mcp_client')
+tracer = get_tracer(__name__)
 
 
 class MCPClient:
@@ -179,13 +181,26 @@ class MCPClient:
             headers["Mcp-Session-Id"] = self.session_id
 
         # HTTP POST送信
+        # OpenTelemetry 手動トレーシング: MCP通信
         try:
-            response = await self.http_client.post(
+            with create_http_span(
+                tracer,
+                "POST",
                 f"{self.base_url}/",
-                json=message,
-                headers=headers
-            )
-            response.raise_for_status()
+                **{
+                    "mcp.method": method,
+                    "mcp.message_id": message_id,
+                    "rpc.system": "jsonrpc",
+                    "rpc.service": "mcp"
+                }
+            ) as span:
+                response = await self.http_client.post(
+                    f"{self.base_url}/",
+                    json=message,
+                    headers=headers
+                )
+                response.raise_for_status()
+                span.set_attribute("http.status_code", response.status_code)
 
             # セッションID取得（initializeレスポンスから）
             if method == "initialize" and "Mcp-Session-Id" in response.headers:

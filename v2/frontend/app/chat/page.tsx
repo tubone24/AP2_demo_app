@@ -1,6 +1,18 @@
 "use client";
 
+/**
+ * v2/frontend/app/chat/page.tsx
+ *
+ * チャット画面（AP2仕様準拠 + JWT認証統合）
+ *
+ * AP2要件:
+ * - JWTによるHTTPセッション認証（Layer 1）
+ * - マンデート署名（WebAuthn/Passkey）（Layer 2）
+ * - payer_email = JWT.email（オプション）
+ */
+
 import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { useSSEChat } from "@/hooks/useSSEChat";
 import { ChatMessage } from "@/components/chat/ChatMessage";
 import { ChatInput } from "@/components/chat/ChatInput";
@@ -14,10 +26,18 @@ import { CartDetailsModal } from "@/components/cart/CartDetailsModal";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Card, CardContent } from "@/components/ui/card";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { Bot } from "lucide-react";
+import { Bot, LogOut, User } from "lucide-react";
 import { Product } from "@/lib/types/chat";
+import {
+  isAuthenticated,
+  getCurrentUser,
+  logout,
+  getAuthHeaders,
+  isCredentialProviderPasskeyRegistered
+} from "@/lib/passkey";
 
 export default function ChatPage() {
+  const router = useRouter();
   const {
     messages,
     isStreaming,
@@ -43,21 +63,48 @@ export default function ChatPage() {
   const [isPasskeyRegistered, setIsPasskeyRegistered] = useState(false);
   const [showPasskeyRegistration, setShowPasskeyRegistration] = useState(false);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [currentUser, setCurrentUser] = useState<any>(null);
   const [cart, setCart] = useState<Product[]>([]);
   const [selectedCartForDetails, setSelectedCartForDetails] = useState<any | null>(null);
 
-  // Passkey登録状態をチェック
-  useEffect(() => {
-    const registered = localStorage.getItem("ap2_passkey_registered");
-    const userId = localStorage.getItem("ap2_user_id");
+  // AP2完全準拠: Credential Provider用Passkeyは専用画面で登録
+  // /auth/register-passkeyへリダイレクト
 
-    if (registered === "true" && userId) {
-      setIsPasskeyRegistered(true);
-      setCurrentUserId(userId);
-    } else {
-      setShowPasskeyRegistration(true);
+  // AP2準拠: JWT認証チェック（Layer 1）
+  useEffect(() => {
+    // JWT認証状態をチェック
+    if (!isAuthenticated()) {
+      // 未認証の場合はログイン画面へリダイレクト
+      router.push('/auth/login');
+      return;
     }
-  }, []);
+
+    // 現在のユーザー情報を取得
+    const user = getCurrentUser();
+    if (user) {
+      setCurrentUser(user);
+      setCurrentUserId(user.id);
+      setIsPasskeyRegistered(true);
+
+      // レガシーのlocalStorageキーも設定（既存コンポーネントとの互換性）
+      localStorage.setItem("ap2_user_id", user.id);
+
+      // AP2完全準拠: Credential Provider用Passkeyの登録チェック（Mandate署名用）
+      // Shopping Agentはメール/パスワード認証、Credential ProviderはPasskey認証
+      if (!isCredentialProviderPasskeyRegistered()) {
+        // Passkey未登録の場合は登録画面へリダイレクト
+        router.push('/auth/register-passkey');
+      }
+    }
+  }, [router]);
+
+  // ログアウト処理
+  const handleLogout = () => {
+    logout();
+    router.push('/auth/login');
+  };
+
+  // AP2完全準拠: Credential Provider用Passkeyは専用画面(/auth/register-passkey)で登録
 
   // Step-up認証完了のコールバックをチェック
   useEffect(() => {
@@ -161,9 +208,14 @@ export default function ChatPage() {
           webauthn_assertion: attestation,
         });
 
+        // AP2準拠: JWT認証ヘッダーを追加（Layer 1）
+        const authHeaders = getAuthHeaders();
         const response = await fetch(`${shoppingAgentUrl}/cart/submit-signature`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            ...authHeaders,  // AP2 Layer 1: JWT Authorization
+          },
           body: JSON.stringify({
             session_id: sessionId,
             cart_mandate: signatureRequest.mandate,
@@ -235,9 +287,14 @@ export default function ChatPage() {
         attestation: attestation,
       });
 
+      // AP2準拠: JWT認証ヘッダーを追加（Layer 1）
+      const authHeaders = getAuthHeaders();
       const response = await fetch(`${shoppingAgentUrl}/payment/submit-attestation`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...authHeaders,  // AP2 Layer 1: JWT Authorization
+        },
         body: JSON.stringify({
           session_id: sessionId,
           attestation: attestation,
@@ -294,18 +351,42 @@ export default function ChatPage() {
     <div className="flex flex-col h-screen bg-background">
       {/* ヘッダー */}
       <header className="border-b bg-card p-4">
-        <div className="container max-w-4xl mx-auto flex items-center gap-3">
-          <Avatar>
-            <AvatarFallback className="bg-green-500">
-              <Bot className="w-6 h-6 text-white" />
-            </AvatarFallback>
-          </Avatar>
-          <div>
-            <h1 className="text-xl font-semibold">AP2 Shopping Agent</h1>
-            <p className="text-sm text-muted-foreground">
-              商品の検索・購入をお手伝いします
-            </p>
+        <div className="container max-w-4xl mx-auto flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <Avatar>
+              <AvatarFallback className="bg-green-500">
+                <Bot className="w-6 h-6 text-white" />
+              </AvatarFallback>
+            </Avatar>
+            <div>
+              <h1 className="text-xl font-semibold">AP2 Shopping Agent</h1>
+              <p className="text-sm text-muted-foreground">
+                商品の検索・購入をお手伝いします
+              </p>
+            </div>
           </div>
+
+          {/* ユーザープロフィール & ログアウト（AP2準拠: JWT認証済みユーザー情報） */}
+          {currentUser && (
+            <div className="flex items-center gap-3">
+              <div className="text-right hidden sm:block">
+                <p className="text-sm font-medium">{currentUser.username}</p>
+                <p className="text-xs text-muted-foreground">{currentUser.email}</p>
+              </div>
+              <Avatar className="w-9 h-9">
+                <AvatarFallback className="bg-purple-500">
+                  <User className="w-5 h-5 text-white" />
+                </AvatarFallback>
+              </Avatar>
+              <button
+                onClick={handleLogout}
+                className="p-2 hover:bg-accent rounded-lg transition-colors"
+                title="ログアウト"
+              >
+                <LogOut className="w-5 h-5 text-muted-foreground" />
+              </button>
+            </div>
+          )}
         </div>
       </header>
 
@@ -570,6 +651,8 @@ export default function ChatPage() {
         onClose={() => setSelectedCartForDetails(null)}
         onSelectCart={handleSelectCart}
       />
+
+      {/* AP2完全準拠: Credential Provider用Passkeyは専用画面(/auth/register-passkey)で登録 */}
     </div>
   );
 }

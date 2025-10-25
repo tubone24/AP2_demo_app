@@ -588,7 +588,7 @@ class RiskAssessmentEngine:
                 amount_cents = int(amount_value_str)
 
             # データベースに保存
-            from v2.common.database import TransactionHistoryCRUD
+            from common.database import TransactionHistoryCRUD
 
             async with self.db_manager.get_session() as session:
                 await TransactionHistoryCRUD.create(session, {
@@ -619,7 +619,7 @@ class RiskAssessmentEngine:
             return []
 
         try:
-            from v2.common.database import TransactionHistoryCRUD
+            from common.database import TransactionHistoryCRUD
 
             async with self.db_manager.get_session() as session:
                 history_records = await TransactionHistoryCRUD.get_by_payer_id(session, payer_id, days=days)

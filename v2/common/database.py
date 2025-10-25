@@ -65,26 +65,32 @@ class Product(Base):
 
 class User(Base):
     """
-    usersテーブル
+    usersテーブル（メール/パスワード認証）
 
-    demo_app_v2.md:
-    - id (uuid)
-    - display_name
-    - email
-    - created_at
+    AP2仕様準拠:
+    - email: PaymentMandate.payer_emailとして使用
+    - id: 内部識別子（UUID）
+    - is_active: アカウント有効フラグ
+    - hashed_password: bcryptハッシュ化パスワード
+
+    AP2仕様: HTTPセッション認証方式は仕様外（実装の自由度あり）
+    Mandate署名認証はCredential ProviderのPasskeyで実施（AP2準拠）
     """
     __tablename__ = "users"
 
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    display_name = Column(String, nullable=False)
-    email = Column(String, unique=True, nullable=False, index=True)
+    display_name = Column(String, nullable=False)  # username
+    email = Column(String, unique=True, nullable=False, index=True)  # AP2 payer_email
+    hashed_password = Column(String, nullable=False)  # bcryptハッシュ
+    is_active = Column(Integer, nullable=False, default=1)  # SQLiteはBooleanがないためIntegerを使用
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "id": self.id,
-            "display_name": self.display_name,
+            "username": self.display_name,  # Pydanticモデルに合わせる
             "email": self.email,
+            "is_active": bool(self.is_active),
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 
@@ -193,6 +199,32 @@ class PasskeyCredential(Base):
             "transports": json.loads(self.transports) if self.transports else [],
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
+
+
+class PaymentMethod(Base):
+    """
+    payment_methodsテーブル（AP2完全準拠）
+
+    Credential Providerで管理する支払い方法
+    AP2仕様:
+    - user_id: ユーザーID（Credential Provider内部のID）
+    - payment_method_id: 支払い方法ID（pm_xxxxx形式）
+    - type: card, bank_account, digital_wallet等
+    - payment_data: 支払い方法の詳細情報（JSON）
+        - brand, last4, expiry_month, expiry_year, billing_address等
+    - created_at: 作成日時
+    """
+    __tablename__ = "payment_methods"
+
+    id = Column(String, primary_key=True)  # pm_xxxxx形式
+    user_id = Column(String, nullable=False, index=True)
+    payment_data = Column(Text, nullable=False)  # JSON as text
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    def to_dict(self) -> Dict[str, Any]:
+        data = json.loads(self.payment_data) if self.payment_data else {}
+        data["id"] = self.id
+        return data
 
 
 class Attestation(Base):
@@ -604,11 +636,13 @@ class UserCRUD:
 
     @staticmethod
     async def create(session: AsyncSession, user_data: Dict[str, Any]) -> User:
-        """ユーザー作成"""
+        """ユーザー作成（AP2完全準拠）"""
         user = User(
             id=user_data.get("id", str(uuid.uuid4())),
             display_name=user_data["display_name"],
-            email=user_data["email"]
+            email=user_data["email"],
+            hashed_password=user_data["hashed_password"],  # AP2準拠: Argon2idハッシュ化
+            is_active=user_data.get("is_active", 1)
         )
         session.add(user)
         await session.commit()
@@ -793,3 +827,62 @@ class AgentSessionCRUD:
         await session.commit()
 
         return result.rowcount if result.rowcount else 0
+
+
+class PaymentMethodCRUD:
+    """PaymentMethod CRUD操作（AP2完全準拠）"""
+
+    @staticmethod
+    async def create(session: AsyncSession, payment_method_data: Dict[str, Any]) -> PaymentMethod:
+        """
+        支払い方法作成
+
+        Args:
+            session: AsyncSession
+            payment_method_data: {
+                "id": "pm_xxxxx",
+                "user_id": "usr_xxxxx",
+                "payment_method": {
+                    "type": "card",
+                    "brand": "visa",
+                    "last4": "4242",
+                    ...
+                }
+            }
+
+        Returns:
+            PaymentMethod
+        """
+        payment_method = PaymentMethod(
+            id=payment_method_data["id"],
+            user_id=payment_method_data["user_id"],
+            payment_data=json.dumps(payment_method_data["payment_method"])
+        )
+        session.add(payment_method)
+        await session.commit()
+        await session.refresh(payment_method)
+        return payment_method
+
+    @staticmethod
+    async def get_by_user_id(session: AsyncSession, user_id: str) -> List[PaymentMethod]:
+        """ユーザーIDで支払い方法を取得"""
+        stmt = select(PaymentMethod).where(PaymentMethod.user_id == user_id)
+        result = await session.execute(stmt)
+        return result.scalars().all()
+
+    @staticmethod
+    async def get_by_id(session: AsyncSession, payment_method_id: str) -> Optional[PaymentMethod]:
+        """支払い方法IDで取得"""
+        stmt = select(PaymentMethod).where(PaymentMethod.id == payment_method_id)
+        result = await session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    @staticmethod
+    async def delete(session: AsyncSession, payment_method_id: str) -> bool:
+        """支払い方法削除"""
+        payment_method = await PaymentMethodCRUD.get_by_id(session, payment_method_id)
+        if payment_method:
+            await session.delete(payment_method)
+            await session.commit()
+            return True
+        return False

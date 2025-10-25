@@ -1,7 +1,18 @@
 "use client";
 
+/**
+ * v2/frontend/hooks/useSSEChat.ts
+ *
+ * SSEチャットフック（AP2仕様準拠 + JWT認証）
+ *
+ * AP2要件:
+ * - JWTをAuthorizationヘッダーに追加
+ * - payer_email = JWT.email
+ */
+
 import { useState, useCallback, useRef } from "react";
 import { ChatMessage, ChatSSEEvent, SignatureRequestEvent, Product } from "@/lib/types/chat";
+import { getAuthHeaders } from "@/lib/passkey";
 
 export function useSSEChat() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -54,10 +65,15 @@ export function useSSEChat() {
     try {
       // 環境変数から直接Shopping Agent URLを取得
       const shoppingAgentUrl = process.env.NEXT_PUBLIC_SHOPPING_AGENT_URL || "http://localhost:8000";
+
+      // AP2準拠: JWTをAuthorizationヘッダーに追加
+      const authHeaders = getAuthHeaders();
+
       const response = await fetch(`${shoppingAgentUrl}/chat/stream`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          ...authHeaders,  // JWT Authorization header
         },
         body: JSON.stringify({
           user_input: userInput,
@@ -228,6 +244,45 @@ export function useSSEChat() {
                     rp_id: webauthnEvent.rp_id,
                     timeout: webauthnEvent.timeout,
                   });
+                  break;
+
+                case "stepup_authentication_request":
+                  // AP2完全準拠: 3D Secure 2.0認証リクエスト
+                  const stepupAuthEvent = event as any;
+                  const stepupContent = stepupAuthEvent.content || stepupAuthEvent;
+                  const stepupMethod = stepupContent.stepup_method || "3ds2";
+                  const challengeUrl = stepupContent.challenge_url;
+
+                  console.log("[3DS Authentication Request]", {
+                    stepupMethod,
+                    challengeUrl,
+                    paymentMethodId: stepupContent.payment_method_id,
+                    fullEvent: stepupAuthEvent
+                  });
+
+                  // 3DS認証画面を新しいウィンドウで開く
+                  const threeDSWindow = window.open(
+                    challengeUrl,
+                    "ap2_3ds_auth",
+                    "width=600,height=700,scrollbars=yes,resizable=yes"
+                  );
+
+                  if (!threeDSWindow) {
+                    console.error("Failed to open 3DS window. Please allow pop-ups.");
+                    agentMessageContent += "\n\n❌ ポップアップがブロックされました。ブラウザの設定でポップアップを許可してください。";
+                    setCurrentAgentMessage(agentMessageContent);
+                  } else {
+                    // ウィンドウが閉じられるのを監視
+                    const check3DSWindowClosed = setInterval(() => {
+                      if (threeDSWindow.closed) {
+                        clearInterval(check3DSWindowClosed);
+                        console.log("[3DS Window] Closed");
+
+                        // 3DS認証完了後、フローを継続
+                        sendMessage("3ds-completed");
+                      }
+                    }, 500);
+                  }
                   break;
 
                 case "step_up_redirect":

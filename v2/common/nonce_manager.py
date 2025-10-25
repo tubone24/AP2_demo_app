@@ -10,7 +10,7 @@ from typing import Dict, Optional
 from datetime import datetime, timedelta
 
 try:
-    from v2.common.logger import get_logger
+    from common.logger import get_logger
 except ModuleNotFoundError:
     from common.logger import get_logger
 

@@ -14,14 +14,15 @@ import re
 from typing import Dict, Any, Optional, List
 from datetime import datetime, timezone, timedelta
 
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, END
 from langgraph.graph.state import CompiledStateGraph
 
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from v2.common.logger import get_logger
 
 logger = get_logger(__name__, service_name='langgraph_conversation')
