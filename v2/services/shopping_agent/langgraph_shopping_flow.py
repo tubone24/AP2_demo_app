@@ -28,6 +28,11 @@ from langgraph.graph import StateGraph, END
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
+# AP2型定義（完全準拠）
+import sys
+sys.path.insert(0, '/app')
+from ap2_types import Signature
+
 logger = logging.getLogger(__name__)
 
 # Langfuseトレーシング設定
@@ -105,7 +110,11 @@ def route_by_step(state: ShoppingFlowState) -> str:
         return "fetch_carts"
     elif current_step in ["cart_selection", "cart_options"]:
         return "select_cart"
-    elif current_step == "cp_selection":
+    elif current_step == "cart_signature_pending":
+        # カート署名待ち（外部API待機）
+        return "cart_signature_waiting"
+    elif current_step in ["payment_mandate_creation", "select_credential_provider_for_payment", "cp_selection"]:
+        # カート署名完了後、Credential Provider選択へ（AP2完全準拠）
         return "select_credential_provider"
     elif current_step in ["payment_method_selection", "payment_method_options"]:
         return "select_payment_method"
@@ -453,14 +462,39 @@ async def fetch_carts_node(state: ShoppingFlowState, agent_instance: Any) -> Sho
                 "next_step": END
             }
 
-        # カート候補を保存
-        session["cart_candidates"] = cart_candidates
+        # AP2完全準拠: Artifact構造からフロントエンド用に変換
+        frontend_cart_candidates = []
+        for i, cart_artifact in enumerate(cart_candidates):
+            try:
+                # Artifact構造からCartMandateを抽出（AP2/A2A仕様）
+                cart_mandate = cart_artifact["parts"][0]["data"]["ap2.mandates.CartMandate"]
+
+                # フロントエンド用のCartCandidate形式に変換
+                cart_candidate = {
+                    "artifact_id": cart_artifact.get("artifactId", f"artifact_{i}"),
+                    "artifact_name": cart_artifact.get("name", f"カート{i+1}"),
+                    "cart_mandate": cart_mandate
+                }
+                frontend_cart_candidates.append(cart_candidate)
+            except (KeyError, IndexError) as e:
+                logger.error(f"[fetch_carts_node] Failed to extract CartMandate {i}: {e}")
+
+        # セッションに保存
+        # - cart_candidates_raw: 元のArtifact構造（A2A準拠、署名検証用）
+        # - cart_candidates: フロントエンド用（カート選択処理用）
+        session["cart_candidates_raw"] = cart_candidates
+        session["cart_candidates"] = frontend_cart_candidates
         session["step"] = "cart_selection"
 
-        # カート候補を表示
+        # フロントエンドにCartCandidate形式で送信
         events.append({
             "type": "cart_options",
-            "carts": cart_candidates
+            "items": frontend_cart_candidates
+        })
+
+        events.append({
+            "type": "agent_text",
+            "content": f"{len(cart_candidates)}つのカート候補が見つかりました。お好みのカートを選択してください。"
         })
 
         return {
@@ -496,22 +530,26 @@ async def select_cart_node(state: ShoppingFlowState, agent_instance: Any) -> Sho
         cart_candidates = session.get("cart_candidates", [])
 
         # カート選択（番号またはID）
-        selected_cart = None
+        selected_cart_candidate = None
+        cart_index = None
 
         # 番号で選択
         if user_input.isdigit():
             cart_index = int(user_input) - 1
             if 0 <= cart_index < len(cart_candidates):
-                selected_cart = cart_candidates[cart_index]
+                selected_cart_candidate = cart_candidates[cart_index]
 
-        # IDで選択
+        # IDで選択（artifact_idまたはcart_mandate.contents.id）
         else:
-            for cart in cart_candidates:
-                if cart["id"] == user_input:
-                    selected_cart = cart
+            for idx, cart in enumerate(cart_candidates):
+                cart_mandate = cart.get("cart_mandate", {})
+                cart_contents = cart_mandate.get("contents", {})
+                if cart.get("artifact_id") == user_input or cart_contents.get("id") == user_input:
+                    selected_cart_candidate = cart
+                    cart_index = idx
                     break
 
-        if not selected_cart:
+        if not selected_cart_candidate:
             events.append({
                 "type": "agent_text",
                 "content": "カートが認識できませんでした。番号（1〜3）またはカートIDを入力してください。"
@@ -524,33 +562,43 @@ async def select_cart_node(state: ShoppingFlowState, agent_instance: Any) -> Sho
                 "next_step": END
             }
 
-        # Merchant署名の暗号学的検証（AP2準拠）
-        merchant_id = selected_cart.get("merchant_id")
-        merchant_signature = selected_cart.get("merchant_signature")
+        # AP2完全準拠: CartMandateを取得
+        cart_mandate = selected_cart_candidate.get("cart_mandate")
+        if not cart_mandate:
+            raise ValueError("CartMandate not found in selected cart")
 
+        # Merchant署名の暗号学的検証（AP2完全準拠）
+        merchant_signature = cart_mandate.get("merchant_signature")
         if not merchant_signature:
             raise ValueError("Merchant signature not found in CartMandate")
 
-        # 署名検証
+        # merchant_signatureをSignatureオブジェクトに変換（AP2完全準拠）
+        if isinstance(merchant_signature, dict):
+            sig_obj = Signature(**merchant_signature)
+        else:
+            sig_obj = merchant_signature
+
+        # SignatureManagerでMerchant署名を検証（AP2完全準拠）
         is_valid = agent_instance.signature_manager.verify_mandate_signature(
-            mandate_data=selected_cart,
-            signature_obj=merchant_signature,
-            expected_signer_id=merchant_id
+            cart_mandate,
+            sig_obj
         )
 
         if not is_valid:
+            logger.error(f"[select_cart_node] Merchant signature verification FAILED")
             raise ValueError("Merchant署名の検証に失敗しました")
 
         # CartMandateを保存
-        session["cart_mandate"] = selected_cart
+        session["cart_mandate"] = cart_mandate
+        session["selected_cart_index"] = cart_index
         session["step"] = "cart_signature_pending"
 
-        # WebAuthn署名リクエスト
+        # WebAuthn署名リクエスト（AP2完全準拠）
+        # フロントエンド互換性のため、mandateフィールド名とmandate_type="cart"を使用
         events.append({
             "type": "signature_request",
-            "mandate_type": "CartMandate",
-            "mandate_data": selected_cart,
-            "challenge": f"cart_signature_{session['session_id']}"
+            "mandate": cart_mandate,
+            "mandate_type": "cart"
         })
 
         return {
@@ -566,6 +614,42 @@ async def select_cart_node(state: ShoppingFlowState, agent_instance: Any) -> Sho
         events.append({
             "type": "agent_text",
             "content": f"カート選択中にエラーが発生しました: {str(e)}"
+        })
+
+        return {
+            **state,
+            "session": session,
+            "events": events,
+            "next_step": END
+        }
+
+
+async def cart_signature_waiting_node(state: ShoppingFlowState) -> ShoppingFlowState:
+    """カート署名待ち（外部API待機中）（AP2完全準拠）"""
+    session = state["session"]
+    user_input = state["user_input"]
+    events = []
+
+    # `_cart_signature_completed`トークンで署名完了を検知（AP2完全準拠）
+    if user_input.startswith("_cart_signature_completed"):
+        # 署名完了、次のステップへ
+        session["step"] = "payment_mandate_creation"
+        events.append({
+            "type": "agent_text",
+            "content": "✅ CartMandate署名完了しました！"
+        })
+
+        return {
+            **state,
+            "session": session,
+            "events": events,
+            "next_step": END
+        }
+    else:
+        # 署名待ちメッセージを表示（AP2完全準拠）
+        events.append({
+            "type": "agent_text",
+            "content": "カートの署名を待っています。ブラウザの認証ダイアログで指紋認証・顔認証などを完了してください。"
         })
 
         return {
@@ -595,19 +679,20 @@ async def select_credential_provider_node(state: ShoppingFlowState, agent_instan
     session["selected_credential_provider"] = selected_cp
     session["step"] = "payment_method_selection"
 
-    # 支払い方法を取得
+    # 支払い方法を取得（AP2完全準拠）
     try:
         payment_methods = await agent_instance._get_payment_methods_from_cp(
-            cp_url=selected_cp["url"],
-            user_id=session.get("user_id", "anonymous")
+            user_id=session.get("user_id", "anonymous"),
+            credential_provider_url=selected_cp["url"]
         )
 
         session["payment_methods"] = payment_methods
+        session["available_payment_methods"] = payment_methods  # 既存実装との互換性
 
-        # 支払い方法選択UIを表示
+        # 支払い方法選択UIを表示（AP2完全準拠）
         events.append({
-            "type": "payment_method_options",
-            "methods": payment_methods
+            "type": "payment_method_selection",
+            "payment_methods": payment_methods  # フロントエンド互換性
         })
 
         return {
@@ -634,31 +719,43 @@ async def select_credential_provider_node(state: ShoppingFlowState, agent_instan
 
 
 async def select_payment_method_node(state: ShoppingFlowState, agent_instance: Any) -> ShoppingFlowState:
-    """ノード7: 支払い方法選択、PaymentMandate作成"""
+    """ノード7: 支払い方法選択、PaymentMandate作成（AP2完全準拠）"""
     session = state["session"]
     user_input = state["user_input"]
     events = []
 
     try:
-        payment_methods = session.get("payment_methods", [])
+        # 既存実装との互換性のため、available_payment_methodsを優先的に使用
+        available_payment_methods = session.get("available_payment_methods", [])
+        if not available_payment_methods:
+            available_payment_methods = session.get("payment_methods", [])
 
-        # 支払い方法選択
+        if not available_payment_methods:
+            events.append({
+                "type": "agent_text",
+                "content": "申し訳ございません。支払い方法リストが見つかりません。"
+            })
+            session["step"] = "error"
+            return {
+                **state,
+                "session": session,
+                "events": events,
+                "next_step": END
+            }
+
+        # 支払い方法選択（番号）
+        user_input_clean = user_input.strip()
         selected_method = None
 
-        if user_input.isdigit():
-            method_index = int(user_input) - 1
-            if 0 <= method_index < len(payment_methods):
-                selected_method = payment_methods[method_index]
-        else:
-            for method in payment_methods:
-                if method["id"] == user_input:
-                    selected_method = method
-                    break
+        if user_input_clean.isdigit():
+            method_index = int(user_input_clean) - 1
+            if 0 <= method_index < len(available_payment_methods):
+                selected_method = available_payment_methods[method_index]
 
         if not selected_method:
             events.append({
                 "type": "agent_text",
-                "content": "支払い方法が認識できませんでした。番号または支払い方法IDを入力してください。"
+                "content": f"支払い方法が認識できませんでした。番号（1〜{len(available_payment_methods)}）を入力してください。"
             })
 
             return {
@@ -668,9 +765,27 @@ async def select_payment_method_node(state: ShoppingFlowState, agent_instance: A
                 "next_step": END
             }
 
-        # トークン化
+        # 既存実装との互換性: selected_payment_methodをそのまま保存
+        session["selected_payment_method"] = selected_method
+
+        # AP2完全準拠: Step-upが必要な支払い方法の場合
+        # 既存実装との互換性のため、支払い方法自体のrequires_step_upフィールドをチェック
+        if selected_method.get("requires_step_up", False):
+            logger.info(
+                f"[select_payment_method_node] Payment method requires step-up: "
+                f"{selected_method['id']}, brand={selected_method.get('brand', 'unknown')}"
+            )
+            session["step"] = "step_up_requested"
+            return {
+                **state,
+                "session": session,
+                "events": events,
+                "next_step": "step_up_auth"
+            }
+
+        # トークン化（step-up不要な場合のみ）
         tokenized_method = await agent_instance._tokenize_payment_method(selected_method)
-        session["selected_payment_method"] = tokenized_method
+        session["tokenized_payment_method"] = tokenized_method
 
         # PaymentMandate作成（AP2完全準拠、リスク評価含む）
         cart_mandate = session["cart_mandate"]
@@ -682,7 +797,7 @@ async def select_payment_method_node(state: ShoppingFlowState, agent_instance: A
 
         session["payment_mandate"] = payment_mandate
 
-        # 3DS 2.0チェック
+        # PaymentMandateのstep-upチェック（念のため）
         requires_step_up = payment_mandate.get("requires_step_up_authentication", False)
 
         if requires_step_up:
@@ -723,11 +838,14 @@ async def step_up_auth_node(state: ShoppingFlowState, agent_instance: Any) -> Sh
     session = state["session"]
     events = []
 
-    # 3DS認証URLを表示
+    # session_idはstateから取得（AP2完全準拠）
+    session_id = state.get("session_id", "unknown")
+
+    # 3DS認証URLを表示（AP2完全準拠）
     events.append({
-        "type": "step_up_auth_request",
+        "type": "stepup_authentication_request",
         "auth_url": "https://example.com/3ds-auth",  # 実際のACS URLを使用
-        "challenge": f"3ds_{session['session_id']}"
+        "challenge": f"3ds_{session_id}"
     })
 
     session["step"] = "step_up_requested"
@@ -747,12 +865,12 @@ async def webauthn_auth_node(state: ShoppingFlowState, agent_instance: Any) -> S
 
     payment_mandate = session["payment_mandate"]
 
-    # WebAuthn署名リクエスト
+    # WebAuthn署名リクエスト（AP2完全準拠）
+    # フロントエンド互換性のため、mandateフィールド名とmandate_type="payment"を使用
     events.append({
         "type": "signature_request",
-        "mandate_type": "PaymentMandate",
-        "mandate_data": payment_mandate,
-        "challenge": f"payment_signature_{session['session_id']}"
+        "mandate": payment_mandate,
+        "mandate_type": "payment"
     })
 
     session["step"] = "webauthn_signature_requested"
@@ -817,16 +935,19 @@ async def completed_node(state: ShoppingFlowState) -> ShoppingFlowState:
 
     result = session.get("transaction_result", {})
 
-    events.append({
-        "type": "agent_text",
-        "content": "✅ 決済が完了しました！"
-    })
+    # 決済完了メッセージと領収書情報（AP2完全準拠）
+    receipt_text = f"""✅ 決済が完了しました！
+
+【取引情報】
+取引ID: {result.get("transaction_id", "N/A")}
+金額: ¥{result.get("amount", {}).get("value", 0):,}
+加盟店: {result.get("merchant", "N/A")}
+
+取引は正常に処理されました。"""
 
     events.append({
-        "type": "receipt",
-        "transaction_id": result.get("transaction_id"),
-        "amount": result.get("amount"),
-        "merchant": result.get("merchant")
+        "type": "agent_text",
+        "content": receipt_text
     })
 
     session["step"] = "completed"
@@ -917,6 +1038,9 @@ def create_shopping_flow_graph(agent_instance: Any):
     async def select_cart_node_bound(state: ShoppingFlowState) -> ShoppingFlowState:
         return await select_cart_node(state, agent_instance)
 
+    async def cart_signature_waiting_node_bound(state: ShoppingFlowState) -> ShoppingFlowState:
+        return await cart_signature_waiting_node(state)
+
     async def select_credential_provider_node_bound(state: ShoppingFlowState) -> ShoppingFlowState:
         return await select_credential_provider_node(state, agent_instance)
 
@@ -941,12 +1065,13 @@ def create_shopping_flow_graph(agent_instance: Any):
     # StateGraphを構築
     workflow = StateGraph(ShoppingFlowState)
 
-    # ノード追加（12ノード）
+    # ノード追加（13ノード）
     workflow.add_node("greeting", greeting_node_bound)
     workflow.add_node("collect_intent", collect_intent_node_bound)
     workflow.add_node("collect_shipping", collect_shipping_node_bound)
     workflow.add_node("fetch_carts", fetch_carts_node_bound)
     workflow.add_node("select_cart", select_cart_node_bound)
+    workflow.add_node("cart_signature_waiting", cart_signature_waiting_node_bound)
     workflow.add_node("select_credential_provider", select_credential_provider_node_bound)
     workflow.add_node("select_payment_method", select_payment_method_node_bound)
     workflow.add_node("step_up_auth", step_up_auth_node_bound)
@@ -964,6 +1089,7 @@ def create_shopping_flow_graph(agent_instance: Any):
             "collect_shipping": "collect_shipping",
             "fetch_carts": "fetch_carts",
             "select_cart": "select_cart",
+            "cart_signature_waiting": "cart_signature_waiting",
             "select_credential_provider": "select_credential_provider",
             "select_payment_method": "select_payment_method",
             "step_up_auth": "step_up_auth",
@@ -984,8 +1110,8 @@ def create_shopping_flow_graph(agent_instance: Any):
 
     # 全ノードに共通のルーティングを適用
     for node_name in ["greeting", "collect_intent", "collect_shipping", "fetch_carts",
-                      "select_cart", "select_credential_provider", "select_payment_method",
-                      "step_up_auth", "webauthn_auth", "execute_payment"]:
+                      "select_cart", "cart_signature_waiting", "select_credential_provider",
+                      "select_payment_method", "step_up_auth", "webauthn_auth", "execute_payment"]:
         workflow.add_conditional_edges(
             node_name,
             route_from_node,
@@ -1007,6 +1133,6 @@ def create_shopping_flow_graph(agent_instance: Any):
     # コンパイル
     compiled = workflow.compile()
 
-    logger.info("[create_shopping_flow_graph] LangGraph shopping flow compiled successfully (12 nodes)")
+    logger.info("[create_shopping_flow_graph] LangGraph shopping flow compiled successfully (13 nodes)")
 
     return compiled

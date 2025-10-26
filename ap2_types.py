@@ -21,6 +21,7 @@ class Signature:
     value: str  # Base64エンコードされた署名
     public_key: str  # 公開鍵
     signed_at: str  # ISO 8601形式のタイムスタンプ
+    key_id: Optional[str] = None  # 署名に使用した鍵のID（AP2完全準拠）
 
 
 @dataclass

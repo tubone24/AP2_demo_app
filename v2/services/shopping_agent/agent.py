@@ -957,7 +957,7 @@ class ShoppingAgent(BaseAgent):
                         logger.info(f"[chat_stream] Using LangGraph shopping flow (session_id={session_id})")
                         async for event in self._generate_fixed_response_langgraph(request.user_input, session, session_id):
                             yield json.dumps(event.model_dump(exclude_none=True))
-                            await asyncio.sleep(0.1)  # 少し遅延を入れて自然に
+                            await asyncio.sleep(0.01)
                     else:
                         # 既存実装を使用
                         if use_langgraph:
@@ -4423,26 +4423,10 @@ class ShoppingAgent(BaseAgent):
                     cart_candidates = data_part["payload"].get("cart_candidates", [])
                     logger.info(f"[ShoppingAgent] Received {len(cart_candidates)} cart candidates from Merchant Agent")
 
-                    # Cart CandidatesをArtifact形式から展開
-                    expanded_carts = []
-                    for artifact in cart_candidates:
-                        # Artifactの構造を確認
-                        if "parts" in artifact:
-                            for part in artifact["parts"]:
-                                if part.get("kind") == "data":
-                                    cart_data = part["data"].get("ap2.mandates.CartMandate")
-                                    if cart_data:
-                                        # Artifactメタデータも含める
-                                        expanded_cart = {
-                                            "artifact_id": artifact.get("artifactId"),
-                                            "artifact_name": artifact.get("name"),
-                                            "cart_mandate": cart_data
-                                        }
-                                        expanded_carts.append(expanded_cart)
-                                        logger.debug(f"[ShoppingAgent] Extracted CartMandate from Artifact: {cart_data.get('id')}")
-
-                    logger.info(f"[ShoppingAgent] Expanded {len(expanded_carts)} cart mandates from artifacts")
-                    return expanded_carts
+                    # AP2完全準拠: 元のArtifact構造をそのまま返す
+                    # フロントエンド変換は呼び出し側で実施
+                    logger.debug(f"[ShoppingAgent] Returning {len(cart_candidates)} artifacts in original A2A format")
+                    return cart_candidates
 
                 # 後方互換性：ProductListレスポンス（旧形式）
                 elif response_type == "ap2.responses.ProductList":
