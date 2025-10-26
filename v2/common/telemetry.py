@@ -190,20 +190,28 @@ def create_http_span(tracer: trace.Tracer, method: str, url: str, **attributes):
             response = httpx.post(...)
             span.set_attribute("http.status_code", response.status_code)
     """
-    span = tracer.start_as_current_span(
-        f"HTTP {method}",
-        kind=trace.SpanKind.CLIENT
-    )
+    # コンテキストマネージャーを作成
+    # IMPORTANT: tracer.start_as_current_span()は_AgnosticContextManagerを返す
+    # そのため、with文で使用してspanオブジェクトを取得する必要がある
+    from contextlib import contextmanager
 
-    # 標準的なHTTP属性を設定
-    span.set_attribute("http.method", method)
-    span.set_attribute("http.url", url)
+    @contextmanager
+    def http_span_context():
+        with tracer.start_as_current_span(
+            f"HTTP {method}",
+            kind=trace.SpanKind.CLIENT
+        ) as span:
+            # 標準的なHTTP属性を設定
+            span.set_attribute("http.method", method)
+            span.set_attribute("http.url", url)
 
-    # 追加属性を設定
-    for key, value in attributes.items():
-        span.set_attribute(key, value)
+            # 追加属性を設定
+            for key, value in attributes.items():
+                span.set_attribute(key, value)
 
-    return span
+            yield span
+
+    return http_span_context()
 
 
 def get_tracer(name: str) -> trace.Tracer:

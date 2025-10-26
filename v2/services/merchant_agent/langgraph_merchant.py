@@ -585,11 +585,11 @@ JSON配列形式で返答してください:
         cart_candidates = []
 
         for plan in cart_plans:
-            span = None
+            langfuse_span = None
             try:
                 # Langfuseスパン開始（可観測性向上）
                 if LANGFUSE_ENABLED and langfuse_client:
-                    span = langfuse_client.start_span(
+                    langfuse_span = langfuse_client.start_span(
                         name="mcp_build_cart_mandates",
                         input={"cart_plan": plan, "products_count": len(products)},
                         metadata={"tool": "build_cart_mandates", "mcp_server": "merchant_agent_mcp", "plan_name": plan.get("name"), "session_id": trace_id}
@@ -614,14 +614,14 @@ JSON配列形式で返答してください:
                         "merchant.cart_mandate_id": cart_mandate.get("id"),
                         "merchant.operation": "sign_cart"
                     }
-                ) as span:
+                ) as otel_span:
                     response = await self.http_client.post(
                         f"{self.merchant_url}/sign/cart",
                         json={"cart_mandate": cart_mandate},
                         timeout=30.0
                     )
                     response.raise_for_status()
-                    span.set_attribute("http.status_code", response.status_code)
+                    otel_span.set_attribute("http.status_code", response.status_code)
                     signed_cart_response = response.json()
 
                 # AP2準拠：Merchantからのレスポンスから署名済みCartMandateを取り出し
@@ -648,17 +648,17 @@ JSON配列形式で返答してください:
                 logger.info(f"[build_cart_mandates] Built CartMandate for plan: {plan.get('name')}")
 
                 # Langfuseスパン終了（成功時）
-                if span:
-                    span.update(output={"artifact_id": artifact["artifactId"], "plan_name": plan.get("name")})
-                    span.end()
+                if langfuse_span:
+                    langfuse_span.update(output={"artifact_id": artifact["artifactId"], "plan_name": plan.get("name")})
+                    langfuse_span.end()
 
             except Exception as e:
                 logger.error(f"[build_cart_mandates] Failed for plan {plan.get('name')}: {e}")
 
                 # Langfuseスパン終了（エラー時）
-                if span:
-                    span.update(level="ERROR", status_message=str(e))
-                    span.end()
+                if langfuse_span:
+                    langfuse_span.update(level="ERROR", status_message=str(e))
+                    langfuse_span.end()
 
                 continue
 
@@ -1025,14 +1025,14 @@ JSON配列形式で返答してください:
                     "merchant.cart_mandate_id": cart_mandate.get("id"),
                     "merchant.operation": "sign_cart"
                 }
-            ) as span:
+            ) as otel_span:
                 response = await self.http_client.post(
                     f"{self.merchant_url}/sign/cart",
                     json={"cart_mandate": cart_mandate},
                     timeout=10.0
                 )
                 response.raise_for_status()
-                span.set_attribute("http.status_code", response.status_code)
+                otel_span.set_attribute("http.status_code", response.status_code)
                 result = response.json()
 
             signed_cart_mandate = result.get("signed_cart_mandate")

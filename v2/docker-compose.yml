@@ -212,6 +212,7 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - LOG_FORMAT=${LOG_FORMAT:-text}
       - PAYMENT_NETWORK_URL=http://payment_network:8005
+      - REDIS_URL=redis://redis:6379/0
       # OpenTelemetry設定
       - OTEL_ENABLED=${OTEL_ENABLED:-true}
       - OTEL_SERVICE_NAME=credential_provider
@@ -224,6 +225,8 @@ services:
         condition: service_completed_successfully
       payment_network:
         condition: service_started
+      redis:
+        condition: service_healthy
     restart: unless-stopped
 
   # Payment Processor - 決済処理
@@ -330,12 +333,32 @@ services:
       - ap2_network
     restart: unless-stopped
 
+  # Redis - KVストア（一時データ・セッション管理）
+  redis:
+    image: redis:7-alpine
+    container_name: ap2_redis
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    networks:
+      - ap2_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
 networks:
   ap2_network:
     driver: bridge
 
 volumes:
   meilisearch_data:
+    driver: local
+  redis_data:
     driver: local
   keys:
     driver: local

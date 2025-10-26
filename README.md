@@ -33,7 +33,7 @@
 
 このv2実装は、AP2仕様を100%準拠した実装で、以下を提供します：
 
-✅ **11つのマイクロサービス**: Shopping Agent、Shopping Agent MCP、Merchant Agent、Merchant Agent MCP、Merchant、Credential Provider、Payment Processor、Payment Network、Meilisearch、Jaeger、Frontend
+✅ **12つのマイクロサービス**: Shopping Agent、Shopping Agent MCP、Merchant Agent、Merchant Agent MCP、Merchant、Credential Provider、Payment Processor、Payment Network、Meilisearch、Jaeger、Redis、Frontend
 ✅ **完全なA2A通信**: ECDSA/Ed25519署名、Nonce検証、DID解決
 ✅ **WebAuthn/Passkey対応**: FIDO2準拠の署名検証
 ✅ **SSE/Streaming Chat**: リアルタイムな対話型UI
@@ -70,6 +70,7 @@ graph TB
         DB2[(Merchant Agent DB<br/>SQLite<br/>v2/data/merchant_agent.db)]
         DB3[(Credential Provider DB<br/>SQLite<br/>v2/data/credential_provider.db)]
         DB4[(Payment Processor DB<br/>SQLite<br/>v2/data/payment_processor.db)]
+        REDIS[(Redis KV Store<br/>Port 6379<br/>一時データ管理)]
     end
 
     subgraph "Security & Crypto"
@@ -85,6 +86,7 @@ graph TB
         DB[database.py<br/>DatabaseManager]
         RISK[risk_assessment.py<br/>RiskEngine]
         DID_RESOLVER[did_resolver.py<br/>DIDResolver]
+        REDIS_CLIENT[redis_client.py<br/>RedisClient<br/>TokenStore<br/>SessionStore]
     end
 
     UI -->|SSE/Stream| SA
@@ -100,8 +102,10 @@ graph TB
 
     SA -.->|Read/Write| DB1
     MA -.->|Read/Write| DB2
-    CP -.->|Read/Write| DB3
+    CP -.->|Read/Write<br/>永続データ| DB3
     PP -.->|Read/Write| DB4
+
+    CP -.->|Read/Write<br/>一時データ<br/>TTL管理| REDIS
 
     SA -.->|Load Keys| KEYS
     MA -.->|Load Keys| KEYS
@@ -130,6 +134,8 @@ graph TB
     CP --> DB
     PP --> DB
 
+    CP --> REDIS_CLIENT
+
     SA --> RISK
 
     style UI fill:#e1f5ff
@@ -141,9 +147,11 @@ graph TB
     style PP fill:#e8f5e9
     style PN fill:#b2dfdb
     style MS fill:#ffccbc
+    style REDIS fill:#fce4ec
     style BASE fill:#ffe0b2
     style A2A fill:#ffe0b2
     style CRYPTO fill:#ffe0b2
+    style REDIS_CLIENT fill:#ffe0b2
 ```
 
 ### マイクロサービス一覧
@@ -161,6 +169,7 @@ graph TB
 | **Payment Network** | 8005 | Agent Token発行・決済ネットワークスタブ | `/network/tokenize`, `/network/validate-token` |
 | **Meilisearch** | 7700 | 全文検索エンジン（商品検索） | `/indexes/products/search` |
 | **Jaeger** | 16686 | OpenTelemetry分散トレーシングUI | `/search` |
+| **Redis** | 6379 | KVストア（一時データ・セッション管理） | N/A（内部使用） |
 
 ---
 
@@ -600,6 +609,7 @@ curl -X POST http://localhost:8000/a2a/message \
 | **FastAPI** | 0.115.0 | RESTful API フレームワーク |
 | **SQLAlchemy** | 2.0.35 | ORM（データベース操作） |
 | **aiosqlite** | 0.20.0 | 非同期SQLiteドライバ |
+| **redis** | 5.0.0+ | Redis非同期クライアント（一時データKV） |
 | **cryptography** | 43.0.0 | ECDSA署名 |
 | **fido2** | 1.1.3 | WebAuthn検証 |
 | **sse-starlette** | 2.1.0 | Server-Sent Events |
@@ -628,8 +638,9 @@ curl -X POST http://localhost:8000/a2a/message \
 ### インフラ
 
 - **Docker Compose** - サービスオーケストレーション
-- **SQLite** - データベース（開発環境）
-- **Docker Volumes** - データ永続化（keys/、data/、meilisearch_data/）
+- **SQLite** - データベース（開発環境、永続データ保存）
+- **Redis 7-alpine** - KVストア（一時データ・セッション・トークン管理、TTL自動削除）
+- **Docker Volumes** - データ永続化（keys/、data/、meilisearch_data/、redis_data/）
 
 ---
 
@@ -675,7 +686,16 @@ v2/
 │   │                          # クラス: DatabaseManager
 │   │                          # - init_db() : データベース初期化
 │   │                          # - get_session() : セッション取得
-│   │                          # クラス: MandateCRUD, ProductCRUD, TransactionCRUD
+│   │                          # クラス: MandateCRUD, ProductCRUD, TransactionCRUD, ReceiptCRUD
+│   ├── redis_client.py        # Redis KVストアクライアント
+│   │                          # クラス: RedisClient
+│   │                          # - set/get/delete() : 基本KV操作
+│   │                          # - TTL管理（自動削除）
+│   │                          # クラス: TokenStore
+│   │                          # - save_token/get_token() : トークン管理（TTL: 15分）
+│   │                          # クラス: SessionStore
+│   │                          # - save_session/get_session() : セッション管理（TTL: 10分）
+│   │                          # - WebAuthn challenge管理（TTL: 60秒）
 │   ├── risk_assessment.py     # リスク評価エンジン
 │   │                          # クラス: RiskAssessmentEngine
 │   │                          # - assess_payment_mandate() : リスクスコア計算（0-100）
@@ -772,6 +792,9 @@ v2/
 │   │   ├── provider.py        # CredentialProviderクラス
 │   │   │                      # - verify_webauthn_attestation() : WebAuthn検証
 │   │   │                      # - get_payment_methods() : 支払い方法取得
+│   │   │                      # - tokenize_payment_method() : トークン発行（Redis保存、TTL: 15分）
+│   │   │                      # - initiate_step_up() : Step-up認証開始（Redisセッション、TTL: 10分）
+│   │   │                      # - register_passkey_challenge() : Challenge生成（Redis保存、TTL: 60秒）
 │   │   ├── main.py            # FastAPIエントリーポイント
 │   │   └── Dockerfile
 │   ├── payment_processor/     # Payment Processor（決済処理）
@@ -836,17 +859,19 @@ v2/
 │   └── ...（他のエージェント分も同様）
 │
 ├── docker-compose.yml         # サービスオーケストレーション
-│                               # - 9コンテナ定義:
+│                               # - 12コンテナ定義:
 │                               #   frontend, shopping_agent, merchant_agent,
 │                               #   merchant_agent_mcp, merchant, credential_provider,
-│                               #   payment_processor, payment_network, meilisearch
-│                               # - Volume設定（data/、keys/、meilisearch_data/）
-│                               # - 環境変数設定（パスフレーズ、Langfuseなど）
+│                               #   payment_processor, payment_network, meilisearch,
+│                               #   jaeger, redis
+│                               # - Volume設定（data/、keys/、meilisearch_data/、redis_data/）
+│                               # - 環境変数設定（パスフレーズ、Langfuse、Redisなど）
 │
 ├── pyproject.toml             # Python依存関係（uv管理）
 │                               # - fastapi, uvicorn, httpx
 │                               # - cryptography, fido2
 │                               # - sqlalchemy, aiosqlite
+│                               # - redis（KVストア）
 │                               # - rfc8785, cbor2
 │                               # - sse-starlette
 │                               # - langgraph, langchain
@@ -1170,6 +1195,9 @@ LOG_FORMAT=text                   # text/json
 
 # データベース
 DATABASE_URL=sqlite+aiosqlite:////app/v2/data/shopping_agent.db
+
+# Redis KVストア（一時データ管理）
+REDIS_URL=redis://redis:6379/0
 
 # 鍵管理
 AP2_KEYS_DIRECTORY=/app/v2/keys

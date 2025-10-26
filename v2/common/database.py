@@ -323,6 +323,46 @@ class AgentSession(Base):
         }
 
 
+class Receipt(Base):
+    """
+    receiptsテーブル
+
+    AP2 Step 29対応: Payment Processorから送信された領収書を永続化
+    - id (uuid, primary key)
+    - user_id (payer_id)
+    - transaction_id (関連するtransaction_id)
+    - receipt_url (領収書PDFのURL)
+    - amount_value (cents)
+    - currency (JPY, USD, etc.)
+    - payment_timestamp (決済実行時刻)
+    - received_at (領収書受信時刻)
+    """
+    __tablename__ = "receipts"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(String, nullable=False, index=True)
+    transaction_id = Column(String, nullable=False, index=True)
+    receipt_url = Column(String, nullable=False)
+    amount_value = Column(Integer, nullable=False)  # cents
+    currency = Column(String, nullable=False, default="JPY")
+    payment_timestamp = Column(DateTime, nullable=False)
+    received_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "transaction_id": self.transaction_id,
+            "receipt_url": self.receipt_url,
+            "amount": {
+                "value": str(self.amount_value / 100),  # centsをdecimalに変換
+                "currency": self.currency
+            },
+            "payment_timestamp": self.payment_timestamp.isoformat() if self.payment_timestamp else None,
+            "received_at": self.received_at.isoformat() if self.received_at else None,
+        }
+
+
 # ========================================
 # Database Manager
 # ========================================
@@ -886,3 +926,84 @@ class PaymentMethodCRUD:
             await session.commit()
             return True
         return False
+
+
+class ReceiptCRUD:
+    """Receipt CRUD操作（AP2 Step 29対応）"""
+
+    @staticmethod
+    async def create(session: AsyncSession, receipt_data: Dict[str, Any]) -> Receipt:
+        """
+        領収書作成
+
+        Args:
+            session: AsyncSession
+            receipt_data: {
+                "user_id": "user_demo_001",
+                "transaction_id": "txn_xxxxx",
+                "receipt_url": "http://...",
+                "amount": {"value": "8068.00", "currency": "JPY"},
+                "payment_timestamp": "2025-10-18T12:34:56Z"
+            }
+
+        Returns:
+            Receipt
+        """
+        # amountをcentsに変換
+        amount = receipt_data.get("amount", {})
+        amount_value = int(float(amount.get("value", "0")) * 100)
+        currency = amount.get("currency", "JPY")
+
+        # payment_timestampをdatetimeに変換
+        payment_timestamp_str = receipt_data.get("payment_timestamp")
+        if payment_timestamp_str:
+            payment_timestamp = datetime.fromisoformat(payment_timestamp_str.replace('Z', '+00:00'))
+        else:
+            payment_timestamp = datetime.now(timezone.utc)
+
+        receipt = Receipt(
+            id=receipt_data.get("id", str(uuid.uuid4())),
+            user_id=receipt_data["user_id"],
+            transaction_id=receipt_data["transaction_id"],
+            receipt_url=receipt_data["receipt_url"],
+            amount_value=amount_value,
+            currency=currency,
+            payment_timestamp=payment_timestamp
+        )
+        session.add(receipt)
+        await session.commit()
+        await session.refresh(receipt)
+        return receipt
+
+    @staticmethod
+    async def get_by_user_id(
+        session: AsyncSession,
+        user_id: str,
+        limit: int = 100
+    ) -> List[Receipt]:
+        """ユーザーIDで領収書を取得（新しい順）"""
+        stmt = (
+            select(Receipt)
+            .where(Receipt.user_id == user_id)
+            .order_by(Receipt.received_at.desc())
+            .limit(limit)
+        )
+        result = await session.execute(stmt)
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def get_by_transaction_id(
+        session: AsyncSession,
+        transaction_id: str
+    ) -> Optional[Receipt]:
+        """トランザクションIDで領収書を取得"""
+        stmt = select(Receipt).where(Receipt.transaction_id == transaction_id)
+        result = await session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    @staticmethod
+    async def get_by_id(session: AsyncSession, receipt_id: str) -> Optional[Receipt]:
+        """領収書IDで取得"""
+        stmt = select(Receipt).where(Receipt.id == receipt_id)
+        result = await session.execute(stmt)
+        return result.scalar_one_or_none()

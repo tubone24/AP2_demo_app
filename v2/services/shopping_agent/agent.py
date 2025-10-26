@@ -86,9 +86,8 @@ from v2.common.logger import (
 # OpenTelemetry 手動トレーシング
 from v2.common.telemetry import get_tracer, create_http_span, is_telemetry_enabled
 
-# LangGraph統合（AI化）
-from langgraph_agent import get_langgraph_agent
-from langgraph_conversation import get_conversation_agent
+# NOTE: 古いLangGraph実装（langgraph_agent, langgraph_conversation, langgraph_shopping）は廃止
+# 新しいStateGraph版（langgraph_shopping_flow.py）を使用
 
 logger = get_logger(__name__, service_name='shopping_agent')
 
@@ -185,30 +184,21 @@ class ShoppingAgent(BaseAgent):
         # Passkey認証用のchallenge管理（ログイン用）
         self.passkey_auth_challenge_manager = WebAuthnChallengeManager(challenge_ttl_seconds=120)  # ログインは2分
 
-        # LangGraphエージェント（AIによるインテント抽出）
-        try:
-            self.langgraph_agent = get_langgraph_agent()
-            logger.info(f"[{self.agent_name}] LangGraph agent initialized successfully")
-        except Exception as e:
-            logger.warning(f"[{self.agent_name}] LangGraph agent initialization failed (will use fallback): {e}")
-            self.langgraph_agent = None
+        # 旧LangGraphエージェント（非推奨、新しいStateGraph版に移行済み）
+        # NOTE: 以下の古い実装は廃止されました。新しいlanggraph_shopping_flow.pyを使用してください。
+        self.langgraph_agent = None  # 旧: Intent抽出用LangGraphエージェント
+        self.conversation_agent = None  # 旧: 対話エージェント
+        self.langgraph_shopping_agent = None  # 旧: Shopping Engine
+        logger.info(f"[{self.agent_name}] Old LangGraph implementations are deprecated. Using new StateGraph flow.")
 
-        # LangGraph対話エージェント（ユーザーとの対話でIntent情報収集）
+        # LangGraph Shopping Flow（会話フロー：StateGraph版）
         try:
-            self.conversation_agent = get_conversation_agent()
-            logger.info(f"[{self.agent_name}] LangGraph conversation agent initialized successfully")
+            from services.shopping_agent.langgraph_shopping_flow import create_shopping_flow_graph
+            self.shopping_flow_graph = create_shopping_flow_graph(self)
+            logger.info(f"[{self.agent_name}] LangGraph shopping flow graph initialized successfully (12 nodes)")
         except Exception as e:
-            logger.warning(f"[{self.agent_name}] LangGraph conversation agent initialization failed (will use fallback): {e}")
-            self.conversation_agent = None
-
-        # LangGraph Shoppingエンジン（フルフロー：Intent→Cart→Payment）
-        try:
-            from v2.services.shopping_agent.langgraph_shopping import get_langgraph_shopping_agent
-            self.langgraph_shopping_agent = get_langgraph_shopping_agent(self.http_client)
-            logger.info(f"[{self.agent_name}] LangGraph shopping agent initialized successfully")
-        except Exception as e:
-            logger.warning(f"[{self.agent_name}] LangGraph shopping agent initialization failed: {e}")
-            self.langgraph_shopping_agent = None
+            logger.warning(f"[{self.agent_name}] LangGraph shopping flow graph initialization failed: {e}")
+            self.shopping_flow_graph = None
 
         # 起動イベントハンドラー登録
         @self.app.on_event("startup")
@@ -956,11 +946,25 @@ class ShoppingAgent(BaseAgent):
                     session["messages"].append({"role": "user", "content": request.user_input})
 
                     # 固定応答フロー（LLM統合前）
+                    # 環境変数USE_LANGGRAPH_FLOWでLangGraph版と既存版を切り替え
+                    import os
+                    use_langgraph = os.getenv("USE_LANGGRAPH_FLOW", "false").lower() == "true"
+
                     # EventSourceResponseはJSON文字列を期待するため、
                     # 辞書をJSON文字列に変換して返す
-                    async for event in self._generate_fixed_response(request.user_input, session, session_id):
-                        yield json.dumps(event.model_dump(exclude_none=True))
-                        await asyncio.sleep(0.1)  # 少し遅延を入れて自然に
+                    if use_langgraph and self.shopping_flow_graph is not None:
+                        # LangGraph StateGraph版を使用
+                        logger.info(f"[chat_stream] Using LangGraph shopping flow (session_id={session_id})")
+                        async for event in self._generate_fixed_response_langgraph(request.user_input, session, session_id):
+                            yield json.dumps(event.model_dump(exclude_none=True))
+                            await asyncio.sleep(0.1)  # 少し遅延を入れて自然に
+                    else:
+                        # 既存実装を使用
+                        if use_langgraph:
+                            logger.warning(f"[chat_stream] LangGraph flow requested but not initialized, using legacy flow (session_id={session_id})")
+                        async for event in self._generate_fixed_response(request.user_input, session, session_id):
+                            yield json.dumps(event.model_dump(exclude_none=True))
+                            await asyncio.sleep(0.1)  # 少し遅延を入れて自然に
 
                     # セッション保存（最終状態）
                     await self._update_session(session_id, session)
@@ -2183,9 +2187,32 @@ class ShoppingAgent(BaseAgent):
                 await asyncio.sleep(0.5)
 
                 try:
+                    # AP2準拠: natural_language_descriptionには金額制約を含める
+                    # session["intent"]は会話エージェントで分離されているため、再構築
+                    intent_text = session["intent"]
+                    max_amount = session.get("max_amount")
+                    categories = session.get("categories", [])
+                    brands = session.get("brands", [])
+
+                    # 金額制約を含めた完全なuser_prompt構築
+                    constraints = []
+                    if max_amount:
+                        constraints.append(f"{max_amount}円以内")
+                    if categories:
+                        constraints.append(f"カテゴリー: {', '.join(categories)}")
+                    if brands:
+                        constraints.append(f"ブランド: {', '.join(brands)}")
+
+                    if constraints:
+                        user_prompt_full = f"{intent_text}。{', '.join(constraints)}"
+                    else:
+                        user_prompt_full = intent_text
+
+                    logger.info(f"[LangGraph] Reconstructed user_prompt: {user_prompt_full}")
+
                     # LangGraphエンジンで処理（Intent抽出→Merchant Agent呼び出し→カート分析）
                     result = await self.langgraph_shopping_agent.process_intent_to_carts(
-                        user_prompt=session["intent"],
+                        user_prompt=user_prompt_full,
                         session_id=session_id,
                         user_id=session.get("user_id", "user_demo_001"),
                         shipping_address=contact_address
@@ -2580,6 +2607,42 @@ class ShoppingAgent(BaseAgent):
             )
 
             session["step"] = "cart_signature_pending"
+            return
+
+        # ステップ6.6: カート署名待機中
+        elif current_step == "cart_signature_pending":
+            # AP2準拠: WebAuthn署名は/cart/submit-signatureエンドポイントで処理される
+            # ユーザーが何か入力した場合は、署名完了を待っていることを案内
+            yield StreamEvent(
+                type="agent_text",
+                content="カートの署名を待っています。ブラウザの認証ダイアログで指紋認証・顔認証などを完了してください。"
+            )
+            return
+
+        # ステップ7.0: PaymentMandate作成開始（CartMandate署名完了後の自動遷移）
+        elif current_step == "payment_mandate_creation":
+            # CartMandate署名完了後、Credential Provider選択へ進む
+            # フロントエンドから`_cart_signature_completed`トークンで呼び出される
+            # 通常のユーザー入力の場合は、署名完了を待つように案内
+            if not user_input.startswith("_cart_signature_completed"):
+                yield StreamEvent(
+                    type="agent_text",
+                    content="CartMandate署名を完了してください。署名後、自動的に次のステップに進みます。"
+                )
+                return
+
+            # Credential Provider選択UIを表示
+            yield StreamEvent(
+                type="agent_text",
+                content="✅ CartMandate署名完了しました！次に決済に使用するCredential Providerを選択してください。"
+            )
+            await asyncio.sleep(0.2)
+
+            yield StreamEvent(
+                type="credential_provider_selection",
+                providers=self.credential_providers
+            )
+            session["step"] = "select_credential_provider_for_payment"
             return
 
         # ============ 以下の cart_selected_need_shipping ステップは削除 ============
@@ -2991,30 +3054,6 @@ class ShoppingAgent(BaseAgent):
                 session["step"] = "error"
                 return
 
-        # AP2完全準拠: ステップ7: PaymentMandate作成（Credential Provider選択 → 支払い方法選択）
-        elif current_step == "payment_mandate_creation":
-            # 特殊なトークン: CartMandate署名完了後の自動遷移
-            if user_input.startswith("_cart_signature_completed"):
-                # Credential Provider選択UIを表示
-                yield StreamEvent(
-                    type="agent_text",
-                    content="✅ CartMandate署名完了しました！次に決済に使用するCredential Providerを選択してください。"
-                )
-                await asyncio.sleep(0.2)
-
-                yield StreamEvent(
-                    type="credential_provider_selection",
-                    providers=self.credential_providers
-                )
-                session["step"] = "select_credential_provider_for_payment"
-                return
-            else:
-                # 予期しない入力
-                yield StreamEvent(
-                    type="agent_text",
-                    content="CartMandate署名を完了してください。"
-                )
-                return
 
         # AP2完全準拠: Credential Provider選択（PaymentMandate作成用）
         elif current_step == "select_credential_provider_for_payment":
@@ -3537,6 +3576,71 @@ class ShoppingAgent(BaseAgent):
             content=f"申し訳ありません。現在のステップ（{current_step}）では対応できません。「こんにちは」と入力して最初からやり直してください。"
         )
 
+    async def _generate_fixed_response_langgraph(
+        self,
+        user_input: str,
+        session: Dict[str, Any],
+        session_id: str
+    ) -> AsyncGenerator[StreamEvent, None]:
+        """
+        LangGraph版の応答生成（ストリーミング）
+
+        既存の_generate_fixed_responseと同じインターフェースを維持しつつ、
+        内部実装をLangGraph StateGraphに置き換え
+
+        改善点：
+        - 各ステップが独立したノードとして明確に定義
+        - Conditional Edgesで状態遷移を可視化
+        - ノード単位でテスト可能
+        - AP2完全準拠（署名フロー、A2A通信、WebAuthn）
+
+        Args:
+            user_input: ユーザー入力
+            session: セッションデータ
+            session_id: セッションID（データベース保存用）
+
+        Yields:
+            StreamEvent: ストリーミングイベント
+        """
+        # LangGraphフローが初期化されていない場合はフォールバック
+        if self.shopping_flow_graph is None:
+            logger.warning(f"[{self.agent_name}] LangGraph flow not initialized, falling back to legacy implementation")
+            async for event in self._generate_fixed_response(user_input, session, session_id):
+                yield event
+            return
+
+        # 初期状態
+        initial_state = {
+            "user_input": user_input,
+            "session_id": session_id,
+            "session": session,
+            "events": [],
+            "next_step": None,
+            "error": None
+        }
+
+        try:
+            # グラフ実行
+            result = await self.shopping_flow_graph.ainvoke(initial_state)
+
+            # イベントをストリーミング出力
+            for event_dict in result["events"]:
+                # agent_text_chunkは文字単位で遅延を挿入
+                if event_dict.get("type") == "agent_text_chunk":
+                    yield StreamEvent(**event_dict)
+                    await asyncio.sleep(0.02)  # 20ms遅延
+                else:
+                    yield StreamEvent(**event_dict)
+
+            # セッション更新
+            await self._update_session(session_id, result["session"])
+
+        except Exception as e:
+            logger.error(f"[{self.agent_name}] LangGraph flow execution failed: {e}", exc_info=True)
+            # エラー時は既存実装にフォールバック
+            async for event in self._generate_fixed_response(user_input, session, session_id):
+                yield event
+
     async def _create_intent_mandate(self, intent: str, session: Dict[str, Any]) -> Dict[str, Any]:
         """
         IntentMandateを作成（LangGraph AI統合版）
@@ -3565,13 +3669,34 @@ class ShoppingAgent(BaseAgent):
                 f"In production, user_id should be provided by frontend authentication."
             )
 
+        # AP2準拠: natural_language_descriptionには金額制約を含める
+        # sessionから金額/カテゴリー/ブランド情報を取得してintentを再構築
+        max_amount = session.get("max_amount")
+        categories = session.get("categories", [])
+        brands = session.get("brands", [])
+
+        constraints = []
+        if max_amount:
+            constraints.append(f"{max_amount}円以内")
+        if categories:
+            constraints.append(f"カテゴリー: {', '.join(categories)}")
+        if brands:
+            constraints.append(f"ブランド: {', '.join(brands)}")
+
+        if constraints:
+            intent_full = f"{intent}。{', '.join(constraints)}"
+        else:
+            intent_full = intent
+
+        logger.info(f"[_create_intent_mandate] Reconstructed intent: {intent_full}")
+
         # LangGraphでAIインテント抽出を試行
         if self.langgraph_agent:
             try:
-                logger.info(f"[ShoppingAgent] Using LangGraph to extract intent from: '{intent}'")
+                logger.info(f"[ShoppingAgent] Using LangGraph to extract intent from: '{intent_full}'")
 
                 # LangGraphエージェントでインテント抽出
-                intent_data = await self.langgraph_agent.extract_intent_from_prompt(intent)
+                intent_data = await self.langgraph_agent.extract_intent_from_prompt(intent_full)
 
                 # IntentMandateデータ（AP2仕様準拠の構造に変換）
                 # AP2準拠のIntentMandate構造（mandate_types.py参照）
@@ -3639,6 +3764,26 @@ class ShoppingAgent(BaseAgent):
         expires_at = now + timedelta(hours=1)
         merchants = session.get("merchants", [])
         skus = session.get("skus", [])
+        max_amount = session.get("max_amount")
+        categories = session.get("categories", [])
+        brands = session.get("brands", [])
+
+        # AP2準拠: natural_language_descriptionには金額制約を含める
+        # sessionから金額/カテゴリー/ブランド情報を取得して再構築
+        constraints = []
+        if max_amount:
+            constraints.append(f"{max_amount}円以内")
+        if categories:
+            constraints.append(f"カテゴリー: {', '.join(categories)}")
+        if brands:
+            constraints.append(f"ブランド: {', '.join(brands)}")
+
+        if constraints:
+            natural_language_description = f"{intent}。{', '.join(constraints)}"
+        else:
+            natural_language_description = intent
+
+        logger.info(f"[_create_intent_mandate_fallback] Constructed natural_language_description: {natural_language_description}")
 
         # AP2準拠のIntentMandate構造（mandate_types.py参照）
         intent_mandate_unsigned = {
@@ -3647,7 +3792,7 @@ class ShoppingAgent(BaseAgent):
             "version": "0.2",
             "user_id": user_id,
             # AP2準拠フィールド
-            "natural_language_description": intent,
+            "natural_language_description": natural_language_description,
             "user_cart_confirmation_required": True,
             "merchants": merchants if merchants else None,  # Optional[list[str]]
             "skus": skus if skus else None,  # Optional[list[str]]

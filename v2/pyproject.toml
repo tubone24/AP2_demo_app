@@ -13,6 +13,8 @@ dependencies = [
     # Database
     "sqlalchemy>=2.0.35",
     "aiosqlite>=0.20.0",
+    # Redis KV Store
+    "redis>=5.0.0",
     # Cryptography (reuse existing ap2_crypto.py)
     "cryptography>=43.0.0",
     "fido2>=1.1.3",

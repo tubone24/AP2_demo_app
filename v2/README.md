@@ -29,7 +29,8 @@ graph TB
     end
 
     subgraph "Data Layer"
-        DB[(SQLite Database)]
+        DB[(SQLite Database<br/>永続データ)]
+        REDIS[(Redis KV Store<br/>Port 6379<br/>一時データ・TTL管理)]
         Keys[Keys Directory<br/>Ed25519 + ECDSA Keypairs]
     end
 
@@ -50,8 +51,9 @@ graph TB
     MA -.->|Trace| LF
 
     CP -->|Agent Token| PN
+    CP -->|Tokens/Sessions/Challenges<br/>TTL: 15min/10min/60sec| REDIS
 
-    SA & MA & M & CP & PP --> DB
+    SA & MA & M & CP & PP -->|永続データ| DB
     SA & MA & M & CP & PP --> Keys
 ```
 
@@ -212,7 +214,8 @@ v2/
 │   ├── models.py                # Pydanticモデル（A2Aメッセージ、API型）
 │   ├── a2a_handler.py           # A2Aメッセージ処理・署名検証・ルーティング
 │   ├── base_agent.py            # 全エージェントの基底クラス（POST /a2a/message実装）
-│   ├── database.py              # SQLAlchemyモデル＋CRUD操作
+│   ├── database.py              # SQLAlchemyモデル＋CRUD操作（Receipt追加）
+│   ├── redis_client.py          # Redis KVストアクライアント（TokenStore, SessionStore）
 │   ├── crypto.py                # 暗号化・署名・鍵管理（Ed25519/ECDSA, AES-256-CBC）
 │   ├── logger.py                # 統一ロギングシステム（JSON/Text対応）
 │   ├── seed_data.py             # サンプルデータ投入スクリプト
@@ -233,7 +236,7 @@ v2/
 │   │   ├── main.py
 │   │   └── Dockerfile
 │   ├── credential_provider/     # ✅ 完全実装
-│   │   ├── provider.py          # WebAuthn検証・Step-up認証
+│   │   ├── provider.py          # WebAuthn検証・Step-up認証・Redis統合
 │   │   ├── main.py
 │   │   └── Dockerfile
 │   └── payment_processor/       # ✅ 完全実装
@@ -262,13 +265,16 @@ v2/
 ├── scripts/                     # ユーティリティスクリプト
 │   └── init_db.py               # データベース初期化
 │
-├── data/                        # 永続化データ
-│   ├── ap2.db                   # SQLiteデータベース
+├── data/                        # 永続化データ（Docker Volume）
+│   ├── *.db                     # SQLiteデータベース（各サービス）
 │   ├── receipts/                # PDF領収書
 │   └── did_documents/           # DID Documents
 │
-├── docker-compose.yml           # 全6サービスオーケストレーション
-├── pyproject.toml               # Python依存関係（uv管理）
+├── keys/                        # 暗号鍵格納（Docker Volume）
+│   └── *_private.pem            # Ed25519/ECDSA秘密鍵（AES-256暗号化）
+│
+├── docker-compose.yml           # 全サービスオーケストレーション（Redis含む）
+├── pyproject.toml               # Python依存関係（uv管理、redis>=5.0.0追加）
 └── README.md                    # このファイル
 ```
 
@@ -287,7 +293,8 @@ v2/
 - ✅ **models.py** - Pydanticモデル（A2A, API, AP2 Mandates）
 - ✅ **a2a_handler.py** - A2Aメッセージ処理・ECDSA署名検証・ルーティング
 - ✅ **base_agent.py** - 全エージェントの基底クラス（POST /a2a/message実装）
-- ✅ **database.py** - SQLAlchemyモデル＋非同期CRUD操作
+- ✅ **database.py** - SQLAlchemyモデル＋非同期CRUD操作（Receipt追加）
+- ✅ **redis_client.py** - Redis KVストアクライアント（TokenStore, SessionStore、TTL管理）
 - ✅ **crypto.py** - ECDSA鍵生成・署名・検証、AES-256-CBC暗号化
 - ✅ **logger.py** - 統一ロギング（JSON/Text、機密データマスキング）
 - ✅ **seed_data.py** - サンプルデータ（商品8点、ユーザー2人）
@@ -318,9 +325,11 @@ v2/
 
 #### Credential Provider (Port 8003)
 - ✅ WebAuthn attestation検証
-- ✅ Credential Token発行
-- ✅ Step-up認証フロー（高額決済）
+- ✅ Credential Token発行（Redis KV、TTL: 15分）
+- ✅ Step-up認証フロー（Redis セッション、TTL: 10分）
+- ✅ WebAuthn Challenge管理（Redis、TTL: 60秒、リプレイ攻撃防止）
 - ✅ 支払い方法管理（カード、銀行口座）
+- ✅ 領収書永続化（DB保存）
 - ✅ 外部認証画面（/step-up-auth）
 
 #### Payment Processor (Port 8004)
@@ -358,10 +367,11 @@ v2/
 - ✅ レスポンシブデザイン
 
 ### 🐳 インフラ
-- ✅ **Docker Compose** - 全6サービス（Backend 5 + Frontend 1）
-- ✅ **SQLite永続化** - Dockerボリュームマウント
+- ✅ **Docker Compose** - 全サービス（Backend 5 + Frontend 1 + Redis 1 + Meilisearch 1 + Jaeger 1）
+- ✅ **SQLite永続化** - Dockerボリュームマウント（永続データ）
+- ✅ **Redis KVストア** - 一時データ・TTL管理（トークン、セッション、チャレンジ）
 - ✅ **環境変数管理** - `.env`対応
-- ✅ **ヘルスチェック** - 全サービスliveness probe実装
+- ✅ **ヘルスチェック** - 全サービスliveness probe実装（Redis含む）
 
 ## 🛠️ セットアップ手順
 
