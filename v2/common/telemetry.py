@@ -11,7 +11,8 @@ FastAPIとhttpxクライアントにOpenTelemetryを統合
 
 import os
 import logging
-from typing import Optional
+import json
+from typing import Optional, Set
 
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
@@ -22,6 +23,16 @@ from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
 
 logger = logging.getLogger(__name__)
+
+# 機密情報キー（マスク対象）
+SENSITIVE_KEYS: Set[str] = {
+    "password", "passphrase", "secret", "token", "api_key", "private_key",
+    "access_token", "refresh_token", "client_secret", "authorization",
+    "hashed_password", "salt"
+}
+
+# リクエスト/レスポンスボディの最大サイズ（バイト）
+MAX_BODY_SIZE = 10000  # 10KB
 
 
 def is_telemetry_enabled() -> bool:
@@ -140,12 +151,149 @@ def setup_telemetry(service_name: Optional[str] = None) -> Optional[TracerProvid
         return None
 
 
+def _mask_sensitive_data(data: any, max_depth: int = 10) -> any:
+    """
+    機密情報をマスクする（再帰的）
+
+    Args:
+        data: マスク対象のデータ（dict, list, その他）
+        max_depth: 再帰の最大深度
+
+    Returns:
+        マスクされたデータ
+    """
+    if max_depth <= 0:
+        return "[MAX_DEPTH_REACHED]"
+
+    if isinstance(data, dict):
+        masked = {}
+        for key, value in data.items():
+            key_lower = key.lower()
+            # 機密情報キーの場合はマスク
+            if any(sensitive in key_lower for sensitive in SENSITIVE_KEYS):
+                masked[key] = "[REDACTED]"
+            else:
+                masked[key] = _mask_sensitive_data(value, max_depth - 1)
+        return masked
+    elif isinstance(data, list):
+        return [_mask_sensitive_data(item, max_depth - 1) for item in data]
+    else:
+        return data
+
+
+def _truncate_body(body: str, max_size: int = MAX_BODY_SIZE) -> str:
+    """
+    ボディを切り詰める
+
+    Args:
+        body: ボディ文字列
+        max_size: 最大サイズ（バイト）
+
+    Returns:
+        切り詰められたボディ
+    """
+    if len(body) > max_size:
+        return body[:max_size] + f"...[TRUNCATED {len(body) - max_size} bytes]"
+    return body
+
+
+async def _add_request_response_to_span(request, call_next):
+    """
+    リクエスト/レスポンスをスパンに追加するミドルウェア
+
+    Args:
+        request: FastAPI Request
+        call_next: 次のミドルウェア/ハンドラー
+
+    Returns:
+        Response
+    """
+    from fastapi import Request
+    import time
+
+    # 現在のスパンを取得
+    span = trace.get_current_span()
+    if not span or not span.is_recording():
+        # スパンがない場合はそのまま次に進む
+        return await call_next(request)
+
+    try:
+        # リクエストボディを読み取り（JSONのみ）
+        if request.method in ["POST", "PUT", "PATCH"]:
+            content_type = request.headers.get("content-type", "")
+            if "application/json" in content_type:
+                try:
+                    body_bytes = await request.body()
+                    if body_bytes:
+                        body_str = body_bytes.decode("utf-8")
+                        body_str = _truncate_body(body_str)
+
+                        # JSONパース
+                        body_json = json.loads(body_str)
+                        # 機密情報をマスク
+                        masked_body = _mask_sensitive_data(body_json)
+
+                        # スパン属性に追加
+                        span.set_attribute("http.request.body", json.dumps(masked_body, ensure_ascii=False))
+
+                        # リクエストボディを再構築（次のミドルウェアで使用可能にする）
+                        async def receive():
+                            return {"type": "http.request", "body": body_bytes}
+                        request._receive = receive
+                except Exception as e:
+                    logger.debug(f"[Telemetry] Failed to read request body: {e}")
+                    span.set_attribute("http.request.body.error", str(e))
+
+        # リクエストを処理
+        start_time = time.time()
+        response = await call_next(request)
+        duration = time.time() - start_time
+
+        # レスポンス時間を記録
+        span.set_attribute("http.response.duration_ms", int(duration * 1000))
+
+        # レスポンスボディを読み取り（JSONのみ、StreamingResponseは除外）
+        if hasattr(response, "body"):
+            content_type = response.headers.get("content-type", "")
+            if "application/json" in content_type:
+                try:
+                    # レスポンスボディを読み取り
+                    body_bytes = response.body
+                    if body_bytes:
+                        body_str = body_bytes.decode("utf-8")
+                        body_str = _truncate_body(body_str)
+
+                        # JSONパース
+                        body_json = json.loads(body_str)
+                        # 機密情報をマスク
+                        masked_body = _mask_sensitive_data(body_json)
+
+                        # スパン属性に追加
+                        span.set_attribute("http.response.body", json.dumps(masked_body, ensure_ascii=False))
+                except Exception as e:
+                    logger.debug(f"[Telemetry] Failed to read response body: {e}")
+                    span.set_attribute("http.response.body.error", str(e))
+
+        return response
+
+    except Exception as e:
+        # エラーをスパンに記録
+        span.set_status(trace.Status(trace.StatusCode.ERROR, str(e)))
+        span.record_exception(e)
+        raise
+
+
 def instrument_fastapi_app(app):
     """
     FastAPIアプリにOpenTelemetry計装を追加
 
     参考記事によると、FastAPIInstrumentor.instrument_app()を使用してアプリを計装する。
     opentelemetry-bootstrapの自動インストールは避ける（Click依存の問題を回避）。
+
+    リクエスト/レスポンスボディも記録するミドルウェアを追加（AP2完全準拠）：
+    - IntentMandate、CartMandate、PaymentMandateなどのボディを記録
+    - 機密情報（password、secret、tokenなど）は自動的にマスク
+    - ボディサイズが大きい場合は切り詰め
 
     Args:
         app: FastAPIアプリインスタンス
@@ -162,8 +310,13 @@ def instrument_fastapi_app(app):
 
         # FastAPIアプリを計装
         FastAPIInstrumentor.instrument_app(app)
+
+        # リクエスト/レスポンスボディを記録するミドルウェアを追加
+        from starlette.middleware.base import BaseHTTPMiddleware
+        app.add_middleware(BaseHTTPMiddleware, dispatch=_add_request_response_to_span)
+
         app._is_instrumented_by_opentelemetry = True
-        logger.info("[Telemetry] FastAPI app instrumented successfully")
+        logger.info("[Telemetry] FastAPI app instrumented successfully (with request/response body tracking)")
     except Exception as e:
         logger.error(f"[Telemetry] Failed to instrument FastAPI app: {e}", exc_info=True)
 

@@ -35,6 +35,7 @@ from common.database import DatabaseManager
 from common.logger import get_logger
 from common.a2a_handler import A2AMessageHandler
 from common.risk_assessment import RiskAssessmentEngine
+from common.telemetry import setup_telemetry, instrument_fastapi_app
 
 logger = get_logger(__name__, service_name='shopping_agent_mcp')
 
@@ -425,6 +426,13 @@ async def execute_payment(params: Dict[str, Any]) -> Dict[str, Any]:
 
 # FastAPIアプリ
 app = mcp.app
+
+# OpenTelemetryセットアップ（Jaegerトレーシング）
+service_name = os.getenv("OTEL_SERVICE_NAME", "shopping_agent_mcp")
+setup_telemetry(service_name)
+
+# FastAPI計装（AP2完全準拠：MCP通信の可視化）
+instrument_fastapi_app(app)
 
 
 @app.on_event("startup")

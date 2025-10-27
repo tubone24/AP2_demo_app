@@ -30,6 +30,7 @@ from common.mcp_server import MCPServer
 from common.database import DatabaseManager, ProductCRUD
 from common.search_engine import MeilisearchClient
 from common.logger import get_logger
+from common.telemetry import setup_telemetry, instrument_fastapi_app
 
 logger = get_logger(__name__, service_name='merchant_agent_mcp')
 
@@ -368,6 +369,14 @@ async def build_cart_mandates(params: Dict[str, Any]) -> Dict[str, Any]:
 
 # FastAPIアプリ
 app = mcp.app
+
+# OpenTelemetryセットアップ（Jaegerトレーシング）
+service_name = os.getenv("OTEL_SERVICE_NAME", "merchant_agent_mcp")
+setup_telemetry(service_name)
+
+# FastAPI計装（AP2完全準拠：MCP通信の可視化）
+instrument_fastapi_app(app)
+
 
 if __name__ == "__main__":
     uvicorn.run(

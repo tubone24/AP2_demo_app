@@ -418,8 +418,8 @@ async def select_cp_node(state: ShoppingFlowState, agent_instance: Any) -> Shopp
         # 本番環境: ユーザーDBから取得したCP DIDリストを使用
         # デモ環境: デフォルトのCP DIDを使用
         user_cp_dids = [
-            "did:ap2:cp:demo_cp",  # メインCP（Passkey対応）
-            # "did:ap2:cp:alt_provider",  # 代替CP（今後追加予定）
+            "did:ap2:cp:demo_cp",    # メインCP
+            "did:ap2:cp:demo_cp_2",  # 代替CP
         ]
 
         # DID Resolverを使って各CPの情報を取得

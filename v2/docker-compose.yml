@@ -85,6 +85,11 @@ services:
       - PAYMENT_PROCESSOR_URL=http://payment_processor:8004
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - LOG_FORMAT=${LOG_FORMAT:-text}
+      # OpenTelemetry設定
+      - OTEL_ENABLED=${OTEL_ENABLED:-true}
+      - OTEL_SERVICE_NAME=shopping_agent_mcp
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
+      - OTEL_EXPORTER_OTLP_INSECURE=true
     networks:
       - ap2_network
     restart: unless-stopped
@@ -155,6 +160,11 @@ services:
       - DMR_API_URL=${DMR_API_URL:-http://host.docker.internal:12434/engines/llama.cpp/v1}
       - DMR_MODEL=${DMR_MODEL:-ai/qwen3}
       - DMR_API_KEY=${DMR_API_KEY:-none}
+      # OpenTelemetry設定
+      - OTEL_ENABLED=${OTEL_ENABLED:-true}
+      - OTEL_SERVICE_NAME=merchant_agent_mcp
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
+      - OTEL_EXPORTER_OTLP_INSECURE=true
     networks:
       - ap2_network
     restart: unless-stopped

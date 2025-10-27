@@ -76,6 +76,7 @@ class DIDResolver:
             {"agent_key": "merchant_agent", "did": "did:ap2:agent:merchant_agent"},
             {"agent_key": "merchant", "did": "did:ap2:merchant:mugibo_merchant"},
             {"agent_key": "credential_provider", "did": "did:ap2:cp:demo_cp"},
+            {"agent_key": "credential_provider_2", "did": "did:ap2:cp:demo_cp_2"},
             {"agent_key": "payment_processor", "did": "did:ap2:agent:payment_processor"}
         ]
 

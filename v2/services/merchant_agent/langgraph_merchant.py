@@ -166,6 +166,9 @@ class MerchantLangGraphAgent:
         # グラフ構築
         self.graph = self._build_graph()
 
+        # Langfuseハンドラー管理（セッションごとにCallbackHandlerインスタンスを保持）
+        self._langfuse_handlers: Dict[str, Any] = {}
+
         logger.info(f"[MerchantLangGraphAgent] Initialized with LLM: {self.llm.model_name if self.llm else 'disabled'}, MCP: {mcp_url}")
 
     def _build_graph(self) -> CompiledStateGraph:
@@ -276,17 +279,12 @@ JSON形式で返答してください（search_keywordsは必ず日本語）:
 }}"""
 
         try:
-            # LangfuseハンドラーをLLM呼び出しに渡す
-            llm_config = {}
-            if LANGFUSE_ENABLED and langfuse_handler:
-                llm_config["callbacks"] = [langfuse_handler]
-
-            # LLM呼び出し
+            # LLM呼び出し（コールバックはグラフレベルのconfigから自動的に伝播される）
             messages = [
                 SystemMessage(content=system_prompt),
                 HumanMessage(content=user_prompt)
             ]
-            response = await self.llm.ainvoke(messages, config=llm_config)
+            response = await self.llm.ainvoke(messages)
             response_text = response.content
 
             # JSON抽出
@@ -486,17 +484,12 @@ JSON配列形式で返答してください:
 ]"""
 
         try:
-            # LangfuseハンドラーをLLM呼び出しに渡す
-            llm_config = {}
-            if LANGFUSE_ENABLED and langfuse_handler:
-                llm_config["callbacks"] = [langfuse_handler]
-
-            # LLM呼び出し
+            # LLM呼び出し（コールバックはグラフレベルのconfigから自動的に伝播される）
             messages = [
                 SystemMessage(content=system_prompt),
                 HumanMessage(content=user_prompt)
             ]
-            response = await self.llm.ainvoke(messages, config=llm_config)
+            response = await self.llm.ainvoke(messages)
             response_text = response.content
 
             # JSON抽出
@@ -990,16 +983,28 @@ JSON配列形式で返答してください:
         }
 
         # グラフ実行（未署名のCartMandate候補を生成）
-        # Langfuseハンドラーを動的に作成し、session_idをトレースIDとして使用（トレース統合）
+        # Langfuseトレースをセッションごとに統合（shopping_agentと同じトレースに含まれる）
         config = {}
         if LANGFUSE_ENABLED and CallbackHandler:
-            # session_idをトレースIDとして使用することで、
-            # shopping_agentと同じトレースに紐づき、横串でトレース確認が可能
-            langfuse_handler = CallbackHandler()
+            # セッションごとにCallbackHandlerインスタンスを取得または作成
+            # shopping_agentと同じsession_idを使用することで、同じトレースグループに統合される
+            if session_id not in self._langfuse_handlers:
+                # 新しいハンドラーを作成（AP2完全準拠: オブザーバビリティ）
+                langfuse_handler = CallbackHandler()
+                self._langfuse_handlers[session_id] = langfuse_handler
+                logger.info(f"[Langfuse] Created new handler for session: {session_id}")
+            else:
+                langfuse_handler = self._langfuse_handlers[session_id]
+                logger.debug(f"[Langfuse] Reusing existing handler for session: {session_id}")
+
+            # Langfuseハンドラーを設定
             config["callbacks"] = [langfuse_handler]
-            config["run_id"] = session_id  # session_idをトレースIDとして使用
+            # session_idをrun_idとして設定（重要：これにより同じトレースIDになる）
+            config["run_id"] = session_id
+            # metadataでsession_idとuser_idを指定
             config["metadata"] = {
-                "user_id": user_id,
+                "langfuse_session_id": session_id,
+                "langfuse_user_id": user_id,
                 "agent_type": "merchant_agent"
             }
             config["tags"] = ["merchant_agent", "ap2_protocol"]
