@@ -990,16 +990,17 @@ JSON配列形式で返答してください:
         }
 
         # グラフ実行（未署名のCartMandate候補を生成）
-        # Langfuseハンドラーを動的に作成し、session_idをmetadataで指定（トレース統合）
+        # Langfuseハンドラーを動的に作成し、session_idをトレースIDとして使用（トレース統合）
         config = {}
         if LANGFUSE_ENABLED and CallbackHandler:
-            # Langfuse 3では、session_idとuser_idをmetadataで指定
-            # shopping_agentと同じsession_idを使用することで、横串でトレース確認が可能
+            # session_idをトレースIDとして使用することで、
+            # shopping_agentと同じトレースに紐づき、横串でトレース確認が可能
             langfuse_handler = CallbackHandler()
             config["callbacks"] = [langfuse_handler]
+            config["run_id"] = session_id  # session_idをトレースIDとして使用
             config["metadata"] = {
-                "langfuse_session_id": session_id,
-                "langfuse_user_id": user_id
+                "user_id": user_id,
+                "agent_type": "merchant_agent"
             }
             config["tags"] = ["merchant_agent", "ap2_protocol"]
 

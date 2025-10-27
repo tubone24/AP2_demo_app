@@ -3566,16 +3566,17 @@ class ShoppingAgent(BaseAgent):
 
         try:
             # グラフ実行（AP2完全準拠: IntentMandate → CartMandate → PaymentMandateフロー）
-            # Langfuseハンドラーを動的に作成し、session_idをmetadataで指定（トレース統合）
+            # Langfuseハンドラーを動的に作成し、session_idをトレースIDとして使用（トレース統合）
             config = {}
             if LANGFUSE_ENABLED and CallbackHandler:
-                # Langfuse 3では、session_idとuser_idをmetadataで指定
-                # これにより、同じセッションの複数グラフ実行が1つのトレースにグループ化される
+                # session_idをトレースIDとして使用することで、
+                # 同じセッション内のすべてのオブザベーションが1つのトレースに紐づく
                 langfuse_handler = CallbackHandler()
                 config["callbacks"] = [langfuse_handler]
+                config["run_id"] = session_id  # session_idをトレースIDとして使用
                 config["metadata"] = {
-                    "langfuse_session_id": session_id,
-                    "langfuse_user_id": session.get("user_id", "anonymous")
+                    "user_id": session.get("user_id", "anonymous"),
+                    "agent_type": "shopping_agent"
                 }
                 config["tags"] = ["shopping_agent", "ap2_protocol"]
 
