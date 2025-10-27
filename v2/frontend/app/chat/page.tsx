@@ -33,6 +33,7 @@ import {
   getCurrentUser,
   logout,
   getAuthHeaders,
+  getAccessToken,
   isCredentialProviderPasskeyRegistered
 } from "@/lib/passkey";
 
@@ -57,6 +58,7 @@ export default function ChatPage() {
     clearWebauthnRequest,
     stopStreaming,
     setSessionId,  // AP2 Step-up対応：セッションID設定関数
+    paymentCompletedInfo,  // 決済完了情報
   } = useSSEChat();
 
   const scrollAreaRef = useRef<HTMLDivElement>(null);
@@ -243,28 +245,42 @@ export default function ChatPage() {
           sendMessage("CartMandate署名の処理に失敗しました。");
         }
       } else {
-        // 従来の署名フロー（IntentMandate等）
-        // Credential Providerに署名を送信
-        const credentialProviderUrl = process.env.NEXT_PUBLIC_CREDENTIAL_PROVIDER_URL || "http://localhost:8003";
-        const verifyResponse = await fetch(`${credentialProviderUrl}/verify/attestation`, {
+        // PaymentMandate署名: POST /payment/submit-attestation
+        console.log("Submitting PaymentMandate signature to Shopping Agent:", {
+          session_id: sessionId,
+          attestation: attestation,
+        });
+
+        // AP2準拠: JWT認証ヘッダーを追加（Layer 1）
+        const authHeaders = getAuthHeaders();
+        const response = await fetch(`${shoppingAgentUrl}/payment/submit-attestation`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            ...authHeaders,  // AP2 Layer 1: JWT Authorization
+          },
           body: JSON.stringify({
-            payment_mandate: signatureRequest.mandate,
+            session_id: sessionId,
             attestation: attestation,
           }),
         });
 
-        const verifyResult = await verifyResponse.json();
-        console.log("Verification result:", verifyResult);
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const result = await response.json();
+        console.log("PaymentMandate signature result:", result);
 
         clearSignatureRequest();
 
-        if (verifyResult.verified) {
-          // 署名完了を自動的にエージェントに通知
-          sendMessage("署名完了");
+        if (result.status === "success") {
+          // AP2仕様準拠: PaymentMandate署名完了後、決済実行へ進む
+          console.log("PaymentMandate signature successful - payment execution");
+          // 内部トークンで次のステップをトリガー
+          sendMessage("_payment_signature_completed");
         } else {
-          sendMessage("署名の検証に失敗しました。もう一度お試しください。");
+          sendMessage(`決済処理に失敗しました: ${result.error || "不明なエラー"}`);
         }
       }
     } catch (error: any) {
@@ -594,6 +610,85 @@ export default function ChatPage() {
                       ))}
                     </div>
                   </div>
+                </div>
+              )}
+
+              {/* AP2完全準拠: 決済完了時の領収書表示 */}
+              {paymentCompletedInfo && paymentCompletedInfo.receipt_url && (
+                <div className="space-y-2">
+                  <Card className="border-green-200 bg-green-50">
+                    <CardContent className="p-4">
+                      <div className="flex items-start gap-3">
+                        <div className="shrink-0 text-green-600 text-2xl">
+                          ✅
+                        </div>
+                        <div className="flex-1 space-y-3">
+                          <h3 className="font-semibold text-green-800">
+                            決済が完了しました！
+                          </h3>
+                          <div className="text-sm space-y-2 text-gray-700">
+                            <p><span className="font-medium">取引ID:</span> {paymentCompletedInfo.transaction_id}</p>
+                            <p><span className="font-medium">商品:</span> {paymentCompletedInfo.product_name}</p>
+                            <p><span className="font-medium">金額:</span> {paymentCompletedInfo.currency} {paymentCompletedInfo.amount?.toLocaleString()}</p>
+                            <p><span className="font-medium">加盟店:</span> {paymentCompletedInfo.merchant_name}</p>
+                          </div>
+                          <div className="pt-2">
+                            <button
+                              onClick={async () => {
+                                try {
+                                  // AP2完全準拠：JWT認証付きで領収書をダウンロード
+                                  const downloadUrl = paymentCompletedInfo.receipt_url.replace("http://payment_processor:8004", "http://localhost:8004");
+
+                                  // JWTトークンを取得（AP2仕様準拠）
+                                  const jwt = getAccessToken();
+
+                                  if (!jwt) {
+                                    alert("認証情報が見つかりません。再度ログインしてください。");
+                                    return;
+                                  }
+
+                                  // fetchでJWT付きリクエスト（AP2完全準拠：セキュリティ）
+                                  const response = await fetch(downloadUrl, {
+                                    method: "GET",
+                                    headers: {
+                                      "Authorization": `Bearer ${jwt}`,
+                                    },
+                                  });
+
+                                  if (!response.ok) {
+                                    if (response.status === 401) {
+                                      alert("認証に失敗しました。再度ログインしてください。");
+                                    } else if (response.status === 403) {
+                                      alert("この領収書にアクセスする権限がありません。");
+                                    } else {
+                                      alert("領収書のダウンロードに失敗しました。");
+                                    }
+                                    return;
+                                  }
+
+                                  // BlobとしてPDFを取得
+                                  const blob = await response.blob();
+
+                                  // Blob URLを作成して新しいタブで開く
+                                  const blobUrl = URL.createObjectURL(blob);
+                                  window.open(blobUrl, "_blank");
+
+                                  // メモリリーク防止のため、5秒後にBlob URLを解放
+                                  setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
+                                } catch (error) {
+                                  console.error("[Download Receipt] Error:", error);
+                                  alert("領収書のダウンロード中にエラーが発生しました。");
+                                }
+                              }}
+                              className="inline-flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors text-sm font-medium"
+                            >
+                              📄 領収書を表示
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
                 </div>
               )}
             </ScrollArea>

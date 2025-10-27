@@ -76,6 +76,7 @@ class DIDResolver:
             {"agent_key": "merchant_agent", "did": "did:ap2:agent:merchant_agent"},
             {"agent_key": "merchant", "did": "did:ap2:merchant:mugibo_merchant"},
             {"agent_key": "credential_provider", "did": "did:ap2:cp:demo_cp"},
+            {"agent_key": "credential_provider_2", "did": "did:ap2:cp:demo_cp_2"},
             {"agent_key": "payment_processor", "did": "did:ap2:agent:payment_processor"}
         ]
 
@@ -103,11 +104,26 @@ class DIDResolver:
                             publicKeyPem=vm["publicKeyPem"]
                         ))
 
+                    # AP2完全準拠: serviceフィールドを抽出
+                    from common.models import ServiceEndpoint
+                    services = []
+                    for svc in did_doc_dict.get("service", []):
+                        services.append(ServiceEndpoint(
+                            id=svc["id"],
+                            type=svc["type"],
+                            serviceEndpoint=svc["serviceEndpoint"],
+                            name=svc.get("name"),
+                            description=svc.get("description"),
+                            supported_methods=svc.get("supported_methods"),
+                            logo_url=svc.get("logo_url")
+                        ))
+
                     did_doc = DIDDocument(
                         id=did_doc_dict["id"],
                         verificationMethod=verification_methods,
                         authentication=did_doc_dict.get("authentication", []),
-                        assertionMethod=did_doc_dict.get("assertionMethod", [])
+                        assertionMethod=did_doc_dict.get("assertionMethod", []),
+                        service=services if services else None  # AP2完全準拠
                     )
 
                     # レジストリに登録

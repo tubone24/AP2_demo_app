@@ -1,70 +1,116 @@
 # AP2 Demo App v2
 
-**完全実装版** - AP2プロトコルのマイクロサービスアーキテクチャ実装。FastAPI + Docker Compose + Next.js + LangGraph + WebAuthn + Langfuseで構築。
+**完全実装版** - AP2プロトコルのマイクロサービスアーキテクチャ実装。FastAPI + Docker Compose + Next.js + LangGraph + MCP + Meilisearch + Redis + WebAuthn + OpenTelemetryで構築。
 
-🎉 **Phase 1 & 2 完了！フル機能デモアプリ稼働中！**
+🎉 **完全実装！本番レベルのフルスタックデモアプリ稼働中！**
 
 ## 🏗️ アーキテクチャ概要
 
-このアプリケーションは、AP2（Agent Payments Protocol）仕様に完全準拠したマイクロサービスアーキテクチャで構築されています。6つのサービス（Backend 5 + Frontend 1）が相互に連携し、LangGraphによるAI対話機能とWebAuthn/Passkeyによる安全な署名機能を提供します。
+このアプリケーションは、AP2（Agent Payments Protocol）仕様に完全準拠したマイクロサービスアーキテクチャで構築されています。**12のサービス**（Backend 5 + MCP 2 + Frontend 1 + Redis 1 + Meilisearch 1 + Jaeger 1 + Payment Network 1）が相互に連携し、LangGraphによるAI対話機能、MCPによるツール統合、Meilisearch全文検索、Redis KVストア、WebAuthn/Passkey認証、OpenTelemetry分散トレーシングを提供します。
 
 ```mermaid
 graph TB
     subgraph "Frontend (Next.js)"
-        UI[Chat UI / Merchant Dashboard]
+        UI[Chat UI<br/>Merchant Dashboard<br/>Port 3000]
     end
 
     subgraph "Backend Services"
         SA[Shopping Agent<br/>Port 8000<br/>LangGraph統合]
+        SA_MCP[Shopping Agent MCP<br/>Port 8010<br/>MCPツール×6]
         MA[Merchant Agent<br/>Port 8001<br/>LangGraph統合]
+        MA_MCP[Merchant Agent MCP<br/>Port 8011<br/>MCPツール×3]
         M[Merchant<br/>Port 8002<br/>CartMandate署名]
         CP[Credential Provider<br/>Port 8003<br/>WebAuthn検証]
         PP[Payment Processor<br/>Port 8004<br/>決済処理]
         PN[Payment Network<br/>Port 8005<br/>Agent Token発行]
     end
 
+    subgraph "Infrastructure Services"
+        REDIS[(Redis<br/>Port 6379<br/>KV Store)]
+        MEILI[(Meilisearch<br/>Port 7700<br/>全文検索)]
+        JAEGER[Jaeger<br/>Port 16686<br/>分散トレーシング]
+    end
+
     subgraph "External Services"
-        DMR[DMR<br/>Docker Model Runner<br/>LLM Endpoint]
+        DMR[DMR/OpenAI<br/>LLM Endpoint]
         LF[Langfuse<br/>LLM Observability]
     end
 
     subgraph "Data Layer"
-        DB[(SQLite Database)]
-        Keys[Keys Directory<br/>Ed25519 + ECDSA Keypairs]
+        DB[(SQLite Database<br/>永続データ×5)]
+        Keys[Keys Directory<br/>Ed25519 + ECDSA]
     end
 
     UI -->|SSE Chat| SA
     UI -->|WebAuthn| CP
     UI -->|Product CRUD| M
 
-    SA -->|A2A Message<br/>IntentMandate| MA
-    MA -->|unsigned CartMandate| M
-    M -->|signed CartMandate| SA
-    SA -->|PaymentMandate| PP
-    SA -->|Credential Token| CP
-    PP -->|Transaction| DB
+    SA -->|LangGraph Tools| SA_MCP
+    SA_MCP -->|build_intent<br/>request_carts<br/>select_cart<br/>assess_risk<br/>build_payment<br/>execute_payment| SA
+
+    MA -->|LangGraph Tools| MA_MCP
+    MA_MCP -->|search_products<br/>check_inventory<br/>build_cart_mandates| MA
+    MA_MCP -->|全文検索| MEILI
+
+    SA -->|A2A Message| MA
+    MA -->|A2A Message| M
+    M -->|A2A Message| SA
+    SA -->|A2A Message| PP
+    SA -->|A2A Message| CP
+    CP -->|Agent Token| PN
+
+    CP -->|Token/Session/Challenge<br/>TTL: 15min/10min/60sec| REDIS
+
+    SA & MA & M & CP & PP -->|Read/Write| DB
+    SA & MA & M & CP & PP -->|Load Keys| Keys
+    SA & MA & M & CP & PP -.->|Trace| JAEGER
 
     SA -.->|LLM Query| DMR
     MA -.->|LLM Query| DMR
-    SA -.->|Trace| LF
-    MA -.->|Trace| LF
+    SA -.->|Langfuse Trace| LF
+    MA -.->|Langfuse Trace| LF
 
-    CP -->|Agent Token| PN
-
-    SA & MA & M & CP & PP --> DB
-    SA & MA & M & CP & PP --> Keys
+    style UI fill:#e1f5ff
+    style SA fill:#fff4e6
+    style SA_MCP fill:#e1bee7
+    style MA fill:#fff4e6
+    style MA_MCP fill:#e1bee7
+    style M fill:#fff4e6
+    style CP fill:#e8f5e9
+    style PP fill:#e8f5e9
+    style PN fill:#b2dfdb
+    style REDIS fill:#fce4ec
+    style MEILI fill:#ffccbc
+    style JAEGER fill:#c8e6c9
 ```
 
-### AP2準拠の6エンティティ
+### マイクロサービス一覧
 
-| エンティティ | ポート | 役割 | LangGraph | 主要機能 |
-|------------|-------|------|-----------|---------|
-| **Shopping Agent** | 8000 | ユーザー代理人 | ✅ | 対話、Intent生成、Payment処理 |
-| **Merchant Agent** | 8001 | 商品検索・Cart作成 | ✅ | 商品検索、CartMandate作成（未署名） |
-| **Merchant** | 8002 | 販売者 | ❌ | CartMandate署名、在庫管理 |
-| **Credential Provider** | 8003 | 認証・トークン発行 | ❌ | WebAuthn検証、Step-up認証 |
-| **Payment Processor** | 8004 | 決済処理 | ❌ | 支払い処理、領収書生成 |
-| **Payment Network** | 8005 | 決済ネットワーク | ❌ | Agent Token発行 |
+| サービス | ポート | 種別 | 役割 | 技術スタック |
+|---------|-------|------|------|-------------|
+| **Frontend** | 3000 | UI | ユーザーインターフェース | Next.js 15, TypeScript, shadcn/ui |
+| **Shopping Agent** | 8000 | Backend | ユーザー代理人 | FastAPI, LangGraph, A2A通信 |
+| **Shopping Agent MCP** | 8010 | MCP | MCPツールサーバー（×6） | FastAPI, MCP Server |
+| **Merchant Agent** | 8001 | Backend | 商品検索・Cart作成 | FastAPI, LangGraph, A2A通信 |
+| **Merchant Agent MCP** | 8011 | MCP | MCPツールサーバー（×3） | FastAPI, MCP Server, Meilisearch統合 |
+| **Merchant** | 8002 | Backend | 販売者 | FastAPI, CartMandate署名 |
+| **Credential Provider** | 8003 | Backend | 認証・トークン発行 | FastAPI, WebAuthn, Redis統合 |
+| **Payment Processor** | 8004 | Backend | 決済処理 | FastAPI, 領収書生成 |
+| **Payment Network** | 8005 | Backend | 決済ネットワーク | FastAPI, Agent Token発行 |
+| **Redis** | 6379 | Infra | KVストア | Redis 7-alpine, TTL管理 |
+| **Meilisearch** | 7700 | Infra | 全文検索エンジン | Meilisearch v1.11 |
+| **Jaeger** | 16686 | Infra | 分散トレーシング | Jaeger All-in-One, OpenTelemetry |
+
+### AP2準拠の6エンティティ（コアプロトコル）
+
+| エンティティ | サービス | ポート | 役割 | AP2仕様準拠 |
+|------------|---------|-------|------|------------|
+| **User** | Frontend | 3000 | エンドユーザー | ✅ WebAuthn署名 |
+| **Shopping Agent** | Shopping Agent | 8000 | ユーザー代理人 | ✅ IntentMandate/PaymentMandate |
+| **Merchant Agent** | Merchant Agent | 8001 | 商品検索・Cart作成 | ✅ A2A通信 |
+| **Merchant** | Merchant | 8002 | 販売者 | ✅ CartMandate署名 |
+| **Credential Provider** | Credential Provider | 8003 | 認証・トークン発行 | ✅ WebAuthn検証 |
+| **Payment Processor** | Payment Processor | 8004 | 決済処理 | ✅ Mandate検証・決済実行 |
 
 ## 🔄 完全な購入フロー（シーケンス図）
 
@@ -212,7 +258,8 @@ v2/
 │   ├── models.py                # Pydanticモデル（A2Aメッセージ、API型）
 │   ├── a2a_handler.py           # A2Aメッセージ処理・署名検証・ルーティング
 │   ├── base_agent.py            # 全エージェントの基底クラス（POST /a2a/message実装）
-│   ├── database.py              # SQLAlchemyモデル＋CRUD操作
+│   ├── database.py              # SQLAlchemyモデル＋CRUD操作（Receipt追加）
+│   ├── redis_client.py          # Redis KVストアクライアント（TokenStore, SessionStore）
 │   ├── crypto.py                # 暗号化・署名・鍵管理（Ed25519/ECDSA, AES-256-CBC）
 │   ├── logger.py                # 統一ロギングシステム（JSON/Text対応）
 │   ├── seed_data.py             # サンプルデータ投入スクリプト
@@ -233,7 +280,7 @@ v2/
 │   │   ├── main.py
 │   │   └── Dockerfile
 │   ├── credential_provider/     # ✅ 完全実装
-│   │   ├── provider.py          # WebAuthn検証・Step-up認証
+│   │   ├── provider.py          # WebAuthn検証・Step-up認証・Redis統合
 │   │   ├── main.py
 │   │   └── Dockerfile
 │   └── payment_processor/       # ✅ 完全実装
@@ -262,13 +309,16 @@ v2/
 ├── scripts/                     # ユーティリティスクリプト
 │   └── init_db.py               # データベース初期化
 │
-├── data/                        # 永続化データ
-│   ├── ap2.db                   # SQLiteデータベース
+├── data/                        # 永続化データ（Docker Volume）
+│   ├── *.db                     # SQLiteデータベース（各サービス）
 │   ├── receipts/                # PDF領収書
 │   └── did_documents/           # DID Documents
 │
-├── docker-compose.yml           # 全6サービスオーケストレーション
-├── pyproject.toml               # Python依存関係（uv管理）
+├── keys/                        # 暗号鍵格納（Docker Volume）
+│   └── *_private.pem            # Ed25519/ECDSA秘密鍵（AES-256暗号化）
+│
+├── docker-compose.yml           # 全サービスオーケストレーション（Redis含む）
+├── pyproject.toml               # Python依存関係（uv管理、redis>=5.0.0追加）
 └── README.md                    # このファイル
 ```
 
@@ -287,7 +337,8 @@ v2/
 - ✅ **models.py** - Pydanticモデル（A2A, API, AP2 Mandates）
 - ✅ **a2a_handler.py** - A2Aメッセージ処理・ECDSA署名検証・ルーティング
 - ✅ **base_agent.py** - 全エージェントの基底クラス（POST /a2a/message実装）
-- ✅ **database.py** - SQLAlchemyモデル＋非同期CRUD操作
+- ✅ **database.py** - SQLAlchemyモデル＋非同期CRUD操作（Receipt追加）
+- ✅ **redis_client.py** - Redis KVストアクライアント（TokenStore, SessionStore、TTL管理）
 - ✅ **crypto.py** - ECDSA鍵生成・署名・検証、AES-256-CBC暗号化
 - ✅ **logger.py** - 統一ロギング（JSON/Text、機密データマスキング）
 - ✅ **seed_data.py** - サンプルデータ（商品8点、ユーザー2人）
@@ -318,9 +369,11 @@ v2/
 
 #### Credential Provider (Port 8003)
 - ✅ WebAuthn attestation検証
-- ✅ Credential Token発行
-- ✅ Step-up認証フロー（高額決済）
+- ✅ Credential Token発行（Redis KV、TTL: 15分）
+- ✅ Step-up認証フロー（Redis セッション、TTL: 10分）
+- ✅ WebAuthn Challenge管理（Redis、TTL: 60秒、リプレイ攻撃防止）
 - ✅ 支払い方法管理（カード、銀行口座）
+- ✅ 領収書永続化（DB保存）
 - ✅ 外部認証画面（/step-up-auth）
 
 #### Payment Processor (Port 8004)
@@ -358,10 +411,11 @@ v2/
 - ✅ レスポンシブデザイン
 
 ### 🐳 インフラ
-- ✅ **Docker Compose** - 全6サービス（Backend 5 + Frontend 1）
-- ✅ **SQLite永続化** - Dockerボリュームマウント
+- ✅ **Docker Compose** - 全サービス（Backend 5 + Frontend 1 + Redis 1 + Meilisearch 1 + Jaeger 1）
+- ✅ **SQLite永続化** - Dockerボリュームマウント（永続データ）
+- ✅ **Redis KVストア** - 一時データ・TTL管理（トークン、セッション、チャレンジ）
 - ✅ **環境変数管理** - `.env`対応
-- ✅ **ヘルスチェック** - 全サービスliveness probe実装
+- ✅ **ヘルスチェック** - 全サービスliveness probe実装（Redis含む）
 
 ## 🛠️ セットアップ手順
 

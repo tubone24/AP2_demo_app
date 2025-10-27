@@ -25,9 +25,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 from v2.common.base_agent import BaseAgent, AgentPassphraseManager
 from v2.common.models import A2AMessage, AttestationVerifyRequest, AttestationVerifyResponse
-from v2.common.database import DatabaseManager, Attestation, PasskeyCredentialCRUD, PaymentMethodCRUD
+from v2.common.database import DatabaseManager, Attestation, PasskeyCredentialCRUD, PaymentMethodCRUD, ReceiptCRUD
 from v2.common.crypto import DeviceAttestationManager, KeyManager
 from v2.common.logger import get_logger, log_a2a_message, log_database_operation
+from v2.common.redis_client import RedisClient, TokenStore, SessionStore
 
 logger = get_logger(__name__, service_name='credential_provider')
 
@@ -61,20 +62,26 @@ class CredentialProviderService(BaseAgent):
         # Device Attestation Manager（既存のap2_crypto.pyを使用）
         self.attestation_manager = DeviceAttestationManager(self.key_manager)
 
-        # AP2完全準拠: 支払い方法はデータベースで永続化
-        # payment_methodsテーブルを使用（インメモリストアは廃止）
-
-        # Step-upセッション管理（インメモリ）
-        # 本番環境ではRedis等のKVストアを使用
-        self.step_up_sessions: Dict[str, Dict[str, Any]] = {}
-        
-        # 領収書ストア（インメモリ）
-        # 本番環境ではデータベースを使用
-        self.receipts: Dict[str, List[Dict[str, Any]]] = {}  # user_id -> [receipts]
+        # Redis KVストア（一時データ管理）
+        redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+        self.redis_client = RedisClient(redis_url=redis_url)
 
         # トークンストア（AP2仕様準拠：トークン→支払い方法のマッピング）
-        # 本番環境ではRedis等のKVストアやデータベースを使用
-        self.token_store: Dict[str, Dict[str, Any]] = {}
+        # Redis KVで管理（TTL: 15分）
+        self.token_store = TokenStore(self.redis_client, prefix="cp:token")
+
+        # Step-upセッション管理
+        # Redis KVで管理（TTL: 10分）
+        self.session_store = SessionStore(self.redis_client, prefix="cp:stepup")
+
+        # WebAuthn challengeストア（TTL: 60秒）
+        self.challenge_store = SessionStore(self.redis_client, prefix="cp:challenge")
+
+        # AP2完全準拠: 支払い方法はデータベースで永続化
+        # payment_methodsテーブルを使用
+
+        # 領収書はデータベースで永続化
+        # receiptsテーブルを使用
 
         # 起動イベントハンドラー登録
         @self.app.on_event("startup")
@@ -157,8 +164,24 @@ class CredentialProviderService(BaseAgent):
 
                 logger.info(f"[register_passkey_challenge] Generated challenge for user_id={user_id}")
 
-                # TODO: challengeをRedisやメモリキャッシュに一時保存（有効期限60秒）
-                # 現在はステートレスなので、クライアント側で検証不要の"none" attestationを使用
+                # challengeをRedis KVストアに保存（TTL: 60秒）
+                # WebAuthn Registration Ceremony完了時に検証に使用
+                challenge_data = {
+                    "challenge": challenge_b64url,
+                    "user_id": user_id,
+                    "user_email": user_email,
+                    "created_at": datetime.now(timezone.utc).isoformat()
+                }
+                await self.challenge_store.save_session(
+                    challenge_b64url,
+                    challenge_data,
+                    ttl_seconds=60  # 60秒で自動削除
+                )
+
+                logger.info(f"[register_passkey_challenge] Saved challenge to Redis KV (TTL: 60s)")
+
+                # 注意: 現在は"none" attestationを使用（デモ環境）
+                # 本番環境では"direct"または"indirect"を使用し、challengeを厳密に検証すべき
 
                 # WebAuthn Registration Optionsを返す
                 return {
@@ -218,9 +241,66 @@ class CredentialProviderService(BaseAgent):
                 user_id = registration_request["user_id"]
                 credential_id = registration_request["credential_id"]
                 attestation_object_b64 = registration_request["attestation_object"]
+                client_data_json_b64 = registration_request.get("client_data_json")
                 transports = registration_request.get("transports", [])
 
                 logger.info(f"[register_passkey] Registering passkey for user: {user_id}")
+
+                # Challenge検証（Redis KVストアから取得）
+                if client_data_json_b64:
+                    try:
+                        # client_data_jsonからchallengeを抽出
+                        # Base64URLデコード
+                        padding_needed = len(client_data_json_b64) % 4
+                        if padding_needed:
+                            client_data_json_b64 += '=' * (4 - padding_needed)
+
+                        client_data_json_b64_std = client_data_json_b64.replace('-', '+').replace('_', '/')
+                        client_data_json_bytes = base64.b64decode(client_data_json_b64_std)
+                        client_data = json.loads(client_data_json_bytes.decode('utf-8'))
+
+                        challenge = client_data.get("challenge")
+
+                        if challenge:
+                            # Redis KVストアから対応するchallengeを取得
+                            stored_challenge = await self.challenge_store.get_session(challenge)
+
+                            if not stored_challenge:
+                                logger.warning(f"[register_passkey] Challenge not found or expired: {challenge[:16]}...")
+                                raise HTTPException(
+                                    status_code=400,
+                                    detail="Challenge not found or expired. Please request a new challenge."
+                                )
+
+                            # user_idの一致を確認
+                            if stored_challenge.get("user_id") != user_id:
+                                logger.error(
+                                    f"[register_passkey] User ID mismatch: "
+                                    f"stored={stored_challenge.get('user_id')}, request={user_id}"
+                                )
+                                raise HTTPException(
+                                    status_code=400,
+                                    detail="Challenge does not match the user ID"
+                                )
+
+                            # 検証成功後、challengeを削除（再利用防止）
+                            await self.challenge_store.delete_session(challenge)
+                            logger.info(f"[register_passkey] Challenge verified and deleted: {challenge[:16]}...")
+                        else:
+                            logger.warning(f"[register_passkey] No challenge found in client_data_json")
+
+                    except json.JSONDecodeError as e:
+                        logger.error(f"[register_passkey] Failed to parse client_data_json: {e}")
+                        raise HTTPException(
+                            status_code=400,
+                            detail="Invalid client_data_json format"
+                        )
+                else:
+                    # client_data_jsonが提供されていない場合（デモ環境用）
+                    logger.info(
+                        f"[register_passkey] No client_data_json provided, skipping challenge verification "
+                        f"(acceptable for attestation='none' demo mode)"
+                    )
 
                 # attestationObjectから公開鍵を抽出
                 # Base64URLデコード
@@ -581,13 +661,15 @@ class CredentialProviderService(BaseAgent):
                 secure_token = f"tok_{uuid.uuid4().hex[:8]}_{random_bytes[:24]}"
 
                 # トークンストアに保存（AP2仕様準拠）
-                self.token_store[secure_token] = {
+                # Redis KVに保存（TTL: 15分）
+                token_data = {
                     "user_id": user_id,
                     "payment_method_id": payment_method_id,
                     "payment_method": payment_method,
                     "issued_at": now.isoformat(),
                     "expires_at": expires_at.isoformat()
                 }
+                await self.token_store.save_token(secure_token, token_data)
 
                 logger.info(f"[tokenize_payment_method] Generated secure token for payment method: {payment_method_id}")
 
@@ -595,13 +677,16 @@ class CredentialProviderService(BaseAgent):
                 requires_stepup = payment_method.get("requires_stepup", False)
                 stepup_method = payment_method.get("stepup_method", None)
 
+                # AP2完全準拠：有効期限を含める（カードの場合）
                 response_data = {
                     "token": secure_token,
                     "payment_method_id": payment_method_id,
                     "brand": payment_method.get("brand", "unknown"),
                     "last4": payment_method.get("last4", "0000"),
                     "type": payment_method.get("type", "card"),
-                    "expires_at": expires_at.isoformat().replace('+00:00', 'Z')
+                    "expiry_month": payment_method.get("expiry_month"),  # カード有効期限（月）
+                    "expiry_year": payment_method.get("expiry_year"),    # カード有効期限（年）
+                    "expires_at": expires_at.isoformat().replace('+00:00', 'Z')  # トークン有効期限
                 }
 
                 # Stepup認証が必要な場合はフラグを追加
@@ -819,33 +904,32 @@ class CredentialProviderService(BaseAgent):
                 payment_method_id = request["payment_method_id"]
                 transaction_context = request.get("transaction_context", {})
                 return_url = request.get("return_url", "http://localhost:3000/chat")
-                
-                # 支払い方法を取得
-                user_payment_methods = self.payment_methods.get(user_id, [])
-                payment_method = next(
-                    (pm for pm in user_payment_methods if pm["id"] == payment_method_id),
-                    None
-                )
-                
-                if not payment_method:
+
+                # 支払い方法をDBから取得
+                async with self.db_manager.get_session() as session:
+                    payment_method_record = await PaymentMethodCRUD.get_by_id(session, payment_method_id)
+
+                if not payment_method_record:
                     raise HTTPException(
                         status_code=404,
                         detail=f"Payment method not found: {payment_method_id}"
                     )
-                
+
+                payment_method = payment_method_record.to_dict()
+
                 # Step-upが必要かチェック
-                if not payment_method.get("requires_step_up", False):
+                if not payment_method.get("requires_stepup", False):
                     raise HTTPException(
                         status_code=400,
                         detail=f"Payment method does not require step-up: {payment_method_id}"
                     )
-                
+
                 # Step-upセッション作成
                 session_id = f"stepup_{uuid.uuid4().hex[:16]}"
                 now = datetime.now(timezone.utc)
                 expires_at = now + timedelta(minutes=10)  # 10分間有効
-                
-                self.step_up_sessions[session_id] = {
+
+                session_data = {
                     "session_id": session_id,
                     "user_id": user_id,
                     "payment_method_id": payment_method_id,
@@ -856,15 +940,18 @@ class CredentialProviderService(BaseAgent):
                     "created_at": now.isoformat(),
                     "expires_at": expires_at.isoformat()
                 }
-                
+
+                # Redis KVに保存（TTL: 10分）
+                await self.session_store.save_session(session_id, session_data, ttl_seconds=10*60)
+
                 # Step-up URL生成
                 step_up_url = f"http://localhost:8003/step-up/{session_id}"
-                
+
                 logger.info(
                     f"[initiate_step_up] Created step-up session: "
                     f"session_id={session_id}, payment_method_id={payment_method_id}"
                 )
-                
+
                 return {
                     "session_id": session_id,
                     "step_up_url": step_up_url,
@@ -888,10 +975,10 @@ class CredentialProviderService(BaseAgent):
             """
             try:
                 from fastapi.responses import HTMLResponse
-                
-                # Step-upセッション取得
-                session_data = self.step_up_sessions.get(session_id)
-                
+
+                # Step-upセッション取得（Redis KV）
+                session_data = await self.session_store.get_session(session_id)
+
                 if not session_data:
                     return HTMLResponse(
                         content="""
@@ -1102,30 +1189,30 @@ class CredentialProviderService(BaseAgent):
             }
             """
             try:
-                # Step-upセッション取得
-                session_data = self.step_up_sessions.get(session_id)
-                
+                # Step-upセッション取得（Redis KV）
+                session_data = await self.session_store.get_session(session_id)
+
                 if not session_data:
                     raise HTTPException(status_code=404, detail="Step-up session not found")
-                
+
                 # 有効期限チェック
                 expires_at = datetime.fromisoformat(session_data["expires_at"])
                 if datetime.now(timezone.utc) > expires_at:
                     raise HTTPException(status_code=400, detail="Step-up session expired")
-                
+
                 status = request.get("status", "success")
-                
+
                 if status == "success":
                     # Step-up成功 - トークン発行
                     import secrets
                     random_bytes = secrets.token_urlsafe(32)
                     token = f"tok_stepup_{uuid.uuid4().hex[:8]}_{random_bytes[:24]}"
-                    
-                    # トークンストアに保存
+
+                    # トークンストアに保存（Redis KV、TTL: 15分）
                     now = datetime.now(timezone.utc)
                     token_expires_at = now + timedelta(minutes=15)
-                    
-                    self.token_store[token] = {
+
+                    token_data = {
                         "user_id": session_data["user_id"],
                         "payment_method_id": session_data["payment_method_id"],
                         "payment_method": session_data["payment_method"],
@@ -1133,17 +1220,21 @@ class CredentialProviderService(BaseAgent):
                         "expires_at": token_expires_at.isoformat(),
                         "step_up_completed": True
                     }
-                    
-                    # セッション更新
-                    session_data["status"] = "completed"
-                    session_data["token"] = token
-                    session_data["completed_at"] = now.isoformat()
-                    
+                    await self.token_store.save_token(token, token_data)
+
+                    # セッション更新（Redis KV）
+                    session_updates = {
+                        "status": "completed",
+                        "token": token,
+                        "completed_at": now.isoformat()
+                    }
+                    await self.session_store.update_session(session_id, session_updates)
+
                     logger.info(
                         f"[complete_step_up] Step-up completed successfully: "
                         f"session_id={session_id}, token={token[:20]}..."
                     )
-                    
+
                     return {
                         "status": "completed",
                         "session_id": session_id,
@@ -1153,11 +1244,14 @@ class CredentialProviderService(BaseAgent):
                     }
                 else:
                     # Step-up失敗
-                    session_data["status"] = "failed"
-                    session_data["failed_at"] = datetime.now(timezone.utc).isoformat()
-                    
+                    session_updates = {
+                        "status": "failed",
+                        "failed_at": datetime.now(timezone.utc).isoformat()
+                    }
+                    await self.session_store.update_session(session_id, session_updates)
+
                     logger.warning(f"[complete_step_up] Step-up failed: session_id={session_id}")
-                    
+
                     return {
                         "status": "failed",
                         "session_id": session_id,
@@ -1198,8 +1292,8 @@ class CredentialProviderService(BaseAgent):
                 if not session_id:
                     raise HTTPException(status_code=400, detail="session_id is required")
 
-                # Step-upセッション取得
-                session_data = self.step_up_sessions.get(session_id)
+                # Step-upセッション取得（Redis KV）
+                session_data = await self.session_store.get_session(session_id)
 
                 if not session_data:
                     logger.warning(f"[verify_step_up] Session not found: {session_id}")
@@ -1324,31 +1418,29 @@ class CredentialProviderService(BaseAgent):
                 transaction_id = receipt_data.get("transaction_id")
                 receipt_url = receipt_data.get("receipt_url")
                 payer_id = receipt_data.get("payer_id")
-                
+
                 if not transaction_id or not receipt_url or not payer_id:
                     raise HTTPException(
                         status_code=400,
                         detail="transaction_id, receipt_url, and payer_id are required"
                     )
-                
-                # 領収書情報を保存
-                if payer_id not in self.receipts:
-                    self.receipts[payer_id] = []
-                
-                self.receipts[payer_id].append({
-                    "transaction_id": transaction_id,
-                    "receipt_url": receipt_url,
-                    "amount": receipt_data.get("amount"),
-                    "received_at": datetime.now(timezone.utc).isoformat(),
-                    "payment_timestamp": receipt_data.get("timestamp")
-                })
-                
+
+                # 領収書情報をDBに保存
+                async with self.db_manager.get_session() as session:
+                    receipt = await ReceiptCRUD.create(session, {
+                        "user_id": payer_id,
+                        "transaction_id": transaction_id,
+                        "receipt_url": receipt_url,
+                        "amount": receipt_data.get("amount"),
+                        "payment_timestamp": receipt_data.get("timestamp")
+                    })
+
                 logger.info(
-                    f"[CredentialProvider] Receipt received and stored: "
+                    f"[CredentialProvider] Receipt received and stored to DB: "
                     f"transaction_id={transaction_id}, payer_id={payer_id}, "
                     f"receipt_url={receipt_url}"
                 )
-                
+
                 return {
                     "status": "received",
                     "message": "Receipt stored successfully",
@@ -1365,7 +1457,7 @@ class CredentialProviderService(BaseAgent):
         async def get_receipts(user_id: str):
             """
             GET /receipts?user_id=... - ユーザーの領収書一覧取得
-            
+
             レスポンス:
             {
               "user_id": "user_demo_001",
@@ -1381,14 +1473,17 @@ class CredentialProviderService(BaseAgent):
             }
             """
             try:
-                receipts = self.receipts.get(user_id, [])
-                
+                # DBから領収書を取得
+                async with self.db_manager.get_session() as session:
+                    receipt_records = await ReceiptCRUD.get_by_user_id(session, user_id)
+                    receipts = [receipt.to_dict() for receipt in receipt_records]
+
                 return {
                     "user_id": user_id,
                     "receipts": receipts,
                     "total_count": len(receipts)
                 }
-                
+
             except Exception as e:
                 logger.error(f"[get_receipts] Error: {e}", exc_info=True)
                 raise HTTPException(status_code=500, detail=str(e))
@@ -1431,8 +1526,8 @@ class CredentialProviderService(BaseAgent):
                 if not token.startswith("tok_"):
                     raise ValueError(f"Invalid token format: {token[:20]}")
 
-                # トークンストアから支払い方法を取得（AP2仕様準拠）
-                token_data = self.token_store.get(token)
+                # トークンストアから支払い方法を取得（AP2仕様準拠、Redis KV）
+                token_data = await self.token_store.get_token(token)
                 if not token_data:
                     logger.error(f"[verify_credentials] Token not found in store: {token[:20]}...")
                     return {
@@ -1444,8 +1539,8 @@ class CredentialProviderService(BaseAgent):
                 expires_at = datetime.fromisoformat(token_data["expires_at"])
                 if datetime.now(timezone.utc) > expires_at:
                     logger.warning(f"[verify_credentials] Token expired: {token[:20]}...")
-                    # 期限切れトークンを削除
-                    del self.token_store[token]
+                    # 期限切れトークンを削除（Redis KV）
+                    await self.token_store.delete_token(token)
                     return {
                         "verified": False,
                         "error": "Token expired"

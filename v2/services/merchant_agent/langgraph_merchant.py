@@ -42,12 +42,12 @@ tracer = get_tracer(__name__)
 
 # Langfuseトレーシング設定
 LANGFUSE_ENABLED = os.getenv("LANGFUSE_ENABLED", "false").lower() == "true"
-langfuse_handler = None
+CallbackHandler = None
 langfuse_client = None
 
 if LANGFUSE_ENABLED:
     try:
-        from langfuse.langchain import CallbackHandler
+        from langfuse.langchain import CallbackHandler as LangfuseCallbackHandler
         from langfuse import Langfuse
 
         langfuse_client = Langfuse(
@@ -55,7 +55,7 @@ if LANGFUSE_ENABLED:
             secret_key=os.getenv("LANGFUSE_SECRET_KEY"),
             host=os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
         )
-        langfuse_handler = CallbackHandler()
+        CallbackHandler = LangfuseCallbackHandler
         logger.info("[Langfuse] Tracing enabled")
     except Exception as e:
         logger.warning(f"[Langfuse] Failed to initialize: {e}")
@@ -165,6 +165,9 @@ class MerchantLangGraphAgent:
 
         # グラフ構築
         self.graph = self._build_graph()
+
+        # Langfuseハンドラー管理（セッションごとにCallbackHandlerインスタンスを保持）
+        self._langfuse_handlers: Dict[str, Any] = {}
 
         logger.info(f"[MerchantLangGraphAgent] Initialized with LLM: {self.llm.model_name if self.llm else 'disabled'}, MCP: {mcp_url}")
 
@@ -276,17 +279,12 @@ JSON形式で返答してください（search_keywordsは必ず日本語）:
 }}"""
 
         try:
-            # LangfuseハンドラーをLLM呼び出しに渡す
-            llm_config = {}
-            if LANGFUSE_ENABLED and langfuse_handler:
-                llm_config["callbacks"] = [langfuse_handler]
-
-            # LLM呼び出し
+            # LLM呼び出し（コールバックはグラフレベルのconfigから自動的に伝播される）
             messages = [
                 SystemMessage(content=system_prompt),
                 HumanMessage(content=user_prompt)
             ]
-            response = await self.llm.ainvoke(messages, config=llm_config)
+            response = await self.llm.ainvoke(messages)
             response_text = response.content
 
             # JSON抽出
@@ -486,17 +484,12 @@ JSON配列形式で返答してください:
 ]"""
 
         try:
-            # LangfuseハンドラーをLLM呼び出しに渡す
-            llm_config = {}
-            if LANGFUSE_ENABLED and langfuse_handler:
-                llm_config["callbacks"] = [langfuse_handler]
-
-            # LLM呼び出し
+            # LLM呼び出し（コールバックはグラフレベルのconfigから自動的に伝播される）
             messages = [
                 SystemMessage(content=system_prompt),
                 HumanMessage(content=user_prompt)
             ]
-            response = await self.llm.ainvoke(messages, config=llm_config)
+            response = await self.llm.ainvoke(messages)
             response_text = response.content
 
             # JSON抽出
@@ -585,11 +578,11 @@ JSON配列形式で返答してください:
         cart_candidates = []
 
         for plan in cart_plans:
-            span = None
+            langfuse_span = None
             try:
                 # Langfuseスパン開始（可観測性向上）
                 if LANGFUSE_ENABLED and langfuse_client:
-                    span = langfuse_client.start_span(
+                    langfuse_span = langfuse_client.start_span(
                         name="mcp_build_cart_mandates",
                         input={"cart_plan": plan, "products_count": len(products)},
                         metadata={"tool": "build_cart_mandates", "mcp_server": "merchant_agent_mcp", "plan_name": plan.get("name"), "session_id": trace_id}
@@ -614,14 +607,14 @@ JSON配列形式で返答してください:
                         "merchant.cart_mandate_id": cart_mandate.get("id"),
                         "merchant.operation": "sign_cart"
                     }
-                ) as span:
+                ) as otel_span:
                     response = await self.http_client.post(
                         f"{self.merchant_url}/sign/cart",
                         json={"cart_mandate": cart_mandate},
                         timeout=30.0
                     )
                     response.raise_for_status()
-                    span.set_attribute("http.status_code", response.status_code)
+                    otel_span.set_attribute("http.status_code", response.status_code)
                     signed_cart_response = response.json()
 
                 # AP2準拠：Merchantからのレスポンスから署名済みCartMandateを取り出し
@@ -648,17 +641,17 @@ JSON配列形式で返答してください:
                 logger.info(f"[build_cart_mandates] Built CartMandate for plan: {plan.get('name')}")
 
                 # Langfuseスパン終了（成功時）
-                if span:
-                    span.update(output={"artifact_id": artifact["artifactId"], "plan_name": plan.get("name")})
-                    span.end()
+                if langfuse_span:
+                    langfuse_span.update(output={"artifact_id": artifact["artifactId"], "plan_name": plan.get("name")})
+                    langfuse_span.end()
 
             except Exception as e:
                 logger.error(f"[build_cart_mandates] Failed for plan {plan.get('name')}: {e}")
 
                 # Langfuseスパン終了（エラー時）
-                if span:
-                    span.update(level="ERROR", status_message=str(e))
-                    span.end()
+                if langfuse_span:
+                    langfuse_span.update(level="ERROR", status_message=str(e))
+                    langfuse_span.end()
 
                 continue
 
@@ -990,10 +983,31 @@ JSON配列形式で返答してください:
         }
 
         # グラフ実行（未署名のCartMandate候補を生成）
-        # Langfuseハンドラーをconfigとして渡す
+        # Langfuseトレースをセッションごとに統合（shopping_agentと同じトレースに含まれる）
         config = {}
-        if LANGFUSE_ENABLED and langfuse_handler:
+        if LANGFUSE_ENABLED and CallbackHandler:
+            # セッションごとにCallbackHandlerインスタンスを取得または作成
+            # shopping_agentと同じsession_idを使用することで、同じトレースグループに統合される
+            if session_id not in self._langfuse_handlers:
+                # 新しいハンドラーを作成（AP2完全準拠: オブザーバビリティ）
+                langfuse_handler = CallbackHandler()
+                self._langfuse_handlers[session_id] = langfuse_handler
+                logger.info(f"[Langfuse] Created new handler for session: {session_id}")
+            else:
+                langfuse_handler = self._langfuse_handlers[session_id]
+                logger.debug(f"[Langfuse] Reusing existing handler for session: {session_id}")
+
+            # Langfuseハンドラーを設定
             config["callbacks"] = [langfuse_handler]
+            # session_idをrun_idとして設定（重要：これにより同じトレースIDになる）
+            config["run_id"] = session_id
+            # metadataでsession_idとuser_idを指定
+            config["metadata"] = {
+                "langfuse_session_id": session_id,
+                "langfuse_user_id": user_id,
+                "agent_type": "merchant_agent"
+            }
+            config["tags"] = ["merchant_agent", "ap2_protocol"]
 
         result = await self.graph.ainvoke(initial_state, config=config)
         cart_candidates = result["cart_candidates"]
@@ -1025,14 +1039,14 @@ JSON配列形式で返答してください:
                     "merchant.cart_mandate_id": cart_mandate.get("id"),
                     "merchant.operation": "sign_cart"
                 }
-            ) as span:
+            ) as otel_span:
                 response = await self.http_client.post(
                     f"{self.merchant_url}/sign/cart",
                     json={"cart_mandate": cart_mandate},
                     timeout=10.0
                 )
                 response.raise_for_status()
-                span.set_attribute("http.status_code", response.status_code)
+                otel_span.set_attribute("http.status_code", response.status_code)
                 result = response.json()
 
             signed_cart_mandate = result.get("signed_cart_mandate")

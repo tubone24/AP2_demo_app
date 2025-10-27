@@ -54,16 +54,16 @@ DID: did:ap2:agent:credential_provider
 │  ┌──────────────────────────────────────────────────┐  │
 │  │  WebAuthn Verification Engine                     │  │
 │  │  - Passkey署名検証 (FIDO2)                         │  │
-│  │  - Challenge管理                                   │  │
+│  │  - Challenge管理 (Redis KV, TTL: 60秒)             │  │
 │  │  - Counter-based replay attack prevention         │  │
 │  │  - RFC 8785 Canonicalization                      │  │
 │  └──────────────────────────────────────────────────┘  │
 │                                                          │
 │  ┌──────────────────────────────────────────────────┐  │
 │  │  Payment Method Management                        │  │
-│  │  - カード情報管理                                  │  │
-│  │  - トークン化 (AP2 Step 17-18)                     │  │
-│  │  - Step-up認証フロー (AP2 Step 13)                │  │
+│  │  - カード情報管理 (DB永続化)                        │  │
+│  │  - トークン化 (Redis KV, TTL: 15分)                │  │
+│  │  - Step-up認証フロー (Redis KV, TTL: 10分)         │  │
 │  └──────────────────────────────────────────────────┘  │
 │                                                          │
 │  ┌──────────────────────────────────────────────────┐  │
@@ -75,15 +75,15 @@ DID: did:ap2:agent:credential_provider
 │  ┌──────────────────────────────────────────────────┐  │
 │  │  Receipt Management                               │  │
 │  │  - 領収書受信 (AP2 Step 29)                        │  │
-│  │  - ユーザー別領収書保管                            │  │
+│  │  - ユーザー別領収書保管 (DB永続化)                 │  │
 │  └──────────────────────────────────────────────────┘  │
 │                                                          │
 └─────────────────────────────────────────────────────────┘
-           ↓                ↓                ↓
-    ┌──────────┐    ┌───────────────┐   ┌────────────┐
-    │ Database │    │ Payment       │   │ Shopping   │
-    │ (SQLite) │    │ Network       │   │ Agent      │
-    └──────────┘    └───────────────┘   └────────────┘
+           ↓          ↓          ↓              ↓
+    ┌──────────┐ ┌────────┐ ┌──────────┐  ┌────────────┐
+    │ Database │ │ Redis  │ │ Payment  │  │ Shopping   │
+    │ (SQLite) │ │ (KV)   │ │ Network  │  │ Agent      │
+    └──────────┘ └────────┘ └──────────┘  └────────────┘
 ```
 
 ---
@@ -888,7 +888,7 @@ if rp_id_hash != expected_rp_id_hash:
 
 ## データベース構造
 
-### PasskeyCredential (database.py)
+### PasskeyCredential (database.py) - DB永続化
 
 ```sql
 CREATE TABLE passkey_credentials (
@@ -906,7 +906,40 @@ CREATE INDEX idx_passkey_user_id ON passkey_credentials(user_id);
 CREATE INDEX idx_passkey_credential_id ON passkey_credentials(credential_id);
 ```
 
-### Attestation (database.py)
+### PaymentMethod (database.py) - DB永続化
+
+```sql
+CREATE TABLE payment_methods (
+    id TEXT PRIMARY KEY,                      -- payment_method_id (e.g., pm_xxxxx)
+    user_id TEXT NOT NULL,                    -- ユーザーID
+    payment_data TEXT NOT NULL,               -- 支払い方法データ (JSON)
+                                              -- {type, brand, last4, holder_name, ...}
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_payment_method_user_id ON payment_methods(user_id);
+```
+
+### Receipt (database.py) - DB永続化
+
+```sql
+CREATE TABLE receipts (
+    id TEXT PRIMARY KEY,                      -- UUID
+    user_id TEXT NOT NULL,                    -- ユーザーID (payer_id)
+    transaction_id TEXT NOT NULL,             -- トランザクションID
+    receipt_url TEXT NOT NULL,                -- 領収書PDFのURL
+    amount_value INTEGER NOT NULL,            -- 金額 (cents)
+    currency TEXT DEFAULT 'JPY',              -- 通貨
+    payment_timestamp DATETIME NOT NULL,      -- 決済実行時刻
+    received_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_receipt_user_id ON receipts(user_id);
+CREATE INDEX idx_receipt_transaction_id ON receipts(transaction_id);
+```
+
+### Attestation (database.py) - DB永続化
 
 ```sql
 CREATE TABLE attestations (
@@ -920,6 +953,60 @@ CREATE TABLE attestations (
 );
 
 CREATE INDEX idx_attestation_user_id ON attestations(user_id);
+```
+
+---
+
+## Redis KVストア構造
+
+### Token Store (Redis KV, TTL: 15分)
+
+```
+Key: cp:token:{token}
+Value (JSON):
+{
+  "user_id": "user_demo_001",
+  "payment_method_id": "pm_xxxxx",
+  "payment_method": { ... },
+  "issued_at": "2025-10-26T12:00:00Z",
+  "expires_at": "2025-10-26T12:15:00Z",
+  "step_up_completed": true  // オプション
+}
+TTL: 900秒 (15分)
+```
+
+### Step-up Session Store (Redis KV, TTL: 10分)
+
+```
+Key: cp:stepup:{session_id}
+Value (JSON):
+{
+  "session_id": "stepup_xxxxx",
+  "user_id": "user_demo_001",
+  "payment_method_id": "pm_xxxxx",
+  "payment_method": { ... },
+  "transaction_context": { ... },
+  "return_url": "http://...",
+  "status": "pending" | "completed" | "failed",
+  "created_at": "2025-10-26T12:00:00Z",
+  "expires_at": "2025-10-26T12:10:00Z",
+  "token"?: "tok_xxxxx",      // status=completed時のみ
+  "completed_at"?: "..."       // status=completed時のみ
+}
+TTL: 600秒 (10分)
+```
+
+### Challenge Store (Redis KV, TTL: 60秒)
+
+```
+Key: cp:challenge:{challenge_id}
+Value (JSON):
+{
+  "challenge": "base64url_challenge",
+  "user_id": "user_demo_001",
+  "created_at": "2025-10-26T12:00:00Z"
+}
+TTL: 60秒
 ```
 
 ### CRUD操作 (database.py)

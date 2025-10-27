@@ -19,6 +19,7 @@ export type SSEEventType =
   | "webauthn_request"
   | "stepup_authentication_request"  // AP2完全準拠: 3D Secure 2.0認証リクエスト
   | "step_up_redirect"
+  | "payment_completed"  // AP2完全準拠: 決済完了通知
   | "done"
   | "error";
 
@@ -131,6 +132,18 @@ export interface ErrorEvent extends SSEEvent {
   message: string;
 }
 
+// 決済完了イベント（AP2完全準拠）
+export interface PaymentCompletedEvent extends SSEEvent {
+  type: "payment_completed";
+  transaction_id: string;
+  product_name: string;
+  amount: number;
+  currency: string;
+  merchant_name: string;
+  receipt_url: string;
+  status: string;
+}
+
 // すべてのSSEイベント型
 export type ChatSSEEvent =
   | AgentTextEvent
@@ -147,6 +160,7 @@ export type ChatSSEEvent =
   | WebAuthnRequestEvent
   | StepupAuthenticationRequestEvent
   | StepUpRedirectEvent
+  | PaymentCompletedEvent
   | DoneEvent
   | ErrorEvent;
 

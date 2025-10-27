@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 import logging
 
 import httpx
-from fastapi import HTTPException
+from fastapi import HTTPException, Header
 
 # 親ディレクトリを追加
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
@@ -24,6 +24,7 @@ from v2.common.base_agent import BaseAgent, AgentPassphraseManager
 from v2.common.models import A2AMessage, ProcessPaymentRequest, ProcessPaymentResponse
 from v2.common.database import DatabaseManager, TransactionCRUD
 from v2.common.user_authorization import verify_user_authorization_vp, compute_mandate_hash
+from v2.common.auth import verify_access_token
 from v2.common.logger import get_logger, log_a2a_message, log_database_operation
 from v2.common.telemetry import get_tracer, create_http_span, is_telemetry_enabled
 
@@ -227,21 +228,92 @@ class PaymentProcessorService(BaseAgent):
                 raise HTTPException(status_code=400, detail=str(e))
 
         @self.app.get("/receipts/{transaction_id}.pdf")
-        async def get_receipt_pdf(transaction_id: str):
+        async def get_receipt_pdf(
+            transaction_id: str,
+            authorization: str = Header(None)
+        ):
             """
-            GET /receipts/{transaction_id}.pdf - 領収書PDFダウンロード
+            GET /receipts/{transaction_id}.pdf - 領収書PDFダウンロード（AP2完全準拠）
 
-            領収書PDFファイルを返却する
+            AP2セキュリティ要件：
+            - JWT認証必須（Authorizationヘッダー: Bearer <JWT>）
+            - トランザクション所有者のみアクセス可能
+            - JWT内のuser_id（payer_id）とトランザクションのpayer_idが一致する必要あり
+
+            Args:
+                transaction_id: トランザクションID
+                authorization: Authorizationヘッダー（Bearer JWT）
+
+            Returns:
+                FileResponse: 領収書PDFファイル
+
+            Raises:
+                HTTPException:
+                    - 401: JWT認証失敗
+                    - 403: トランザクション所有者でない
+                    - 404: 領収書が見つからない
             """
             try:
                 from fastapi.responses import FileResponse
+                from common.database import ReceiptCRUD
 
+                # 1. JWT認証（AP2完全準拠）
+                if not authorization or not authorization.startswith("Bearer "):
+                    raise HTTPException(
+                        status_code=401,
+                        detail="Missing or invalid Authorization header. Expected: Bearer <JWT>"
+                    )
+
+                jwt_token = authorization.replace("Bearer ", "")
+
+                # 2. JWT検証（HTTP認証Layer 1のJWTを検証）
+                token_data = verify_access_token(jwt_token)
+                user_id_from_jwt = token_data.user_id
+
+                if not user_id_from_jwt:
+                    raise HTTPException(
+                        status_code=401,
+                        detail="Invalid JWT: missing user_id"
+                    )
+
+                logger.info(
+                    f"[get_receipt_pdf] JWT verified for user_id: {user_id_from_jwt}, "
+                    f"transaction_id: {transaction_id}"
+                )
+
+                # 3. 領収書の所有者検証（AP2完全準拠：セキュリティ）
+                async with self.db_manager.get_session() as session:
+                    receipt = await ReceiptCRUD.get_by_transaction_id(session, transaction_id)
+
+                    if not receipt:
+                        logger.warning(
+                            f"[get_receipt_pdf] Receipt not found for transaction: {transaction_id}"
+                        )
+                        raise HTTPException(status_code=404, detail="Receipt not found")
+
+                    # レシートのuser_idとJWT内のuser_idが一致するか確認
+                    if receipt.user_id != user_id_from_jwt:
+                        logger.warning(
+                            f"[get_receipt_pdf] Access denied: JWT user_id={user_id_from_jwt}, "
+                            f"receipt user_id={receipt.user_id}"
+                        )
+                        raise HTTPException(
+                            status_code=403,
+                            detail="Access denied: You do not own this receipt"
+                        )
+
+                # 4. 領収書ファイル取得
                 receipts_dir = Path("/app/v2/data/receipts")
                 receipt_file_path = receipts_dir / f"{transaction_id}.pdf"
 
                 if not receipt_file_path.exists():
-                    logger.warning(f"[get_receipt_pdf] Receipt not found: {receipt_file_path}")
-                    raise HTTPException(status_code=404, detail="Receipt not found")
+                    logger.warning(f"[get_receipt_pdf] Receipt file not found: {receipt_file_path}")
+                    raise HTTPException(status_code=404, detail="Receipt file not found")
+
+                logger.info(
+                    f"[get_receipt_pdf] Access granted: user_id={user_id_from_jwt}, "
+                    f"transaction_id={transaction_id}"
+                )
 
                 return FileResponse(
                     path=str(receipt_file_path),
@@ -1228,6 +1300,23 @@ class PaymentProcessorService(BaseAgent):
             # URLを生成（ブラウザからアクセス可能なlocalhost URL）
             # Docker環境ではホストマシンのlocalhostからポート8004でアクセス可能
             receipt_url = f"http://localhost:8004/receipts/{transaction_id}.pdf"
+
+            # データベースにレシートレコードを保存（AP2完全準拠）
+            try:
+                from v2.common.database import ReceiptCRUD
+                async with self.db_manager.get_session() as session:
+                    receipt_data = {
+                        "id": f"receipt_{transaction_id}",
+                        "user_id": payer_id,
+                        "transaction_id": transaction_id,
+                        "receipt_url": receipt_url,
+                        "amount_value": int(payment_result.get("amount", {}).get("value", 0) * 100),  # cents
+                        "currency": payment_result.get("amount", {}).get("currency", "JPY")
+                    }
+                    await ReceiptCRUD.create(session, receipt_data)
+                    logger.info(f"[PaymentProcessor] Receipt record saved to database: {transaction_id}")
+            except Exception as db_error:
+                logger.error(f"[PaymentProcessor] Failed to save receipt to database: {db_error}", exc_info=True)
 
             return receipt_url
 

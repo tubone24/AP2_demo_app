@@ -85,6 +85,11 @@ services:
       - PAYMENT_PROCESSOR_URL=http://payment_processor:8004
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - LOG_FORMAT=${LOG_FORMAT:-text}
+      # OpenTelemetry設定
+      - OTEL_ENABLED=${OTEL_ENABLED:-true}
+      - OTEL_SERVICE_NAME=shopping_agent_mcp
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
+      - OTEL_EXPORTER_OTLP_INSECURE=true
     networks:
       - ap2_network
     restart: unless-stopped
@@ -155,6 +160,11 @@ services:
       - DMR_API_URL=${DMR_API_URL:-http://host.docker.internal:12434/engines/llama.cpp/v1}
       - DMR_MODEL=${DMR_MODEL:-ai/qwen3}
       - DMR_API_KEY=${DMR_API_KEY:-none}
+      # OpenTelemetry設定
+      - OTEL_ENABLED=${OTEL_ENABLED:-true}
+      - OTEL_SERVICE_NAME=merchant_agent_mcp
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
+      - OTEL_EXPORTER_OTLP_INSECURE=true
     networks:
       - ap2_network
     restart: unless-stopped
@@ -191,7 +201,7 @@ services:
         condition: service_completed_successfully
     restart: unless-stopped
 
-  # Credential Provider - WebAuthn検証・トークン発行
+  # Credential Provider 1 - WebAuthn検証・トークン発行（AP2完全準拠）
   credential_provider:
     build:
       context: ..
@@ -212,6 +222,7 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - LOG_FORMAT=${LOG_FORMAT:-text}
       - PAYMENT_NETWORK_URL=http://payment_network:8005
+      - REDIS_URL=redis://redis:6379/0
       # OpenTelemetry設定
       - OTEL_ENABLED=${OTEL_ENABLED:-true}
       - OTEL_SERVICE_NAME=credential_provider
@@ -224,6 +235,46 @@ services:
         condition: service_completed_successfully
       payment_network:
         condition: service_started
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Credential Provider 2 - WebAuthn検証・トークン発行（AP2完全準拠: 複数CP対応）
+  credential_provider_2:
+    build:
+      context: ..
+      dockerfile: v2/services/credential_provider/Dockerfile
+    container_name: ap2_credential_provider_2
+    ports:
+      - "8006:8003"
+    volumes:
+      - keys:/app/v2/keys
+      - data:/app/v2/data
+    env_file:
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+      - AGENT_ID=did:ap2:agent:credential_provider_2
+      - AP2_KEYS_DIRECTORY=/app/v2/keys
+      - DATABASE_URL=sqlite+aiosqlite:////app/v2/data/credential_provider_2.db
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_FORMAT=${LOG_FORMAT:-text}
+      - PAYMENT_NETWORK_URL=http://payment_network:8005
+      - REDIS_URL=redis://redis:6379/1
+      # OpenTelemetry設定
+      - OTEL_ENABLED=${OTEL_ENABLED:-true}
+      - OTEL_SERVICE_NAME=credential_provider_2
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
+      - OTEL_EXPORTER_OTLP_INSECURE=true
+    networks:
+      - ap2_network
+    depends_on:
+      init-keys:
+        condition: service_completed_successfully
+      payment_network:
+        condition: service_started
+      redis:
+        condition: service_healthy
     restart: unless-stopped
 
   # Payment Processor - 決済処理
@@ -330,12 +381,32 @@ services:
       - ap2_network
     restart: unless-stopped
 
+  # Redis - KVストア（一時データ・セッション管理）
+  redis:
+    image: redis:7-alpine
+    container_name: ap2_redis
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    networks:
+      - ap2_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
 networks:
   ap2_network:
     driver: bridge
 
 volumes:
   meilisearch_data:
+    driver: local
+  redis_data:
     driver: local
   keys:
     driver: local

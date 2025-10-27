@@ -14,8 +14,6 @@ AP2アーキテクチャ:
 """
 
 import os
-import base64
-import struct
 from typing import Optional, Dict, Any
 from datetime import datetime, timezone, timedelta
 
@@ -32,13 +30,6 @@ except ModuleNotFoundError:
     from v2.common.models import TokenData, UserInDB
     from v2.common.database import DatabaseManager, UserCRUD
     from v2.common.logger import get_logger
-
-# WebAuthn/COSE key parsing
-try:
-    import cbor2
-    CBOR2_AVAILABLE = True
-except ImportError:
-    CBOR2_AVAILABLE = False
 
 logger = get_logger(__name__, service_name='auth')
 
@@ -296,169 +287,10 @@ async def get_current_user(
 
 
 # ========================================
-# WebAuthn/Passkey 検証ユーティリティ
+# WebAuthn/Passkey 検証
 # ========================================
-
-def verify_webauthn_attestation(
-    client_data_json_b64: str,
-    attestation_object_b64: str,
-    expected_challenge: str,
-    rp_id: str
-) -> Dict[str, Any]:
-    """
-    WebAuthn Attestation（登録）を検証
-
-    Args:
-        client_data_json_b64: Base64URL encoded clientDataJSON
-        attestation_object_b64: Base64URL encoded attestationObject
-        expected_challenge: 期待されるchallenge（Base64URL）
-        rp_id: Relying Party ID（例: localhost）
-
-    Returns:
-        Dict containing:
-            - credential_id: Base64URL encoded credential ID
-            - public_key: Base64URL encoded COSE public key
-            - aaguid: Authenticator AAGUID
-
-    Raises:
-        ValueError: 検証失敗時
-    """
-    if not CBOR2_AVAILABLE:
-        raise ValueError("cbor2 library is required for WebAuthn verification")
-
-    try:
-        # 1. clientDataJSONのデコードと検証
-        client_data_json = base64.urlsafe_b64decode(client_data_json_b64 + '==')
-        import json
-        client_data = json.loads(client_data_json)
-
-        # challenge検証
-        if client_data.get("challenge") != expected_challenge:
-            raise ValueError("Challenge mismatch")
-
-        # origin検証（本番環境では厳密に検証）
-        origin = client_data.get("origin", "")
-        logger.debug(f"[Auth] WebAuthn origin: {origin}")
-
-        # 2. attestationObjectのデコード
-        attestation_bytes = base64.urlsafe_b64decode(attestation_object_b64 + '==')
-        attestation_object = cbor2.loads(attestation_bytes)
-
-        auth_data = attestation_object["authData"]
-
-        # 3. authDataのパース
-        # 構造: rpIdHash(32) + flags(1) + signCount(4) + attestedCredentialData
-        rp_id_hash = auth_data[0:32]
-        flags = auth_data[32]
-        sign_count = struct.unpack('>I', auth_data[33:37])[0]
-
-        # User Present (UP) フラグチェック（bit 0）
-        if not (flags & 0x01):
-            raise ValueError("User not present")
-
-        # Attested Credential Data Present (AT) フラグチェック（bit 6）
-        if not (flags & 0x40):
-            raise ValueError("No attested credential data")
-
-        # 4. Attested Credential Dataのパース
-        # 構造: aaguid(16) + credentialIdLength(2) + credentialId(L) + credentialPublicKey(CBOR)
-        attested_cred_data = auth_data[37:]
-        aaguid = attested_cred_data[0:16]
-        cred_id_len = struct.unpack('>H', attested_cred_data[16:18])[0]
-        credential_id = attested_cred_data[18:18+cred_id_len]
-        credential_public_key = attested_cred_data[18+cred_id_len:]
-
-        # 5. COSE公開鍵をBase64URLエンコード
-        credential_id_b64 = base64.urlsafe_b64encode(credential_id).decode('utf-8').rstrip('=')
-        public_key_b64 = base64.urlsafe_b64encode(credential_public_key).decode('utf-8').rstrip('=')
-
-        logger.info(f"[Auth] WebAuthn attestation verified: credential_id={credential_id_b64[:16]}...")
-
-        return {
-            "credential_id": credential_id_b64,
-            "public_key": public_key_b64,
-            "aaguid": aaguid.hex(),
-            "sign_count": sign_count
-        }
-
-    except Exception as e:
-        logger.error(f"[Auth] WebAuthn attestation verification failed: {e}")
-        raise ValueError(f"Attestation verification failed: {e}")
-
-
-def verify_webauthn_assertion(
-    client_data_json_b64: str,
-    authenticator_data_b64: str,
-    signature_b64: str,
-    public_key_cose_b64: str,
-    expected_challenge: str,
-    expected_rp_id: str,
-    stored_sign_count: int
-) -> Dict[str, Any]:
-    """
-    WebAuthn Assertion（認証）を検証
-
-    Args:
-        client_data_json_b64: Base64URL encoded clientDataJSON
-        authenticator_data_b64: Base64URL encoded authenticatorData
-        signature_b64: Base64URL encoded signature
-        public_key_cose_b64: Base64URL encoded COSE public key（DB保存済み）
-        expected_challenge: 期待されるchallenge（Base64URL）
-        expected_rp_id: Relying Party ID（例: localhost）
-        stored_sign_count: DB保存済みの署名カウンター
-
-    Returns:
-        Dict containing:
-            - verified: True if valid
-            - new_sign_count: 新しい署名カウンター
-
-    Raises:
-        ValueError: 検証失敗時
-    """
-    if not CBOR2_AVAILABLE:
-        raise ValueError("cbor2 library is required for WebAuthn verification")
-
-    try:
-        # 1. clientDataJSONの検証
-        client_data_json = base64.urlsafe_b64decode(client_data_json_b64 + '==')
-        import json
-        client_data = json.loads(client_data_json)
-
-        if client_data.get("challenge") != expected_challenge:
-            raise ValueError("Challenge mismatch")
-
-        # 2. authenticatorDataのパース
-        authenticator_data = base64.urlsafe_b64decode(authenticator_data_b64 + '==')
-
-        rp_id_hash = authenticator_data[0:32]
-        flags = authenticator_data[32]
-        sign_count = struct.unpack('>I', authenticator_data[33:37])[0]
-
-        # User Present (UP) フラグチェック
-        if not (flags & 0x01):
-            raise ValueError("User not present")
-
-        # 3. 署名カウンターのリプレイ攻撃チェック
-        if sign_count != 0 and sign_count <= stored_sign_count:
-            logger.error(
-                f"[Auth] Sign count rollback detected: "
-                f"new={sign_count}, stored={stored_sign_count}"
-            )
-            raise ValueError("Sign count rollback detected (replay attack)")
-
-        # 4. 署名検証（簡易実装: 本番環境ではCOSE鍵をパースして厳密に検証）
-        # 注意: 完全な実装には cryptography ライブラリでES256/RS256署名検証が必要
-
-        logger.info(f"[Auth] WebAuthn assertion verified: new_sign_count={sign_count}")
-
-        return {
-            "verified": True,
-            "new_sign_count": sign_count
-        }
-
-    except Exception as e:
-        logger.error(f"[Auth] WebAuthn assertion verification failed: {e}")
-        raise ValueError(f"Assertion verification failed: {e}")
+# 注意: WebAuthn検証は Credential Provider が実施
+# Shopping Agent では Layer 2 認証としてのみ使用
 
 
 # ========================================
@@ -469,8 +301,6 @@ __all__ = [
     "create_access_token",
     "verify_access_token",
     "get_current_user",
-    "verify_webauthn_attestation",
-    "verify_webauthn_assertion",
     "SECRET_KEY",
     "ALGORITHM",
 ]
