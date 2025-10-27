@@ -277,12 +277,29 @@ class ServiceEndpoint(BaseModel):
     {
       "id": "did:ap2:merchant:nike#merchant-agent",
       "type": "AP2MerchantAgent",
-      "serviceEndpoint": "https://merchant-agent.nike.com"
+      "serviceEndpoint": "https://merchant-agent.nike.com",
+      "name": "Nike Merchant Agent",
+      "description": "Nike公式ストアのMerchant Agent"
+    }
+
+    Credential Provider の場合:
+    {
+      "id": "did:ap2:cp:demo_cp#credential-provider",
+      "type": "AP2CredentialProvider",
+      "serviceEndpoint": "http://credential_provider:8003",
+      "name": "AP2 Demo Credential Provider",
+      "description": "デモ用CP（Passkey対応）",
+      "supported_methods": ["card", "passkey"],
+      "logo_url": "https://example.com/cp_demo_logo.png"
     }
     """
     id: str = Field(..., description="サービスID（DIDフラグメント形式）")
-    type: str = Field(..., description="サービスタイプ（例: AP2MerchantAgent, AP2ShoppingAgent）")
+    type: str = Field(..., description="サービスタイプ（例: AP2MerchantAgent, AP2CredentialProvider）")
     serviceEndpoint: str = Field(..., description="サービスエンドポイントURL")
+    name: Optional[str] = Field(None, description="サービス名（人間可読）")
+    description: Optional[str] = Field(None, description="サービスの説明")
+    supported_methods: Optional[List[str]] = Field(None, description="サポートする支払い方法（CPの場合）")
+    logo_url: Optional[str] = Field(None, description="ロゴURL（CPの場合）")
 
 
 class DIDDocument(BaseModel):
@@ -555,6 +572,7 @@ class StreamEvent(BaseModel):
         "webauthn_request",
         "stepup_authentication_request",  # AP2完全準拠: 3D Secure 2.0認証リクエスト
         "step_up_redirect",
+        "payment_completed",  # AP2完全準拠: 決済完了通知
         "error",
         "done"
     ]

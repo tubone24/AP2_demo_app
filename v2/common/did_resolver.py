@@ -103,11 +103,26 @@ class DIDResolver:
                             publicKeyPem=vm["publicKeyPem"]
                         ))
 
+                    # AP2完全準拠: serviceフィールドを抽出
+                    from common.models import ServiceEndpoint
+                    services = []
+                    for svc in did_doc_dict.get("service", []):
+                        services.append(ServiceEndpoint(
+                            id=svc["id"],
+                            type=svc["type"],
+                            serviceEndpoint=svc["serviceEndpoint"],
+                            name=svc.get("name"),
+                            description=svc.get("description"),
+                            supported_methods=svc.get("supported_methods"),
+                            logo_url=svc.get("logo_url")
+                        ))
+
                     did_doc = DIDDocument(
                         id=did_doc_dict["id"],
                         verificationMethod=verification_methods,
                         authentication=did_doc_dict.get("authentication", []),
-                        assertionMethod=did_doc_dict.get("assertionMethod", [])
+                        assertionMethod=did_doc_dict.get("assertionMethod", []),
+                        service=services if services else None  # AP2完全準拠
                     )
 
                     # レジストリに登録

@@ -333,11 +333,34 @@ class RiskAssessmentEngine:
             current_year = datetime.now().year
             current_month = datetime.now().month
 
-            expiry_year = payment_method.get("expiry_year", current_year + 5)
-            expiry_month = payment_method.get("expiry_month", 12)
+            expiry_year = payment_method.get("expiry_year")
+            expiry_month = payment_method.get("expiry_month")
+
+            # AP2完全準拠：有効期限が設定されていない場合は高リスク
+            if not expiry_year or not expiry_month:
+                logger.error(
+                    f"[_assess_payment_method] Invalid payment method: "
+                    f"missing expiry_year or expiry_month. "
+                    f"expiry_year={expiry_year}, expiry_month={expiry_month}"
+                )
+                raise ValueError(
+                    "Invalid payment method: expiry_year and expiry_month are required for card payments. "
+                    "Please register a valid payment method with proper expiration date."
+                )
 
             # 有効期限が近い（3ヶ月以内）
-            months_until_expiry = (expiry_year - current_year) * 12 + (expiry_month - current_month)
+            try:
+                months_until_expiry = (int(expiry_year) - current_year) * 12 + (int(expiry_month) - current_month)
+            except (TypeError, ValueError) as e:
+                logger.error(
+                    f"[_assess_payment_method] Invalid expiry date format: "
+                    f"expiry_year={expiry_year}, expiry_month={expiry_month}, error={e}"
+                )
+                raise ValueError(
+                    f"Invalid payment method expiry date format: "
+                    f"expiry_year={expiry_year}, expiry_month={expiry_month}. "
+                    f"Expected numeric values."
+                )
             if months_until_expiry <= 3:
                 risk += 10
 

@@ -37,12 +37,12 @@ logger = logging.getLogger(__name__)
 
 # Langfuseトレーシング設定
 LANGFUSE_ENABLED = os.getenv("LANGFUSE_ENABLED", "false").lower() == "true"
-langfuse_handler = None
 langfuse_client = None
+CallbackHandler = None
 
 if LANGFUSE_ENABLED:
     try:
-        from langfuse.langchain import CallbackHandler
+        from langfuse.langchain import CallbackHandler as LangfuseCallbackHandler
         from langfuse import Langfuse
 
         langfuse_client = Langfuse(
@@ -50,11 +50,119 @@ if LANGFUSE_ENABLED:
             secret_key=os.getenv("LANGFUSE_SECRET_KEY"),
             host=os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
         )
-        langfuse_handler = CallbackHandler()
+        CallbackHandler = LangfuseCallbackHandler
         logger.info("[Langfuse] Shopping Agent tracing enabled")
     except Exception as e:
         logger.warning(f"[Langfuse] Failed to initialize: {e}")
         LANGFUSE_ENABLED = False
+
+
+# ============================================================================
+# Langfuseトレーシングヘルパー
+# ============================================================================
+
+def create_trace_for_session(session_id: str, user_input: str) -> Optional[Any]:
+    """
+    LangGraphセッション用のLangfuseトレースを作成（AP2完全準拠: オブザーバビリティ）
+
+    Args:
+        session_id: セッションID
+        user_input: ユーザー入力
+
+    Returns:
+        root_span: ルートスパンオブジェクト（Langfuse無効時はNone）
+    """
+    if not LANGFUSE_ENABLED or not langfuse_client:
+        return None
+
+    try:
+        # Langfuse v3 API: start_spanでルートスパンを作成
+        root_span = langfuse_client.start_span(
+            name="langgraph_shopping_flow",
+            input={"user_input": user_input, "session_id": session_id},
+            metadata={
+                "session_id": session_id,
+                "service": "shopping_agent",
+                "framework": "langgraph"
+            }
+        )
+        logger.info(f"[Langfuse] Created root span for session: {session_id}")
+        return root_span
+    except Exception as e:
+        logger.error(f"[Langfuse] Failed to create trace: {e}")
+        return None
+
+
+def create_node_span(
+    agent_instance: Any,
+    session_id: str,
+    node_name: str,
+    input_data: Dict[str, Any],
+    metadata: Optional[Dict[str, Any]] = None
+) -> Optional[Any]:
+    """
+    LangGraphノード用のスパンを作成（AP2完全準拠: オブザーバビリティ）
+
+    Args:
+        agent_instance: ShoppingAgentインスタンス
+        session_id: セッションID
+        node_name: ノード名
+        input_data: 入力データ
+        metadata: メタデータ
+
+    Returns:
+        child_span: 子スパンオブジェクト
+    """
+    if not LANGFUSE_ENABLED or not langfuse_client:
+        return None
+
+    try:
+        # エージェントインスタンスからルートスパンを取得
+        root_span = agent_instance.trace_spans.get(session_id)
+        if not root_span or not hasattr(root_span, 'start_span'):
+            logger.warning(f"[Langfuse] Root span not found for session: {session_id}")
+            return None
+
+        # ルートスパンから子スパンを作成（AP2完全準拠: 階層構造）
+        child_span = root_span.start_span(
+            name=node_name,
+            input=input_data,
+            metadata=metadata or {}
+        )
+
+        logger.debug(f"[Langfuse] Created child span: {node_name}")
+        return child_span
+    except Exception as e:
+        logger.error(f"[Langfuse] Failed to create span for {node_name}: {e}")
+        return None
+
+
+def end_node_span(
+    span: Any,
+    output_data: Dict[str, Any],
+    metadata: Optional[Dict[str, Any]] = None
+):
+    """
+    スパンの出力を更新して終了（AP2完全準拠: オブザーバビリティ）
+
+    Args:
+        span: スパンオブジェクト
+        output_data: 出力データ
+        metadata: メタデータ
+    """
+    if not LANGFUSE_ENABLED or not span:
+        return
+
+    try:
+        if hasattr(span, 'update'):
+            # スパンの出力を更新
+            span.update(output=output_data, metadata=metadata or {})
+        if hasattr(span, 'end'):
+            # スパンを終了
+            span.end()
+            logger.debug(f"[Langfuse] Ended span")
+    except Exception as e:
+        logger.error(f"[Langfuse] Failed to update span output: {e}")
 
 
 # ============================================================================
@@ -74,6 +182,9 @@ class ShoppingFlowState(TypedDict):
     events: Annotated[List[Dict[str, Any]], add_events]
     next_step: Optional[str]
     error: Optional[str]
+    # Langfuseトレーシング用
+    trace_id: Optional[str]
+    current_observation_id: Optional[str]
 
 
 # ============================================================================
@@ -99,24 +210,29 @@ def route_by_step(state: ShoppingFlowState) -> str:
     if should_reset and current_step in ["error", "completed"]:
         return "greeting"
 
-    # ステップに基づいてルーティング
+    # ステップに基づいてルーティング（AP2完全準拠）
     if current_step in ["initial", "reset"]:
         return "greeting"
     elif current_step in ["ask_intent", "collecting_intent_info"]:
         return "collect_intent"
     elif current_step in ["intent_complete_ask_shipping", "shipping_address_input"]:
         return "collect_shipping"
+    elif current_step == "select_cp":
+        # AP2ステップ4: Credential Provider選択
+        return "select_cp"
+    elif current_step == "get_payment_methods":
+        # AP2ステップ6-7: CP から支払い方法リスト取得
+        return "get_payment_methods"
     elif current_step == "fetching_carts":
+        # AP2ステップ8-12: MAからカート取得
         return "fetch_carts"
     elif current_step in ["cart_selection", "cart_options"]:
         return "select_cart"
     elif current_step == "cart_signature_pending":
         # カート署名待ち（外部API待機）
         return "cart_signature_waiting"
-    elif current_step in ["payment_mandate_creation", "select_credential_provider_for_payment", "cp_selection"]:
-        # カート署名完了後、Credential Provider選択へ（AP2完全準拠）
-        return "select_credential_provider"
-    elif current_step in ["payment_method_selection", "payment_method_options"]:
+    elif current_step in ["payment_mandate_creation", "payment_method_selection", "payment_method_options"]:
+        # AP2ステップ13-18: 支払い方法選択とトークン化
         return "select_payment_method"
     elif current_step == "step_up_requested":
         return "step_up_auth"
@@ -192,14 +308,17 @@ async def collect_intent_node(state: ShoppingFlowState, agent_instance: Any, llm
     events = []
     session_id = state.get("session_id", "unknown")
 
-    # Langfuseスパン開始
-    langfuse_span = None
-    if LANGFUSE_ENABLED and langfuse_client:
-        langfuse_span = langfuse_client.start_span(
-            name="collect_intent_node",
-            input={"user_input": user_input},
-            metadata={"session_id": session_id, "node": "collect_intent"}
-        )
+    # Langfuseスパン開始（AP2完全準拠: オブザーバビリティ機能）
+    observation_id = create_node_span(
+        agent_instance=agent_instance,
+        session_id=session_id,
+        node_name="collect_intent_node",
+        input_data={
+            "user_input": user_input,
+            "session_step": session.get("step")
+        },
+        metadata={"session_id": session_id, "ap2_step": "Step 2: Intent Collection"}
+    )
 
     try:
         # ユーザー入力を保存
@@ -232,10 +351,14 @@ JSON形式で返答してください:
   "keywords": ["...", "..."]
 }}"""
 
-                # LangfuseハンドラーをLLM呼び出しに渡す
+                # LangfuseハンドラーをLLM呼び出しに渡す（AP2完全準拠: トレース統合）
                 llm_config = {}
-                if LANGFUSE_ENABLED and langfuse_handler:
+                if LANGFUSE_ENABLED and CallbackHandler:
+                    # LangChain CallbackHandlerを作成（session_idでグループ化）
+                    langfuse_handler = CallbackHandler()
                     llm_config["callbacks"] = [langfuse_handler]
+                    # session_idをmetadataで渡してトレースをグループ化
+                    llm_config["metadata"] = {"langfuse_session_id": session_id}
 
                 # LLM呼び出し
                 messages = [
@@ -330,12 +453,17 @@ JSON形式で返答してください:
             }
         })
 
-        # Langfuseスパン終了
-        if langfuse_span:
-            langfuse_span.update(
-                output={"intent": session["intent"], "max_amount": session.get("max_amount")}
-            )
-            langfuse_span.end()
+        # Langfuseスパン終了（AP2完全準拠: オブザーバビリティ機能）
+        end_node_span(
+            span=observation_id,
+            output_data={
+                "intent": session["intent"],
+                "max_amount": session.get("max_amount"),
+                "intent_mandate_id": intent_mandate.get("id") if intent_mandate else None,
+                "next_step": session.get("step")
+            },
+            metadata={"status": "success"}
+        )
 
         return {
             **state,
@@ -352,10 +480,12 @@ JSON形式で返答してください:
             "content": "申し訳ございません。エラーが発生しました。もう一度入力してください。"
         })
 
-        # Langfuseスパン終了（エラー）
-        if langfuse_span:
-            langfuse_span.update(level="ERROR", output={"error": str(err)})
-            langfuse_span.end()
+        # Langfuseスパン終了（エラー、AP2完全準拠: オブザーバビリティ機能）
+        end_node_span(
+            span=observation_id,
+            output_data={"error": str(err)},
+            metadata={"status": "error"}
+        )
 
         return {
             **state,
@@ -377,7 +507,8 @@ async def collect_shipping_node(state: ShoppingFlowState, agent_instance: Any) -
 
         # AP2準拠のContactAddress形式で保存
         session["shipping_address"] = shipping_address
-        session["step"] = "fetching_carts"
+        # AP2完全準拠: ステップ4（CP選択）へ
+        session["step"] = "select_cp"
 
         # 確認メッセージ
         recipient = shipping_address.get("recipient", "")
@@ -395,12 +526,12 @@ async def collect_shipping_node(state: ShoppingFlowState, agent_instance: Any) -
 
         await asyncio.sleep(0.3)
 
-        # カート候補取得へ遷移
+        # AP2完全準拠: ステップ4（CP選択）へ遷移
         return {
             **state,
             "session": session,
             "events": events,
-            "next_step": "fetch_carts"  # 次のノードへ直接遷移
+            "next_step": "select_cp"  # ステップ4へ
         }
 
     except json.JSONDecodeError:
@@ -418,14 +549,320 @@ async def collect_shipping_node(state: ShoppingFlowState, agent_instance: Any) -
         }
 
 
-async def fetch_carts_node(state: ShoppingFlowState, agent_instance: Any) -> ShoppingFlowState:
-    """ノード4: Merchant Agentからカート候補取得（A2A通信）"""
+async def select_cp_node(state: ShoppingFlowState, agent_instance: Any) -> ShoppingFlowState:
+    """
+    ノード4: Credential Provider選択（AP2ステップ4 - オプション）
+
+    AP2完全準拠:
+    - ステップ4: (optional) Credential Provider選択
+    - 複数のCPがある場合: ユーザーに選択UIを表示
+    - 1つのCPのみの場合: 自動選択
+    """
+    session = state["session"]
+    user_input = state["user_input"]
+    events = []
+
+    try:
+        user_id = session.get("user_id", "anonymous")
+
+        # AP2完全準拠: DID Resolverを使ってCredential Providerリストを取得
+        # 本番環境: ユーザーDBから取得したCP DIDリストを使用
+        # デモ環境: デフォルトのCP DIDを使用
+        user_cp_dids = [
+            "did:ap2:cp:demo_cp",  # メインCP（Passkey対応）
+            # "did:ap2:cp:alt_provider",  # 代替CP（今後追加予定）
+        ]
+
+        # DID Resolverを使って各CPの情報を取得
+        available_cps = []
+        for cp_did in user_cp_dids:
+            try:
+                # DID Documentを解決（AP2完全準拠: A2AHandlerのDIDResolverを使用）
+                did_doc = await agent_instance.a2a_handler.did_resolver.resolve_async(cp_did)
+                if not did_doc:
+                    logger.warning(f"[select_cp_node] DID Document not found: {cp_did}")
+                    continue
+
+                # serviceフィールドからCP情報を抽出
+                if not did_doc.service:
+                    logger.warning(f"[select_cp_node] No service endpoint in DID Document: {cp_did}")
+                    continue
+
+                for service in did_doc.service:
+                    if service.type == "AP2CredentialProvider":
+                        cp_info = {
+                            "id": cp_did,
+                            "did": cp_did,
+                            "name": service.name or "Unknown CP",
+                            "url": service.serviceEndpoint,
+                            "description": service.description or "",
+                            "supported_methods": service.supported_methods or [],
+                            "logo_url": service.logo_url or "",
+                        }
+                        available_cps.append(cp_info)
+                        logger.info(
+                            f"[select_cp_node] Resolved CP from DID: "
+                            f"did={cp_did}, name={cp_info['name']}, url={cp_info['url']}"
+                        )
+                        break
+
+            except Exception as e:
+                logger.error(f"[select_cp_node] Failed to resolve CP DID: {cp_did}: {e}")
+                continue
+
+        # AP2完全準拠: DID Resolverで取得できない場合はエラー
+        if not available_cps:
+            logger.error(
+                "[select_cp_node] No CPs resolved from DID. DID Document must be properly configured."
+            )
+            raise ValueError(
+                "Credential Provider not found. Please ensure DID Documents are properly configured."
+            )
+
+        session["available_credential_providers"] = available_cps
+
+        # 1つのCPのみの場合は自動選択
+        if len(available_cps) == 1:
+            selected_cp = available_cps[0]
+            session["selected_credential_provider"] = selected_cp
+            session["step"] = "get_payment_methods"
+
+            logger.info(
+                f"[select_cp_node] AP2 Step 4 (auto): Only one CP available, auto-selected\n"
+                f"  User ID: {user_id}\n"
+                f"  CP ID: {selected_cp['id']}\n"
+                f"  CP Name: {selected_cp['name']}"
+            )
+
+            # ユーザーへの通知
+            cp_msg = f"💳 Credential Provider: {selected_cp['name']}"
+            for char in cp_msg:
+                events.append({
+                    "type": "agent_text_chunk",
+                    "content": char
+                })
+
+            events.append({
+                "type": "agent_text_complete",
+                "content": ""
+            })
+
+            await asyncio.sleep(0.2)
+
+            return {
+                **state,
+                "session": session,
+                "events": events,
+                "next_step": "get_payment_methods"
+            }
+
+        # 複数のCPがある場合: 初回アクセス時に選択UIを表示
+        if session.get("step") == "select_cp" and not user_input.isdigit():
+            logger.info(
+                f"[select_cp_node] AP2 Step 4: Presenting {len(available_cps)} Credential Providers to user\n"
+                f"  User ID: {user_id}"
+            )
+
+            # CP選択UIを表示
+            events.append({
+                "type": "credential_provider_selection",
+                "providers": available_cps
+            })
+
+            session["step"] = "select_cp"
+
+            return {
+                **state,
+                "session": session,
+                "events": events,
+                "next_step": END  # ユーザーの選択を待つ
+            }
+
+        # CP選択処理（番号）
+        selected_cp = None
+
+        if user_input.isdigit():
+            cp_index = int(user_input) - 1
+            if 0 <= cp_index < len(available_cps):
+                selected_cp = available_cps[cp_index]
+
+        if not selected_cp:
+            events.append({
+                "type": "agent_text",
+                "content": f"Credential Providerが認識できませんでした。番号（1〜{len(available_cps)}）を入力してください。"
+            })
+
+            return {
+                **state,
+                "session": session,
+                "events": events,
+                "next_step": END
+            }
+
+        # 選択されたCPを保存
+        session["selected_credential_provider"] = selected_cp
+        session["step"] = "get_payment_methods"
+
+        logger.info(
+            f"[select_cp_node] AP2 Step 4: User selected Credential Provider\n"
+            f"  User ID: {user_id}\n"
+            f"  CP ID: {selected_cp['id']}\n"
+            f"  CP Name: {selected_cp['name']}"
+        )
+
+        # ユーザーへの確認メッセージ
+        cp_msg = f"✅ 選択: {selected_cp['name']}"
+        for char in cp_msg:
+            events.append({
+                "type": "agent_text_chunk",
+                "content": char
+            })
+
+        events.append({
+            "type": "agent_text_complete",
+            "content": ""
+        })
+
+        await asyncio.sleep(0.2)
+
+        # ステップ6-7（支払い方法取得）へ遷移
+        return {
+            **state,
+            "session": session,
+            "events": events,
+            "next_step": "get_payment_methods"
+        }
+
+    except Exception as e:
+        logger.error(f"[select_cp_node] Error: {e}", exc_info=True)
+        session["step"] = "error"
+        events.append({
+            "type": "agent_text",
+            "content": f"Credential Provider選択中にエラーが発生しました: {str(e)}"
+        })
+
+        return {
+            **state,
+            "session": session,
+            "events": events,
+            "next_step": END
+        }
+
+
+async def get_payment_methods_node(state: ShoppingFlowState, agent_instance: Any) -> ShoppingFlowState:
+    """
+    ノード5: 支払い方法リスト取得（AP2ステップ6-7）
+
+    AP2完全準拠:
+    - ステップ6: SAがCPに支払い方法リストを要求
+    - ステップ7: CPが利用可能な支払い方法を返却
+
+    前提: ステップ4でCredential Providerが選択済み
+    """
     session = state["session"]
     events = []
 
     try:
+        user_id = session.get("user_id", "anonymous")
+
+        # ステップ4で選択されたCredential Providerを取得
+        credential_provider = session.get("selected_credential_provider")
+        if not credential_provider:
+            raise ValueError("Credential Provider not selected (Step 4 required)")
+
+        logger.info(
+            f"[get_payment_methods_node] AP2 Step 6-7: Requesting payment methods from CP\n"
+            f"  User ID: {user_id}\n"
+            f"  CP ID: {credential_provider['id']}\n"
+            f"  CP URL: {credential_provider['url']}"
+        )
+
+        # ユーザーへのメッセージ
+        pm_msg = "💳 支払い方法を取得中..."
+        for char in pm_msg:
+            events.append({
+                "type": "agent_text_chunk",
+                "content": char
+            })
+
+        events.append({
+            "type": "agent_text_complete",
+            "content": ""
+        })
+
+        # ステップ6: SAがCPに支払い方法リストを要求（AP2完全準拠）
+        payment_methods = await agent_instance._get_payment_methods_from_cp(
+            user_id=user_id,
+            credential_provider_url=credential_provider["url"]
+        )
+
+        # ステップ7: CPが利用可能な支払い方法を返却（AP2完全準拠）
+        session["payment_methods"] = payment_methods
+        session["available_payment_methods"] = payment_methods  # 既存実装との互換性
+        session["step"] = "fetching_carts"
+
+        logger.info(
+            f"[get_payment_methods_node] AP2 Step 7: Received {len(payment_methods)} payment methods from CP\n"
+            f"  Payment Methods: {[pm.get('id') for pm in payment_methods]}"
+        )
+
+        await asyncio.sleep(0.2)
+
+        # カート取得へ直接遷移（ステップ8-12）
+        return {
+            **state,
+            "session": session,
+            "events": events,
+            "next_step": "fetch_carts"
+        }
+
+    except Exception as e:
+        logger.error(f"[get_payment_methods_node] Error: {e}", exc_info=True)
+        session["step"] = "error"
+        events.append({
+            "type": "agent_text",
+            "content": f"支払い方法の取得中にエラーが発生しました: {str(e)}"
+        })
+
+        return {
+            **state,
+            "session": session,
+            "events": events,
+            "next_step": END
+        }
+
+
+async def fetch_carts_node(state: ShoppingFlowState, agent_instance: Any) -> ShoppingFlowState:
+    """
+    ノード6: Merchant Agentからカート候補取得（A2A通信、AP2ステップ8-12）
+
+    AP2完全準拠:
+    - ステップ8: SAがIntentMandateをMerchant Agentに送信
+    - ステップ9-10: Merchant AgentがCartMandateを作成
+    - ステップ11: MerchantがCartMandateに署名
+    - ステップ12: Merchant AgentがSAにCartMandateを返却
+    """
+    session = state["session"]
+    events = []
+    session_id = state.get("session_id", "unknown")
+
+    # Langfuseスパン開始（AP2完全準拠: オブザーバビリティ機能）
+    observation_id = create_node_span(
+        agent_instance=agent_instance,
+        session_id=session_id,
+        node_name="fetch_carts_node",
+        input_data={
+            "intent": session.get("intent"),
+            "intent_mandate_id": session.get("intent_mandate", {}).get("id")
+        },
+        metadata={"session_id": session_id, "ap2_step": "Step 8-12: Fetch Carts"}
+    )
+
+    try:
+        logger.info("[fetch_carts_node] AP2 Step 8-12: Fetching cart candidates from Merchant Agent")
+
         # AI分析中メッセージ
-        ai_msg = "AI分析でカート候補を作成中..."
+        ai_msg = "🛒 AI分析でカート候補を作成中..."
         for char in ai_msg:
             events.append({
                 "type": "agent_text_chunk",
@@ -455,11 +892,20 @@ async def fetch_carts_node(state: ShoppingFlowState, agent_instance: Any) -> Sho
             })
             session["step"] = "error"
 
+            # Langfuseスパン終了（AP2完全準拠: オブザーバビリティ機能）
+            end_node_span(
+                span=observation_id,
+                
+                output_data={"cart_count": 0, "status": "no_carts_found"},
+                metadata={"status": "error"}
+            )
+
             return {
                 **state,
                 "session": session,
                 "events": events,
-                "next_step": END
+                "next_step": END,
+                "current_observation_id": observation_id
             }
 
         # AP2完全準拠: Artifact構造からフロントエンド用に変換
@@ -497,11 +943,24 @@ async def fetch_carts_node(state: ShoppingFlowState, agent_instance: Any) -> Sho
             "content": f"{len(cart_candidates)}つのカート候補が見つかりました。お好みのカートを選択してください。"
         })
 
+        # Langfuseスパン終了（AP2完全準拠: オブザーバビリティ機能）
+        end_node_span(
+            span=observation_id,
+            
+            output_data={
+                "cart_count": len(cart_candidates),
+                "cart_artifact_ids": [c.get("artifactId") for c in cart_candidates],
+                "next_step": "cart_selection"
+            },
+            metadata={"status": "success"}
+        )
+
         return {
             **state,
             "session": session,
             "events": events,
-            "next_step": END  # ユーザーのカート選択を待つ
+            "next_step": END,  # ユーザーのカート選択を待つ
+            "current_observation_id": observation_id
         }
 
     except Exception as e:
@@ -512,16 +971,25 @@ async def fetch_carts_node(state: ShoppingFlowState, agent_instance: Any) -> Sho
             "content": f"カート候補の取得中にエラーが発生しました: {str(e)}"
         })
 
+        # Langfuseスパン終了（エラー、AP2完全準拠: オブザーバビリティ機能）
+        end_node_span(
+            span=observation_id,
+            
+            output_data={"error": str(e)},
+            metadata={"status": "error"}
+        )
+
         return {
             **state,
             "session": session,
             "events": events,
-            "next_step": END
+            "next_step": END,
+            "current_observation_id": observation_id
         }
 
 
 async def select_cart_node(state: ShoppingFlowState, agent_instance: Any) -> ShoppingFlowState:
-    """ノード5: カート選択、Merchant署名検証"""
+    """ノード7: カート選択、Merchant署名検証（AP2完全準拠）"""
     session = state["session"]
     user_input = state["user_input"]
     events = []
@@ -625,7 +1093,7 @@ async def select_cart_node(state: ShoppingFlowState, agent_instance: Any) -> Sho
 
 
 async def cart_signature_waiting_node(state: ShoppingFlowState) -> ShoppingFlowState:
-    """カート署名待ち（外部API待機中）（AP2完全準拠）"""
+    """ノード8: カート署名待ち（外部API待機中、AP2完全準拠）"""
     session = state["session"]
     user_input = state["user_input"]
     events = []
@@ -660,66 +1128,14 @@ async def cart_signature_waiting_node(state: ShoppingFlowState) -> ShoppingFlowS
         }
 
 
-async def select_credential_provider_node(state: ShoppingFlowState, agent_instance: Any) -> ShoppingFlowState:
-    """ノード6: Credential Provider選択"""
-    session = state["session"]
-    events = []
-
-    # Credential Provider一覧を取得
-    credential_providers = [
-        {
-            "id": "did:ap2:cp:default",
-            "name": "AP2 Credential Provider",
-            "url": "http://credential_provider:8003"
-        }
-    ]
-
-    # デフォルトCPを自動選択
-    selected_cp = credential_providers[0]
-    session["selected_credential_provider"] = selected_cp
-    session["step"] = "payment_method_selection"
-
-    # 支払い方法を取得（AP2完全準拠）
-    try:
-        payment_methods = await agent_instance._get_payment_methods_from_cp(
-            user_id=session.get("user_id", "anonymous"),
-            credential_provider_url=selected_cp["url"]
-        )
-
-        session["payment_methods"] = payment_methods
-        session["available_payment_methods"] = payment_methods  # 既存実装との互換性
-
-        # 支払い方法選択UIを表示（AP2完全準拠）
-        events.append({
-            "type": "payment_method_selection",
-            "payment_methods": payment_methods  # フロントエンド互換性
-        })
-
-        return {
-            **state,
-            "session": session,
-            "events": events,
-            "next_step": END  # ユーザーの支払い方法選択を待つ
-        }
-
-    except Exception as e:
-        logger.error(f"[select_credential_provider_node] Error: {e}", exc_info=True)
-        session["step"] = "error"
-        events.append({
-            "type": "agent_text",
-            "content": f"支払い方法の取得中にエラーが発生しました: {str(e)}"
-        })
-
-        return {
-            **state,
-            "session": session,
-            "events": events,
-            "next_step": END
-        }
-
-
 async def select_payment_method_node(state: ShoppingFlowState, agent_instance: Any) -> ShoppingFlowState:
-    """ノード7: 支払い方法選択、PaymentMandate作成（AP2完全準拠）"""
+    """
+    ノード9: 支払い方法選択とトークン化（AP2ステップ13-18）
+
+    AP2完全準拠:
+    - ステップ13-14: SAが支払い方法の選択肢をユーザーに提示、ユーザーが選択
+    - ステップ15-18: SAがCPに支払い方法トークンを要求、CPがトークンを返却
+    """
     session = state["session"]
     user_input = state["user_input"]
     events = []
@@ -741,6 +1157,27 @@ async def select_payment_method_node(state: ShoppingFlowState, agent_instance: A
                 "session": session,
                 "events": events,
                 "next_step": END
+            }
+
+        # ステップ13-14: 初回アクセス時は支払い方法選択UIを表示
+        if user_input == "_cart_signature_completed" or session.get("step") == "payment_mandate_creation":
+            # カート署名完了直後: 支払い方法選択UIを表示
+            events.append({
+                "type": "payment_method_selection",
+                "payment_methods": available_payment_methods
+            })
+
+            logger.info(
+                f"[select_payment_method_node] AP2 Step 13-14: Presenting payment methods to user\n"
+                f"  Available Methods: {len(available_payment_methods)}"
+            )
+
+            session["step"] = "payment_method_selection"
+            return {
+                **state,
+                "session": session,
+                "events": events,
+                "next_step": END  # ユーザーの選択を待つ
             }
 
         # 支払い方法選択（番号）
@@ -783,17 +1220,37 @@ async def select_payment_method_node(state: ShoppingFlowState, agent_instance: A
                 "next_step": "step_up_auth"
             }
 
-        # トークン化（step-up不要な場合のみ）
-        tokenized_method = await agent_instance._tokenize_payment_method(selected_method)
+        # ステップ15-18: トークン化（AP2完全準拠）
+        selected_cp = session.get("selected_credential_provider")
+        if not selected_cp:
+            raise ValueError("Credential Provider not selected")
+
+        user_id = session.get("user_id", "anonymous")
+
+        logger.info(
+            f"[select_payment_method_node] AP2 Step 15-18: Tokenizing payment method\n"
+            f"  User ID: {user_id}\n"
+            f"  Payment Method ID: {selected_method['id']}\n"
+            f"  CP URL: {selected_cp['url']}"
+        )
+
+        # ステップ15-16: SAがCPに支払い方法トークンを要求
+        tokenized_method = await agent_instance._tokenize_payment_method(
+            user_id=user_id,
+            payment_method_id=selected_method["id"],
+            credential_provider_url=selected_cp["url"]
+        )
         session["tokenized_payment_method"] = tokenized_method
 
-        # PaymentMandate作成（AP2完全準拠、リスク評価含む）
-        cart_mandate = session["cart_mandate"]
-        payment_mandate = await agent_instance._create_payment_mandate(
-            cart_mandate=cart_mandate,
-            payment_method=tokenized_method,
-            session=session
+        # ステップ17-18: CPが支払い方法トークンを返却
+        logger.info(
+            f"[select_payment_method_node] AP2 Step 17-18: Received tokenized payment method\n"
+            f"  Token: {tokenized_method.get('token', 'N/A')[:20]}..."
         )
+
+        # PaymentMandate作成（AP2完全準拠、リスク評価含む）
+        # Note: _create_payment_mandate()はsessionからcart_mandateとtokenized_payment_methodを取得
+        payment_mandate = agent_instance._create_payment_mandate(session=session)
 
         session["payment_mandate"] = payment_mandate
 
@@ -834,7 +1291,7 @@ async def select_payment_method_node(state: ShoppingFlowState, agent_instance: A
 
 
 async def step_up_auth_node(state: ShoppingFlowState, agent_instance: Any) -> ShoppingFlowState:
-    """ノード8: 3D Secure 2.0 Step-up認証"""
+    """ノード10: 3D Secure 2.0 Step-up認証（AP2完全準拠）"""
     session = state["session"]
     events = []
 
@@ -859,7 +1316,7 @@ async def step_up_auth_node(state: ShoppingFlowState, agent_instance: Any) -> Sh
 
 
 async def webauthn_auth_node(state: ShoppingFlowState, agent_instance: Any) -> ShoppingFlowState:
-    """ノード9: WebAuthn/Passkey認証"""
+    """ノード11: WebAuthn/Passkey認証（AP2ステップ19-22）"""
     session = state["session"]
     events = []
 
@@ -884,9 +1341,22 @@ async def webauthn_auth_node(state: ShoppingFlowState, agent_instance: Any) -> S
 
 
 async def execute_payment_node(state: ShoppingFlowState, agent_instance: Any) -> ShoppingFlowState:
-    """ノード10: 決済実行"""
+    """ノード12: 決済実行（AP2ステップ23-27）"""
     session = state["session"]
     events = []
+    session_id = state.get("session_id", "unknown")
+
+    # Langfuseスパン開始（AP2完全準拠: オブザーバビリティ機能）
+    observation_id = create_node_span(
+        agent_instance=agent_instance,
+        session_id=session_id,
+        node_name="execute_payment_node",
+        input_data={
+            "payment_mandate_id": session.get("payment_mandate", {}).get("id"),
+            "cart_mandate_id": session.get("cart_mandate", {}).get("id")
+        },
+        metadata={"session_id": session_id, "ap2_step": "Step 23-27: Execute Payment"}
+    )
 
     try:
         payment_mandate = session["payment_mandate"]
@@ -895,22 +1365,47 @@ async def execute_payment_node(state: ShoppingFlowState, agent_instance: Any) ->
         # Merchant Agentに決済実行（A2A通信、AP2完全準拠）
         result = await agent_instance._process_payment_via_merchant_agent(
             payment_mandate=payment_mandate,
-            cart_mandate=cart_mandate,
-            session=session
+            cart_mandate=cart_mandate
         )
 
-        if result.get("status") == "success":
+        # AP2完全準拠：決済成功時のステータスは "captured" または "authorized"
+        payment_status = result.get("status")
+        if payment_status in ["captured", "authorized", "success"]:
             session["step"] = "completed"
             session["transaction_result"] = result
+
+            logger.info(
+                f"[execute_payment_node] Payment successful: "
+                f"status={payment_status}, "
+                f"transaction_id={result.get('transaction_id')}"
+            )
+
+            # Langfuseスパン終了（AP2完全準拠: オブザーバビリティ機能）
+            end_node_span(
+                span=observation_id,
+                
+                output_data={
+                    "status": payment_status,
+                    "transaction_id": result.get("transaction_id"),
+                    "next_step": "completed"
+                },
+                metadata={"status": "success"}
+            )
 
             return {
                 **state,
                 "session": session,
                 "events": events,
-                "next_step": "completed"
+                "next_step": "completed",
+                "current_observation_id": observation_id
             }
         else:
-            raise ValueError(f"Payment failed: {result.get('error')}")
+            error_msg = result.get("error") or result.get("error_message") or f"Payment failed with status: {payment_status}"
+            logger.error(
+                f"[execute_payment_node] Payment failed: "
+                f"status={payment_status}, error={error_msg}"
+            )
+            raise ValueError(error_msg)
 
     except Exception as e:
         logger.error(f"[execute_payment_node] Error: {e}", exc_info=True)
@@ -920,37 +1415,128 @@ async def execute_payment_node(state: ShoppingFlowState, agent_instance: Any) ->
             "content": f"決済実行中にエラーが発生しました: {str(e)}"
         })
 
+        # Langfuseスパン終了（エラー、AP2完全準拠: オブザーバビリティ機能）
+        end_node_span(
+            span=observation_id,
+            
+            output_data={"error": str(e)},
+            metadata={"status": "error"}
+        )
+
         return {
             **state,
             "session": session,
             "events": events,
-            "next_step": END
+            "next_step": END,
+            "current_observation_id": observation_id
         }
 
 
 async def completed_node(state: ShoppingFlowState) -> ShoppingFlowState:
-    """ノード11: 完了"""
+    """ノード13: 完了（AP2ステップ28-32）"""
     session = state["session"]
     events = []
 
     result = session.get("transaction_result", {})
+    cart_mandate = session.get("cart_mandate", {})
+    payment_mandate = session.get("payment_mandate", {})
+
+    # AP2完全準拠: CartMandateとPaymentMandateから情報を取得
+    contents = cart_mandate.get("contents", {})
+    payment_request = contents.get("payment_request", {})
+    details = payment_request.get("details", {})
+
+    # 金額情報（CartMandateのtotalから）
+    total_item = details.get("total", {})
+    amount_info = total_item.get("amount", {})
+    amount_value = amount_info.get("value", "0")
+    amount_currency = amount_info.get("currency", "JPY")
+
+    # 商品情報（CartMandateのdisplay_itemsから）
+    display_items = details.get("display_items", [])
+    if display_items:
+        # 最初の商品名を使用、複数あれば「他N点」を追加
+        product_name = display_items[0].get("label", "商品")
+        if len(display_items) > 1:
+            product_name += f" 他{len(display_items)-1}点"
+    else:
+        product_name = "商品"
+
+    # 加盟店情報（PaymentMandateのpayee_idまたはCartMandateのmerchant_idから）
+    merchant_id = payment_mandate.get("payee_id") or cart_mandate.get("_metadata", {}).get("merchant_id", "")
+
+    # DIDから加盟店名を抽出（AP2完全準拠）
+    if "mugibo" in merchant_id.lower():
+        merchant_name = "むぎぼー公式ストア"
+    elif "demo" in merchant_id.lower() or "merchant" in merchant_id.lower():
+        # merchant_idの最後の部分を使用
+        merchant_name = merchant_id.split(":")[-1].replace("_", " ").title()
+    else:
+        merchant_name = merchant_id
+
+    # 領収書URL
+    receipt_url = result.get("receipt_url", "")
 
     # 決済完了メッセージと領収書情報（AP2完全準拠）
     receipt_text = f"""✅ 決済が完了しました！
 
 【取引情報】
 取引ID: {result.get("transaction_id", "N/A")}
-金額: ¥{result.get("amount", {}).get("value", 0):,}
-加盟店: {result.get("merchant", "N/A")}
+商品: {product_name}
+金額: {amount_currency} {float(amount_value):,.0f}
+加盟店: {merchant_name}
 
 取引は正常に処理されました。"""
+
+    # 領収書URLは構造化イベントで送信（UIで表示）
+    # テキストメッセージには含めない（重複を避ける）
 
     events.append({
         "type": "agent_text",
         "content": receipt_text
     })
 
+    # フロントエンド向けの構造化データも送信
+    events.append({
+        "type": "payment_completed",
+        "transaction_id": result.get("transaction_id"),
+        "product_name": product_name,
+        "amount": float(amount_value),
+        "currency": amount_currency,
+        "merchant_name": merchant_name,
+        "receipt_url": receipt_url,
+        "status": result.get("status", "captured")
+    })
+
     session["step"] = "completed"
+
+    # Langfuseルートスパン終了（AP2完全準拠: オブザーバビリティ機能）
+    session_id = state.get("session_id", "unknown")
+    agent_instance = state.get("agent_instance")
+
+    if agent_instance:
+        root_span = agent_instance.trace_spans.get(session_id)
+        if root_span and hasattr(root_span, 'update') and hasattr(root_span, 'end'):
+            try:
+                root_span.update(
+                    output={
+                        "status": "completed",
+                        "transaction_id": result.get("transaction_id"),
+                        "amount": float(amount_value),
+                        "currency": amount_currency
+                    }
+                )
+                root_span.end()
+                logger.info("[Langfuse] Root span ended successfully")
+
+                # トレース辞書からクリーンアップ
+                agent_instance.trace_spans.pop(session_id, None)
+
+                # Langfuseにデータをフラッシュ
+                if LANGFUSE_ENABLED and langfuse_client:
+                    langfuse_client.flush()
+            except Exception as e:
+                logger.error(f"[Langfuse] Failed to end root span: {e}")
 
     return {
         **state,
@@ -961,7 +1547,7 @@ async def completed_node(state: ShoppingFlowState) -> ShoppingFlowState:
 
 
 async def error_node(state: ShoppingFlowState) -> ShoppingFlowState:
-    """ノード12: エラー"""
+    """ノード14: エラー処理"""
     session = state["session"]
     events = []
 
@@ -973,6 +1559,29 @@ async def error_node(state: ShoppingFlowState) -> ShoppingFlowState:
     })
 
     session["step"] = "error"
+
+    # Langfuseルートスパン終了（エラー、AP2完全準拠: オブザーバビリティ機能）
+    session_id = state.get("session_id", "unknown")
+    agent_instance = state.get("agent_instance")
+
+    if agent_instance:
+        root_span = agent_instance.trace_spans.get(session_id)
+        if root_span and hasattr(root_span, 'update') and hasattr(root_span, 'end'):
+            try:
+                root_span.update(
+                    output={"status": "error", "error": error_msg}
+                )
+                root_span.end()
+                logger.info("[Langfuse] Root span ended with error")
+
+                # トレース辞書からクリーンアップ
+                agent_instance.trace_spans.pop(session_id, None)
+
+                # Langfuseにデータをフラッシュ
+                if LANGFUSE_ENABLED and langfuse_client:
+                    langfuse_client.flush()
+            except Exception as e:
+                logger.error(f"[Langfuse] Failed to end root span: {e}")
 
     return {
         **state,
@@ -1032,6 +1641,12 @@ def create_shopping_flow_graph(agent_instance: Any):
     async def collect_shipping_node_bound(state: ShoppingFlowState) -> ShoppingFlowState:
         return await collect_shipping_node(state, agent_instance)
 
+    async def select_cp_node_bound(state: ShoppingFlowState) -> ShoppingFlowState:
+        return await select_cp_node(state, agent_instance)
+
+    async def get_payment_methods_node_bound(state: ShoppingFlowState) -> ShoppingFlowState:
+        return await get_payment_methods_node(state, agent_instance)
+
     async def fetch_carts_node_bound(state: ShoppingFlowState) -> ShoppingFlowState:
         return await fetch_carts_node(state, agent_instance)
 
@@ -1040,9 +1655,6 @@ def create_shopping_flow_graph(agent_instance: Any):
 
     async def cart_signature_waiting_node_bound(state: ShoppingFlowState) -> ShoppingFlowState:
         return await cart_signature_waiting_node(state)
-
-    async def select_credential_provider_node_bound(state: ShoppingFlowState) -> ShoppingFlowState:
-        return await select_credential_provider_node(state, agent_instance)
 
     async def select_payment_method_node_bound(state: ShoppingFlowState) -> ShoppingFlowState:
         return await select_payment_method_node(state, agent_instance)
@@ -1065,33 +1677,35 @@ def create_shopping_flow_graph(agent_instance: Any):
     # StateGraphを構築
     workflow = StateGraph(ShoppingFlowState)
 
-    # ノード追加（13ノード）
+    # ノード追加（14ノード - AP2完全準拠）
     workflow.add_node("greeting", greeting_node_bound)
     workflow.add_node("collect_intent", collect_intent_node_bound)
     workflow.add_node("collect_shipping", collect_shipping_node_bound)
-    workflow.add_node("fetch_carts", fetch_carts_node_bound)
+    workflow.add_node("select_cp", select_cp_node_bound)  # AP2 Step 4
+    workflow.add_node("get_payment_methods", get_payment_methods_node_bound)  # AP2 Step 6-7
+    workflow.add_node("fetch_carts", fetch_carts_node_bound)  # AP2 Step 8-12
     workflow.add_node("select_cart", select_cart_node_bound)
     workflow.add_node("cart_signature_waiting", cart_signature_waiting_node_bound)
-    workflow.add_node("select_credential_provider", select_credential_provider_node_bound)
-    workflow.add_node("select_payment_method", select_payment_method_node_bound)
+    workflow.add_node("select_payment_method", select_payment_method_node_bound)  # AP2 Step 13-18
     workflow.add_node("step_up_auth", step_up_auth_node_bound)
     workflow.add_node("webauthn_auth", webauthn_auth_node_bound)
     workflow.add_node("execute_payment", execute_payment_node_bound)
     workflow.add_node("completed", completed_node_bound)
     workflow.add_node("error", error_node_bound)
 
-    # エントリーポイント: ルーティング関数でstepに基づいて適切なノードに分岐
+    # エントリーポイント: ルーティング関数でstepに基づいて適切なノードに分岐（AP2完全準拠）
     workflow.set_conditional_entry_point(
         route_by_step,
         {
             "greeting": "greeting",
             "collect_intent": "collect_intent",
             "collect_shipping": "collect_shipping",
-            "fetch_carts": "fetch_carts",
+            "select_cp": "select_cp",  # AP2 Step 4
+            "get_payment_methods": "get_payment_methods",  # AP2 Step 6-7
+            "fetch_carts": "fetch_carts",  # AP2 Step 8-12
             "select_cart": "select_cart",
             "cart_signature_waiting": "cart_signature_waiting",
-            "select_credential_provider": "select_credential_provider",
-            "select_payment_method": "select_payment_method",
+            "select_payment_method": "select_payment_method",  # AP2 Step 13-18
             "step_up_auth": "step_up_auth",
             "webauthn_auth": "webauthn_auth",
             "execute_payment": "execute_payment",
@@ -1108,15 +1722,17 @@ def create_shopping_flow_graph(agent_instance: Any):
             return next_step
         return END
 
-    # 全ノードに共通のルーティングを適用
-    for node_name in ["greeting", "collect_intent", "collect_shipping", "fetch_carts",
-                      "select_cart", "cart_signature_waiting", "select_credential_provider",
+    # 全ノードに共通のルーティングを適用（AP2完全準拠）
+    for node_name in ["greeting", "collect_intent", "collect_shipping", "select_cp",
+                      "get_payment_methods", "fetch_carts", "select_cart", "cart_signature_waiting",
                       "select_payment_method", "step_up_auth", "webauthn_auth", "execute_payment"]:
         workflow.add_conditional_edges(
             node_name,
             route_from_node,
             {
-                "fetch_carts": "fetch_carts",
+                "select_cp": "select_cp",  # AP2 Step 4
+                "get_payment_methods": "get_payment_methods",  # AP2 Step 6-7
+                "fetch_carts": "fetch_carts",  # AP2 Step 8-12
                 "step_up_auth": "step_up_auth",
                 "webauthn_auth": "webauthn_auth",
                 "execute_payment": "execute_payment",
@@ -1133,6 +1749,6 @@ def create_shopping_flow_graph(agent_instance: Any):
     # コンパイル
     compiled = workflow.compile()
 
-    logger.info("[create_shopping_flow_graph] LangGraph shopping flow compiled successfully (13 nodes)")
+    logger.info("[create_shopping_flow_graph] LangGraph shopping flow compiled successfully (14 nodes, AP2 compliant)")
 
     return compiled

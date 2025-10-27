@@ -72,8 +72,6 @@ from v2.common.auth import (
     hash_password,
     verify_password,
     validate_password_strength,
-    # [DEPRECATED] WebAuthn/Passkey認証（削除予定）
-    verify_webauthn_attestation,
 )
 from v2.common.logger import (
     get_logger,
@@ -172,6 +170,10 @@ class ShoppingAgent(BaseAgent):
 
         # セッション管理（簡易版 - インメモリ）
         self.sessions: Dict[str, Dict[str, Any]] = {}
+
+        # Langfuseトレース管理（AP2完全準拠: オブザーバビリティ機能）
+        # セッションIDをキーにしてルートスパンを管理
+        self.trace_spans: Dict[str, Any] = {}
 
         # リスク評価エンジン（データベースマネージャーを渡して完全実装を有効化）
         self.risk_engine = RiskAssessmentEngine(db_manager=self.db_manager)
@@ -1340,11 +1342,13 @@ class ShoppingAgent(BaseAgent):
                     # セッションデータを取得
                     session = json.loads(db_session_obj.session_data)
 
-                # 現在のステップ確認
-                if session.get("step") != "webauthn_attestation_requested":
+                # 現在のステップ確認（AP2完全準拠）
+                current_step = session.get("step")
+                valid_steps = ["webauthn_attestation_requested", "webauthn_signature_requested"]
+                if current_step not in valid_steps:
                     raise HTTPException(
                         status_code=400,
-                        detail=f"Invalid session state: {session.get('step')}. Expected: webauthn_attestation_requested"
+                        detail=f"Invalid session state: {current_step}. Expected one of: {valid_steps}"
                     )
 
                 # PaymentMandate取得
@@ -1451,87 +1455,25 @@ class ShoppingAgent(BaseAgent):
                         detail=f"Failed to generate user_authorization: {e}"
                     )
 
-                # AP2 Step 24-31: Merchant Agent経由で決済処理
-                payment_result = await self._process_payment_via_merchant_agent(payment_mandate, cart_mandate)
+                # AP2完全準拠: WebAuthn署名検証成功後、決済実行ステップへ進む
+                # 決済実行はLangGraphの execute_payment_node で実行される
+                session["payment_webauthn_assertion"] = attestation
+                session["step"] = "payment_execution"
 
-                if payment_result.get("status") == "captured":
-                    # 決済成功
-                    transaction_id = payment_result.get("transaction_id")
-                    receipt_url = payment_result.get("receipt_url")
+                # セッション保存
+                await self._update_session(session_id, session)
 
-                    session["transaction_id"] = transaction_id
-                    session["step"] = "completed"
+                logger.info(
+                    f"[submit_payment_attestation] PaymentMandate signed by user: "
+                    f"payment_id={payment_mandate.get('id')}, next_step=payment_execution"
+                )
 
-                    logger.info(f"[submit_payment_attestation] Payment successful: {transaction_id}")
-
-                    # AP2仕様準拠：CartMandateから商品情報と金額を取得
-                    cart_mandate = session.get("cart_mandate", {})
-
-                    # AP2準拠：contents.payment_request.details から情報を取得
-                    contents = cart_mandate.get("contents", {})
-                    payment_request = contents.get("payment_request", {})
-                    details = payment_request.get("details", {})
-
-                    # 商品アイテムを取得（display_itemsからrefund_period > 0のものを抽出）
-                    display_items = details.get("display_items", [])
-                    items = [item for item in display_items if item.get("refund_period", 0) > 0]
-
-                    # 合計金額を取得
-                    total_item = details.get("total", {})
-                    total_amount_data = total_item.get("amount", {})
-                    currency = total_amount_data.get("currency", "JPY")
-
-                    # _metadata.raw_itemsからも情報取得（後方互換性）
-                    raw_items = cart_mandate.get("_metadata", {}).get("raw_items", [])
-
-                    logger.info(
-                        f"[submit_payment_attestation] CartMandate info: "
-                        f"items_count={len(items)}, "
-                        f"raw_items_count={len(raw_items)}, "
-                        f"total_amount={total_amount_data}"
-                    )
-
-                    # 商品名を生成（複数商品の場合は商品数を表示）
-                    if len(items) == 1:
-                        product_name = items[0].get("label", "商品")
-                    elif len(items) > 1:
-                        product_name = f"{items[0].get('label', '商品')} 他{len(items) - 1}点"
-                    else:
-                        product_name = "購入商品"
-
-                    # 金額を取得（AP2準拠：numberとして扱う）
-                    try:
-                        amount = float(total_amount_data.get("value", 0))
-                    except (ValueError, TypeError):
-                        amount = 0
-
-                    logger.info(
-                        f"[submit_payment_attestation] Payment success response: "
-                        f"product_name={product_name}, "
-                        f"amount={amount}, "
-                        f"currency={currency}"
-                    )
-
-                    return {
-                        "status": "success",
-                        "transaction_id": transaction_id,
-                        "receipt_url": receipt_url,
-                        "product_name": product_name,
-                        "amount": amount,
-                        "items_count": len(items),
-                        "currency": currency
-                    }
-                else:
-                    # 決済失敗
-                    error_message = payment_result.get("error", "Payment processing failed")
-                    session["step"] = "payment_failed"
-
-                    logger.error(f"[submit_payment_attestation] Payment failed: {error_message}")
-
-                    return {
-                        "status": "failed",
-                        "error": error_message
-                    }
+                # AP2完全準拠: 署名検証成功レスポンス
+                return {
+                    "status": "success",
+                    "message": "PaymentMandate signed successfully",
+                    "next_step": "payment_execution"
+                }
 
             except HTTPException:
                 raise
@@ -3609,7 +3551,15 @@ class ShoppingAgent(BaseAgent):
                 yield event
             return
 
-        # 初期状態
+        # Langfuseトレース作成（AP2完全準拠: オブザーバビリティ機能）
+        from services.shopping_agent.langgraph_shopping_flow import create_trace_for_session
+        root_span = create_trace_for_session(session_id, user_input)
+
+        # ルートスパンをエージェントインスタンスに保存（セッションIDをキー）
+        if root_span:
+            self.trace_spans[session_id] = root_span
+
+        # 初期状態（Stateにはシリアライズ可能なデータのみ）
         initial_state = {
             "user_input": user_input,
             "session_id": session_id,
@@ -3620,7 +3570,7 @@ class ShoppingAgent(BaseAgent):
         }
 
         try:
-            # グラフ実行
+            # グラフ実行（AP2完全準拠: IntentMandate → CartMandate → PaymentMandateフロー）
             result = await self.shopping_flow_graph.ainvoke(initial_state)
 
             # イベントをストリーミング出力
@@ -4063,8 +4013,22 @@ class ShoppingAgent(BaseAgent):
             logger.error("[ShoppingAgent] No tokenized payment method available")
             raise ValueError("No tokenized payment method available")
 
-        # AP2仕様準拠：金額はCartMandateのtotalから取得
-        total_amount = cart_mandate.get("total", {})
+        # AP2仕様準拠：金額はCartMandate.contents.payment_request.details.totalから取得
+        contents = cart_mandate.get("contents", {})
+        payment_request = contents.get("payment_request", {})
+        details = payment_request.get("details", {})
+        total_item = details.get("total", {})
+        total_amount = total_item.get("amount", {})
+
+        # デバッグログ：CartMandateの構造を確認
+        logger.info(
+            f"[_create_payment_mandate] CartMandate structure: "
+            f"has_contents={bool(contents)}, "
+            f"has_payment_request={bool(payment_request)}, "
+            f"has_details={bool(details)}, "
+            f"has_total={bool(total_item)}, "
+            f"total_amount={total_amount}"
+        )
 
         # AP2公式型定義準拠：PaymentMandateContents構造
         # 参照: refs/AP2-main/src/ap2/types/mandate.py

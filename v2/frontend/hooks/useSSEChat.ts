@@ -28,6 +28,7 @@ export function useSSEChat() {
   const [shippingFormRequest, setShippingFormRequest] = useState<any | null>(null);
   const [paymentMethods, setPaymentMethods] = useState<any[]>([]);
   const [webauthnRequest, setWebauthnRequest] = useState<any | null>(null);
+  const [paymentCompletedInfo, setPaymentCompletedInfo] = useState<any | null>(null);
 
   const abortControllerRef = useRef<AbortController | null>(null);
 
@@ -57,6 +58,7 @@ export function useSSEChat() {
     setShippingFormRequest(null);
     setPaymentMethods([]);
     setWebauthnRequest(null);
+    setPaymentCompletedInfo(null);
 
     // AbortController作成
     const abortController = new AbortController();
@@ -234,6 +236,21 @@ export function useSSEChat() {
                   // 支払い方法選択リクエスト
                   const paymentEvent = event as any;
                   setPaymentMethods(paymentEvent.payment_methods || []);
+                  break;
+
+                case "payment_completed":
+                  // AP2完全準拠: 決済完了情報
+                  const paymentCompletedEvent = event as any;
+                  setPaymentCompletedInfo({
+                    transaction_id: paymentCompletedEvent.transaction_id,
+                    product_name: paymentCompletedEvent.product_name,
+                    amount: paymentCompletedEvent.amount,
+                    currency: paymentCompletedEvent.currency,
+                    merchant_name: paymentCompletedEvent.merchant_name,
+                    receipt_url: paymentCompletedEvent.receipt_url,
+                    status: paymentCompletedEvent.status,
+                  });
+                  console.log("[Payment Completed]", paymentCompletedEvent);
                   break;
 
                 case "webauthn_request":
@@ -431,6 +448,7 @@ export function useSSEChat() {
     shippingFormRequest,
     paymentMethods,
     webauthnRequest,
+    paymentCompletedInfo,  // 決済完了情報
     sessionId: sessionIdRef.current,
     sendMessage,
     addMessage,

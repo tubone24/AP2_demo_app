@@ -677,13 +677,16 @@ class CredentialProviderService(BaseAgent):
                 requires_stepup = payment_method.get("requires_stepup", False)
                 stepup_method = payment_method.get("stepup_method", None)
 
+                # AP2完全準拠：有効期限を含める（カードの場合）
                 response_data = {
                     "token": secure_token,
                     "payment_method_id": payment_method_id,
                     "brand": payment_method.get("brand", "unknown"),
                     "last4": payment_method.get("last4", "0000"),
                     "type": payment_method.get("type", "card"),
-                    "expires_at": expires_at.isoformat().replace('+00:00', 'Z')
+                    "expiry_month": payment_method.get("expiry_month"),  # カード有効期限（月）
+                    "expiry_year": payment_method.get("expiry_year"),    # カード有効期限（年）
+                    "expires_at": expires_at.isoformat().replace('+00:00', 'Z')  # トークン有効期限
                 }
 
                 # Stepup認証が必要な場合はフラグを追加
