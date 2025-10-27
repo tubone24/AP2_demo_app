@@ -38,11 +38,11 @@ logger = logging.getLogger(__name__)
 # Langfuseトレーシング設定
 LANGFUSE_ENABLED = os.getenv("LANGFUSE_ENABLED", "false").lower() == "true"
 langfuse_client = None
-langfuse_handler = None
+CallbackHandler = None
 
 if LANGFUSE_ENABLED:
     try:
-        from langfuse.langchain import CallbackHandler
+        from langfuse.langchain import CallbackHandler as LangfuseCallbackHandler
         from langfuse import Langfuse
 
         langfuse_client = Langfuse(
@@ -50,7 +50,7 @@ if LANGFUSE_ENABLED:
             secret_key=os.getenv("LANGFUSE_SECRET_KEY"),
             host=os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
         )
-        langfuse_handler = CallbackHandler()
+        CallbackHandler = LangfuseCallbackHandler
         logger.info("[Langfuse] Shopping Agent tracing enabled")
     except Exception as e:
         logger.warning(f"[Langfuse] Failed to initialize: {e}")
@@ -228,17 +228,12 @@ JSON形式で返答してください:
   "keywords": ["...", "..."]
 }}"""
 
-                # LangfuseハンドラーをLLM呼び出しに渡す（AP2完全準拠: トレース統合）
-                llm_config = {}
-                if LANGFUSE_ENABLED and langfuse_handler:
-                    llm_config["callbacks"] = [langfuse_handler]
-
-                # LLM呼び出し
+                # LLM呼び出し（LangGraphのconfigが自動的に伝播される）
                 messages = [
                     SystemMessage(content=system_prompt),
                     HumanMessage(content=user_prompt)
                 ]
-                response = await llm.ainvoke(messages, config=llm_config)
+                response = await llm.ainvoke(messages)
                 response_text = response.content
 
                 # JSON抽出

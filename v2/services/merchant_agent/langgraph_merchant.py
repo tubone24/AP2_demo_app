@@ -42,12 +42,12 @@ tracer = get_tracer(__name__)
 
 # Langfuseトレーシング設定
 LANGFUSE_ENABLED = os.getenv("LANGFUSE_ENABLED", "false").lower() == "true"
-langfuse_handler = None
+CallbackHandler = None
 langfuse_client = None
 
 if LANGFUSE_ENABLED:
     try:
-        from langfuse.langchain import CallbackHandler
+        from langfuse.langchain import CallbackHandler as LangfuseCallbackHandler
         from langfuse import Langfuse
 
         langfuse_client = Langfuse(
@@ -55,7 +55,7 @@ if LANGFUSE_ENABLED:
             secret_key=os.getenv("LANGFUSE_SECRET_KEY"),
             host=os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
         )
-        langfuse_handler = CallbackHandler()
+        CallbackHandler = LangfuseCallbackHandler
         logger.info("[Langfuse] Tracing enabled")
     except Exception as e:
         logger.warning(f"[Langfuse] Failed to initialize: {e}")
@@ -990,10 +990,18 @@ JSON配列形式で返答してください:
         }
 
         # グラフ実行（未署名のCartMandate候補を生成）
-        # Langfuseハンドラーをconfigとして渡す
+        # Langfuseハンドラーを動的に作成し、session_idをmetadataで指定（トレース統合）
         config = {}
-        if LANGFUSE_ENABLED and langfuse_handler:
+        if LANGFUSE_ENABLED and CallbackHandler:
+            # Langfuse 3では、session_idとuser_idをmetadataで指定
+            # shopping_agentと同じsession_idを使用することで、横串でトレース確認が可能
+            langfuse_handler = CallbackHandler()
             config["callbacks"] = [langfuse_handler]
+            config["metadata"] = {
+                "langfuse_session_id": session_id,
+                "langfuse_user_id": user_id
+            }
+            config["tags"] = ["merchant_agent", "ap2_protocol"]
 
         result = await self.graph.ainvoke(initial_state, config=config)
         cart_candidates = result["cart_candidates"]

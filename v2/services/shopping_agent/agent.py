@@ -3552,7 +3552,7 @@ class ShoppingAgent(BaseAgent):
             return
 
         # Langfuseトレース設定（AP2完全準拠: オブザーバビリティ機能）
-        from services.shopping_agent.langgraph_shopping_flow import LANGFUSE_ENABLED, langfuse_handler
+        from services.shopping_agent.langgraph_shopping_flow import LANGFUSE_ENABLED, CallbackHandler
 
         # 初期状態（Stateにはシリアライズ可能なデータのみ）
         initial_state = {
@@ -3566,10 +3566,18 @@ class ShoppingAgent(BaseAgent):
 
         try:
             # グラフ実行（AP2完全準拠: IntentMandate → CartMandate → PaymentMandateフロー）
-            # Langfuseハンドラーをconfigとして渡す（merchant_agentと同様）
+            # Langfuseハンドラーを動的に作成し、session_idをmetadataで指定（トレース統合）
             config = {}
-            if LANGFUSE_ENABLED and langfuse_handler:
+            if LANGFUSE_ENABLED and CallbackHandler:
+                # Langfuse 3では、session_idとuser_idをmetadataで指定
+                # これにより、同じセッションの複数グラフ実行が1つのトレースにグループ化される
+                langfuse_handler = CallbackHandler()
                 config["callbacks"] = [langfuse_handler]
+                config["metadata"] = {
+                    "langfuse_session_id": session_id,
+                    "langfuse_user_id": session.get("user_id", "anonymous")
+                }
+                config["tags"] = ["shopping_agent", "ap2_protocol"]
 
             result = await self.shopping_flow_graph.ainvoke(initial_state, config=config)
 
