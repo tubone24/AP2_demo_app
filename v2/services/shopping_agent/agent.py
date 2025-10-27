@@ -3551,13 +3551,8 @@ class ShoppingAgent(BaseAgent):
                 yield event
             return
 
-        # Langfuseトレース作成（AP2完全準拠: オブザーバビリティ機能）
-        from services.shopping_agent.langgraph_shopping_flow import create_trace_for_session
-        root_span = create_trace_for_session(session_id, user_input)
-
-        # ルートスパンをエージェントインスタンスに保存（セッションIDをキー）
-        if root_span:
-            self.trace_spans[session_id] = root_span
+        # Langfuseトレース設定（AP2完全準拠: オブザーバビリティ機能）
+        from services.shopping_agent.langgraph_shopping_flow import LANGFUSE_ENABLED, langfuse_handler
 
         # 初期状態（Stateにはシリアライズ可能なデータのみ）
         initial_state = {
@@ -3571,7 +3566,12 @@ class ShoppingAgent(BaseAgent):
 
         try:
             # グラフ実行（AP2完全準拠: IntentMandate → CartMandate → PaymentMandateフロー）
-            result = await self.shopping_flow_graph.ainvoke(initial_state)
+            # Langfuseハンドラーをconfigとして渡す（merchant_agentと同様）
+            config = {}
+            if LANGFUSE_ENABLED and langfuse_handler:
+                config["callbacks"] = [langfuse_handler]
+
+            result = await self.shopping_flow_graph.ainvoke(initial_state, config=config)
 
             # イベントをストリーミング出力
             for event_dict in result["events"]:

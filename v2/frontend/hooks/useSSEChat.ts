@@ -100,6 +100,7 @@ export function useSSEChat() {
       let agentThinkingContent = ""; // LLMの思考過程を蓄積
       let streamProducts: Product[] = []; // ローカル変数で商品データを管理
       let streamCartCandidates: any[] = []; // ローカル変数でカート候補を管理
+      let paymentCompletedData: any = null; // 決済完了情報（AP2完全準拠）
       let hasReceivedContentEvent = false; // リッチコンテンツイベント受信フラグ
       let isThinking = false; // LLMが思考中かどうか
       let isTyping = false; // テキストをタイプ中かどうか
@@ -241,7 +242,7 @@ export function useSSEChat() {
                 case "payment_completed":
                   // AP2完全準拠: 決済完了情報
                   const paymentCompletedEvent = event as any;
-                  setPaymentCompletedInfo({
+                  paymentCompletedData = {
                     transaction_id: paymentCompletedEvent.transaction_id,
                     product_name: paymentCompletedEvent.product_name,
                     amount: paymentCompletedEvent.amount,
@@ -249,7 +250,9 @@ export function useSSEChat() {
                     merchant_name: paymentCompletedEvent.merchant_name,
                     receipt_url: paymentCompletedEvent.receipt_url,
                     status: paymentCompletedEvent.status,
-                  });
+                  };
+                  // stateにも保存（従来の互換性のため）
+                  setPaymentCompletedInfo(paymentCompletedData);
                   console.log("[Payment Completed]", paymentCompletedEvent);
                   break;
 
@@ -355,15 +358,37 @@ export function useSSEChat() {
 
                 case "done":
                   // エージェントメッセージを確定
+                  console.log("[SSE Done Event] agentMessageContent:", agentMessageContent);
+                  console.log("[SSE Done Event] paymentCompletedData:", paymentCompletedData);
+                  console.log("[SSE Done Event] streamProducts:", streamProducts);
+
                   if (agentMessageContent) {
+                    // メタデータを構築（AP2完全準拠）
+                    const metadata: any = {};
+
+                    // 商品リストがある場合
+                    if (streamProducts.length > 0) {
+                      metadata.products = streamProducts;
+                    }
+
+                    // 決済完了情報がある場合
+                    if (paymentCompletedData) {
+                      metadata.payment_result = paymentCompletedData;
+                      console.log("[SSE Done Event] Adding payment_result to metadata:", metadata.payment_result);
+                    } else {
+                      console.log("[SSE Done Event] No payment_result found");
+                    }
+
+                    console.log("[SSE Done Event] Final metadata:", metadata);
+
                     const agentMessage: ChatMessage = {
                       id: `agent-${Date.now()}`,
                       role: "agent",
                       content: agentMessageContent,
                       timestamp: new Date(),
-                      // ローカル変数のstreamProductsを使用（状態更新のタイミングに依存しない）
-                      metadata: streamProducts.length > 0 ? { products: streamProducts } : undefined,
+                      metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
                     };
+                    console.log("[SSE Done Event] Final message:", agentMessage);
                     setMessages((prev) => [...prev, agentMessage]);
                   }
                   setCurrentAgentMessage("");

@@ -33,6 +33,7 @@ import {
   getCurrentUser,
   logout,
   getAuthHeaders,
+  getAccessToken,
   isCredentialProviderPasskeyRegistered
 } from "@/lib/passkey";
 
@@ -632,14 +633,57 @@ export default function ChatPage() {
                             <p><span className="font-medium">加盟店:</span> {paymentCompletedInfo.merchant_name}</p>
                           </div>
                           <div className="pt-2">
-                            <a
-                              href={paymentCompletedInfo.receipt_url}
-                              target="_blank"
-                              rel="noopener noreferrer"
+                            <button
+                              onClick={async () => {
+                                try {
+                                  // AP2完全準拠：JWT認証付きで領収書をダウンロード
+                                  const downloadUrl = paymentCompletedInfo.receipt_url.replace("http://payment_processor:8004", "http://localhost:8004");
+
+                                  // JWTトークンを取得（AP2仕様準拠）
+                                  const jwt = getAccessToken();
+
+                                  if (!jwt) {
+                                    alert("認証情報が見つかりません。再度ログインしてください。");
+                                    return;
+                                  }
+
+                                  // fetchでJWT付きリクエスト（AP2完全準拠：セキュリティ）
+                                  const response = await fetch(downloadUrl, {
+                                    method: "GET",
+                                    headers: {
+                                      "Authorization": `Bearer ${jwt}`,
+                                    },
+                                  });
+
+                                  if (!response.ok) {
+                                    if (response.status === 401) {
+                                      alert("認証に失敗しました。再度ログインしてください。");
+                                    } else if (response.status === 403) {
+                                      alert("この領収書にアクセスする権限がありません。");
+                                    } else {
+                                      alert("領収書のダウンロードに失敗しました。");
+                                    }
+                                    return;
+                                  }
+
+                                  // BlobとしてPDFを取得
+                                  const blob = await response.blob();
+
+                                  // Blob URLを作成して新しいタブで開く
+                                  const blobUrl = URL.createObjectURL(blob);
+                                  window.open(blobUrl, "_blank");
+
+                                  // メモリリーク防止のため、5秒後にBlob URLを解放
+                                  setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
+                                } catch (error) {
+                                  console.error("[Download Receipt] Error:", error);
+                                  alert("領収書のダウンロード中にエラーが発生しました。");
+                                }
+                              }}
                               className="inline-flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors text-sm font-medium"
                             >
                               📄 領収書を表示
-                            </a>
+                            </button>
                           </div>
                         </div>
                       </div>

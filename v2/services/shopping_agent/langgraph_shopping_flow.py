@@ -38,11 +38,11 @@ logger = logging.getLogger(__name__)
 # Langfuseトレーシング設定
 LANGFUSE_ENABLED = os.getenv("LANGFUSE_ENABLED", "false").lower() == "true"
 langfuse_client = None
-CallbackHandler = None
+langfuse_handler = None
 
 if LANGFUSE_ENABLED:
     try:
-        from langfuse.langchain import CallbackHandler as LangfuseCallbackHandler
+        from langfuse.langchain import CallbackHandler
         from langfuse import Langfuse
 
         langfuse_client = Langfuse(
@@ -50,119 +50,11 @@ if LANGFUSE_ENABLED:
             secret_key=os.getenv("LANGFUSE_SECRET_KEY"),
             host=os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
         )
-        CallbackHandler = LangfuseCallbackHandler
+        langfuse_handler = CallbackHandler()
         logger.info("[Langfuse] Shopping Agent tracing enabled")
     except Exception as e:
         logger.warning(f"[Langfuse] Failed to initialize: {e}")
         LANGFUSE_ENABLED = False
-
-
-# ============================================================================
-# Langfuseトレーシングヘルパー
-# ============================================================================
-
-def create_trace_for_session(session_id: str, user_input: str) -> Optional[Any]:
-    """
-    LangGraphセッション用のLangfuseトレースを作成（AP2完全準拠: オブザーバビリティ）
-
-    Args:
-        session_id: セッションID
-        user_input: ユーザー入力
-
-    Returns:
-        root_span: ルートスパンオブジェクト（Langfuse無効時はNone）
-    """
-    if not LANGFUSE_ENABLED or not langfuse_client:
-        return None
-
-    try:
-        # Langfuse v3 API: start_spanでルートスパンを作成
-        root_span = langfuse_client.start_span(
-            name="langgraph_shopping_flow",
-            input={"user_input": user_input, "session_id": session_id},
-            metadata={
-                "session_id": session_id,
-                "service": "shopping_agent",
-                "framework": "langgraph"
-            }
-        )
-        logger.info(f"[Langfuse] Created root span for session: {session_id}")
-        return root_span
-    except Exception as e:
-        logger.error(f"[Langfuse] Failed to create trace: {e}")
-        return None
-
-
-def create_node_span(
-    agent_instance: Any,
-    session_id: str,
-    node_name: str,
-    input_data: Dict[str, Any],
-    metadata: Optional[Dict[str, Any]] = None
-) -> Optional[Any]:
-    """
-    LangGraphノード用のスパンを作成（AP2完全準拠: オブザーバビリティ）
-
-    Args:
-        agent_instance: ShoppingAgentインスタンス
-        session_id: セッションID
-        node_name: ノード名
-        input_data: 入力データ
-        metadata: メタデータ
-
-    Returns:
-        child_span: 子スパンオブジェクト
-    """
-    if not LANGFUSE_ENABLED or not langfuse_client:
-        return None
-
-    try:
-        # エージェントインスタンスからルートスパンを取得
-        root_span = agent_instance.trace_spans.get(session_id)
-        if not root_span or not hasattr(root_span, 'start_span'):
-            logger.warning(f"[Langfuse] Root span not found for session: {session_id}")
-            return None
-
-        # ルートスパンから子スパンを作成（AP2完全準拠: 階層構造）
-        child_span = root_span.start_span(
-            name=node_name,
-            input=input_data,
-            metadata=metadata or {}
-        )
-
-        logger.debug(f"[Langfuse] Created child span: {node_name}")
-        return child_span
-    except Exception as e:
-        logger.error(f"[Langfuse] Failed to create span for {node_name}: {e}")
-        return None
-
-
-def end_node_span(
-    span: Any,
-    output_data: Dict[str, Any],
-    metadata: Optional[Dict[str, Any]] = None
-):
-    """
-    スパンの出力を更新して終了（AP2完全準拠: オブザーバビリティ）
-
-    Args:
-        span: スパンオブジェクト
-        output_data: 出力データ
-        metadata: メタデータ
-    """
-    if not LANGFUSE_ENABLED or not span:
-        return
-
-    try:
-        if hasattr(span, 'update'):
-            # スパンの出力を更新
-            span.update(output=output_data, metadata=metadata or {})
-        if hasattr(span, 'end'):
-            # スパンを終了
-            span.end()
-            logger.debug(f"[Langfuse] Ended span")
-    except Exception as e:
-        logger.error(f"[Langfuse] Failed to update span output: {e}")
 
 
 # ============================================================================
@@ -182,9 +74,6 @@ class ShoppingFlowState(TypedDict):
     events: Annotated[List[Dict[str, Any]], add_events]
     next_step: Optional[str]
     error: Optional[str]
-    # Langfuseトレーシング用
-    trace_id: Optional[str]
-    current_observation_id: Optional[str]
 
 
 # ============================================================================
@@ -308,18 +197,6 @@ async def collect_intent_node(state: ShoppingFlowState, agent_instance: Any, llm
     events = []
     session_id = state.get("session_id", "unknown")
 
-    # Langfuseスパン開始（AP2完全準拠: オブザーバビリティ機能）
-    observation_id = create_node_span(
-        agent_instance=agent_instance,
-        session_id=session_id,
-        node_name="collect_intent_node",
-        input_data={
-            "user_input": user_input,
-            "session_step": session.get("step")
-        },
-        metadata={"session_id": session_id, "ap2_step": "Step 2: Intent Collection"}
-    )
-
     try:
         # ユーザー入力を保存
         session["intent"] = user_input
@@ -353,12 +230,8 @@ JSON形式で返答してください:
 
                 # LangfuseハンドラーをLLM呼び出しに渡す（AP2完全準拠: トレース統合）
                 llm_config = {}
-                if LANGFUSE_ENABLED and CallbackHandler:
-                    # LangChain CallbackHandlerを作成（session_idでグループ化）
-                    langfuse_handler = CallbackHandler()
+                if LANGFUSE_ENABLED and langfuse_handler:
                     llm_config["callbacks"] = [langfuse_handler]
-                    # session_idをmetadataで渡してトレースをグループ化
-                    llm_config["metadata"] = {"langfuse_session_id": session_id}
 
                 # LLM呼び出し
                 messages = [
@@ -453,18 +326,6 @@ JSON形式で返答してください:
             }
         })
 
-        # Langfuseスパン終了（AP2完全準拠: オブザーバビリティ機能）
-        end_node_span(
-            span=observation_id,
-            output_data={
-                "intent": session["intent"],
-                "max_amount": session.get("max_amount"),
-                "intent_mandate_id": intent_mandate.get("id") if intent_mandate else None,
-                "next_step": session.get("step")
-            },
-            metadata={"status": "success"}
-        )
-
         return {
             **state,
             "session": session,
@@ -479,13 +340,6 @@ JSON形式で返答してください:
             "type": "agent_text",
             "content": "申し訳ございません。エラーが発生しました。もう一度入力してください。"
         })
-
-        # Langfuseスパン終了（エラー、AP2完全準拠: オブザーバビリティ機能）
-        end_node_span(
-            span=observation_id,
-            output_data={"error": str(err)},
-            metadata={"status": "error"}
-        )
 
         return {
             **state,
@@ -846,18 +700,6 @@ async def fetch_carts_node(state: ShoppingFlowState, agent_instance: Any) -> Sho
     events = []
     session_id = state.get("session_id", "unknown")
 
-    # Langfuseスパン開始（AP2完全準拠: オブザーバビリティ機能）
-    observation_id = create_node_span(
-        agent_instance=agent_instance,
-        session_id=session_id,
-        node_name="fetch_carts_node",
-        input_data={
-            "intent": session.get("intent"),
-            "intent_mandate_id": session.get("intent_mandate", {}).get("id")
-        },
-        metadata={"session_id": session_id, "ap2_step": "Step 8-12: Fetch Carts"}
-    )
-
     try:
         logger.info("[fetch_carts_node] AP2 Step 8-12: Fetching cart candidates from Merchant Agent")
 
@@ -892,20 +734,11 @@ async def fetch_carts_node(state: ShoppingFlowState, agent_instance: Any) -> Sho
             })
             session["step"] = "error"
 
-            # Langfuseスパン終了（AP2完全準拠: オブザーバビリティ機能）
-            end_node_span(
-                span=observation_id,
-                
-                output_data={"cart_count": 0, "status": "no_carts_found"},
-                metadata={"status": "error"}
-            )
-
             return {
                 **state,
                 "session": session,
                 "events": events,
-                "next_step": END,
-                "current_observation_id": observation_id
+                "next_step": END
             }
 
         # AP2完全準拠: Artifact構造からフロントエンド用に変換
@@ -943,24 +776,11 @@ async def fetch_carts_node(state: ShoppingFlowState, agent_instance: Any) -> Sho
             "content": f"{len(cart_candidates)}つのカート候補が見つかりました。お好みのカートを選択してください。"
         })
 
-        # Langfuseスパン終了（AP2完全準拠: オブザーバビリティ機能）
-        end_node_span(
-            span=observation_id,
-            
-            output_data={
-                "cart_count": len(cart_candidates),
-                "cart_artifact_ids": [c.get("artifactId") for c in cart_candidates],
-                "next_step": "cart_selection"
-            },
-            metadata={"status": "success"}
-        )
-
         return {
             **state,
             "session": session,
             "events": events,
-            "next_step": END,  # ユーザーのカート選択を待つ
-            "current_observation_id": observation_id
+            "next_step": END  # ユーザーのカート選択を待つ
         }
 
     except Exception as e:
@@ -971,20 +791,11 @@ async def fetch_carts_node(state: ShoppingFlowState, agent_instance: Any) -> Sho
             "content": f"カート候補の取得中にエラーが発生しました: {str(e)}"
         })
 
-        # Langfuseスパン終了（エラー、AP2完全準拠: オブザーバビリティ機能）
-        end_node_span(
-            span=observation_id,
-            
-            output_data={"error": str(e)},
-            metadata={"status": "error"}
-        )
-
         return {
             **state,
             "session": session,
             "events": events,
             "next_step": END,
-            "current_observation_id": observation_id
         }
 
 
@@ -1346,18 +1157,6 @@ async def execute_payment_node(state: ShoppingFlowState, agent_instance: Any) ->
     events = []
     session_id = state.get("session_id", "unknown")
 
-    # Langfuseスパン開始（AP2完全準拠: オブザーバビリティ機能）
-    observation_id = create_node_span(
-        agent_instance=agent_instance,
-        session_id=session_id,
-        node_name="execute_payment_node",
-        input_data={
-            "payment_mandate_id": session.get("payment_mandate", {}).get("id"),
-            "cart_mandate_id": session.get("cart_mandate", {}).get("id")
-        },
-        metadata={"session_id": session_id, "ap2_step": "Step 23-27: Execute Payment"}
-    )
-
     try:
         payment_mandate = session["payment_mandate"]
         cart_mandate = session["cart_mandate"]
@@ -1380,25 +1179,12 @@ async def execute_payment_node(state: ShoppingFlowState, agent_instance: Any) ->
                 f"transaction_id={result.get('transaction_id')}"
             )
 
-            # Langfuseスパン終了（AP2完全準拠: オブザーバビリティ機能）
-            end_node_span(
-                span=observation_id,
-                
-                output_data={
-                    "status": payment_status,
-                    "transaction_id": result.get("transaction_id"),
-                    "next_step": "completed"
-                },
-                metadata={"status": "success"}
-            )
-
             return {
                 **state,
                 "session": session,
                 "events": events,
                 "next_step": "completed",
-                "current_observation_id": observation_id
-            }
+                }
         else:
             error_msg = result.get("error") or result.get("error_message") or f"Payment failed with status: {payment_status}"
             logger.error(
@@ -1415,20 +1201,11 @@ async def execute_payment_node(state: ShoppingFlowState, agent_instance: Any) ->
             "content": f"決済実行中にエラーが発生しました: {str(e)}"
         })
 
-        # Langfuseスパン終了（エラー、AP2完全準拠: オブザーバビリティ機能）
-        end_node_span(
-            span=observation_id,
-            
-            output_data={"error": str(e)},
-            metadata={"status": "error"}
-        )
-
         return {
             **state,
             "session": session,
             "events": events,
             "next_step": END,
-            "current_observation_id": observation_id
         }
 
 
@@ -1510,34 +1287,6 @@ async def completed_node(state: ShoppingFlowState) -> ShoppingFlowState:
 
     session["step"] = "completed"
 
-    # Langfuseルートスパン終了（AP2完全準拠: オブザーバビリティ機能）
-    session_id = state.get("session_id", "unknown")
-    agent_instance = state.get("agent_instance")
-
-    if agent_instance:
-        root_span = agent_instance.trace_spans.get(session_id)
-        if root_span and hasattr(root_span, 'update') and hasattr(root_span, 'end'):
-            try:
-                root_span.update(
-                    output={
-                        "status": "completed",
-                        "transaction_id": result.get("transaction_id"),
-                        "amount": float(amount_value),
-                        "currency": amount_currency
-                    }
-                )
-                root_span.end()
-                logger.info("[Langfuse] Root span ended successfully")
-
-                # トレース辞書からクリーンアップ
-                agent_instance.trace_spans.pop(session_id, None)
-
-                # Langfuseにデータをフラッシュ
-                if LANGFUSE_ENABLED and langfuse_client:
-                    langfuse_client.flush()
-            except Exception as e:
-                logger.error(f"[Langfuse] Failed to end root span: {e}")
-
     return {
         **state,
         "session": session,
@@ -1559,29 +1308,6 @@ async def error_node(state: ShoppingFlowState) -> ShoppingFlowState:
     })
 
     session["step"] = "error"
-
-    # Langfuseルートスパン終了（エラー、AP2完全準拠: オブザーバビリティ機能）
-    session_id = state.get("session_id", "unknown")
-    agent_instance = state.get("agent_instance")
-
-    if agent_instance:
-        root_span = agent_instance.trace_spans.get(session_id)
-        if root_span and hasattr(root_span, 'update') and hasattr(root_span, 'end'):
-            try:
-                root_span.update(
-                    output={"status": "error", "error": error_msg}
-                )
-                root_span.end()
-                logger.info("[Langfuse] Root span ended with error")
-
-                # トレース辞書からクリーンアップ
-                agent_instance.trace_spans.pop(session_id, None)
-
-                # Langfuseにデータをフラッシュ
-                if LANGFUSE_ENABLED and langfuse_client:
-                    langfuse_client.flush()
-            except Exception as e:
-                logger.error(f"[Langfuse] Failed to end root span: {e}")
 
     return {
         **state,

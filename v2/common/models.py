@@ -595,6 +595,15 @@ class StreamEvent(BaseModel):
     step_up_url: Optional[str] = None
     session_id: Optional[str] = None
 
+    # AP2完全準拠: 決済完了イベント用フィールド
+    transaction_id: Optional[str] = None
+    product_name: Optional[str] = None
+    amount: Optional[float] = None
+    currency: Optional[str] = None
+    merchant_name: Optional[str] = None
+    receipt_url: Optional[str] = None
+    status: Optional[str] = None
+
     error: Optional[str] = None
 
 
