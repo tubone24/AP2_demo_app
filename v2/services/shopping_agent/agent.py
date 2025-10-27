@@ -1235,23 +1235,23 @@ class ShoppingAgent(BaseAgent):
                 session["cart_webauthn_assertion"] = webauthn_assertion
                 # CartMandateは変更せずそのまま保持（Merchant署名時のハッシュを維持）
 
-                # AP2完全準拠: CartMandate署名完了後、PaymentMandate作成へ進む
-                # Credential Provider選択と支払い方法選択はPaymentMandate作成時に行う
-                session["step"] = "payment_mandate_creation"
+                # LangGraphベストプラクティス: stepの更新はLangGraph Checkpointerに任せる
+                # データベースには、WebAuthn assertionのみを保存（Checkpointerが管理しないデータ）
+                # 次のLangGraph実行で、cart_signature_waiting_nodeが自動的に次のステップに進む
 
-                # セッション保存
+                # セッション保存（cart_webauthn_assertionのみ、stepは保存しない）
                 await self._update_session(session_id, session)
 
                 logger.info(
                     f"[submit_cart_signature] CartMandate signed by user: "
-                    f"cart_id={cart_mandate.get('id')}, next_step=payment_mandate_creation"
+                    f"cart_id={cart_mandate.get('id')}, webauthn_assertion saved"
                 )
 
-                # AP2完全準拠: CartMandate署名完了後、Credential Provider選択へ進む
+                # AP2完全準拠: CartMandate署名完了後、次のLangGraph実行でPaymentMandate作成へ進む
                 return {
                     "status": "success",
                     "message": "CartMandate signed successfully",
-                    "next_step": "payment_mandate_creation"
+                    "next_step": "payment_mandate_creation"  # フロントエンド表示用（実際の状態遷移はLangGraphが管理）
                 }
 
             except HTTPException:
@@ -1326,14 +1326,14 @@ class ShoppingAgent(BaseAgent):
                     # セッションデータを取得
                     session = json.loads(db_session_obj.session_data)
 
-                # 現在のステップ確認（AP2完全準拠）
-                current_step = session.get("step")
-                valid_steps = ["webauthn_attestation_requested", "webauthn_signature_requested"]
-                if current_step not in valid_steps:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Invalid session state: {current_step}. Expected one of: {valid_steps}"
-                    )
+                # LangGraphベストプラクティス: stepチェックを削除
+                # 理由:
+                # - CheckpointerがstepをLangGraph実行内で管理
+                # - データベースのセッションはCheckpointerが管理しないデータのみを保存
+                # - stepチェックは、データベースとCheckpointerの不整合を引き起こす
+                #
+                # AP2完全準拠: PaymentMandateの存在確認で十分
+                # （PaymentMandateがあれば、署名可能な状態）
 
                 # PaymentMandate取得
                 payment_mandate = session.get("payment_mandate")
@@ -1375,7 +1375,8 @@ class ShoppingAgent(BaseAgent):
                 logger.info(f"[submit_payment_attestation] Attestation verified, processing payment...")
 
                 session["attestation_token"] = verification_result.get("token")
-                session["step"] = "payment_processing"
+                # LangGraphベストプラクティス: stepはCheckpointerが管理する
+                # submit_payment_attestationでは、webauthn_assertionのみをセッションに保存
 
                 # CartMandateを取得（user_authorization生成に必要）
                 cart_mandate = session.get("cart_mandate")
@@ -1442,9 +1443,11 @@ class ShoppingAgent(BaseAgent):
                 # AP2完全準拠: WebAuthn署名検証成功後、決済実行ステップへ進む
                 # 決済実行はLangGraphの execute_payment_node で実行される
                 session["payment_webauthn_assertion"] = attestation
-                session["step"] = "payment_execution"
 
-                # セッション保存
+                # LangGraphベストプラクティス: stepの更新はCheckpointerに任せる
+                # 次のLangGraph実行で、webauthn_auth_nodeが自動的に次のステップに進む
+
+                # セッション保存（payment_webauthn_assertionのみ、stepは保存しない）
                 await self._update_session(session_id, session)
 
                 logger.info(
@@ -1551,8 +1554,9 @@ class ShoppingAgent(BaseAgent):
         # Langfuseトレース設定（AP2完全準拠: オブザーバビリティ機能）
         from services.shopping_agent.langgraph_shopping_flow import LANGFUSE_ENABLED, CallbackHandler
 
-        # 初期状態（Stateにはシリアライズ可能なデータのみ）
-        initial_state = {
+        # 入力状態（Checkpointerと連携して状態を継続）
+        # Checkpointerが既存の状態を読み込み、この入力とマージする
+        input_state = {
             "user_input": user_input,
             "session_id": session_id,
             "session": session,
@@ -1565,6 +1569,11 @@ class ShoppingAgent(BaseAgent):
             # グラフ実行（AP2完全準拠: IntentMandate → CartMandate → PaymentMandateフロー）
             # Langfuseトレースをセッションごとに統合（全グラフ実行が1つのトレースに含まれる）
             config = {}
+
+            # Checkpointer用のthread_id設定（AP2完全準拠: トレース継続）
+            # 同じsession_idで複数回呼び出すことで、1つの連続したトレースになる
+            config["configurable"] = {"thread_id": session_id}
+
             if LANGFUSE_ENABLED and CallbackHandler:
                 # セッションごとにCallbackHandlerインスタンスを取得または作成
                 # 同じハンドラーを再利用することで、すべてのグラフ実行が1つのトレースに統合される
@@ -1589,7 +1598,9 @@ class ShoppingAgent(BaseAgent):
                 }
                 config["tags"] = ["shopping_agent", "ap2_protocol"]
 
-            result = await self.shopping_flow_graph.ainvoke(initial_state, config=config)
+            # Checkpointerを使った呼び出し
+            # thread_idを指定することで、既存の状態を読み込み、input_stateとマージする
+            result = await self.shopping_flow_graph.ainvoke(input_state, config=config)
 
             # イベントをストリーミング出力
             for event_dict in result["events"]:
@@ -1600,7 +1611,8 @@ class ShoppingAgent(BaseAgent):
                 else:
                     yield StreamEvent(**event_dict)
 
-            # セッション更新
+            # データベースにセッション状態を保存
+            # ルーティングロジックに必要なstepフィールドを含む完全なセッションを保存
             await self._update_session(session_id, result["session"])
 
         except Exception as e:
