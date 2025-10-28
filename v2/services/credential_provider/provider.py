@@ -33,6 +33,26 @@ from v2.common.redis_client import RedisClient, TokenStore, SessionStore
 logger = get_logger(__name__, service_name='credential_provider')
 
 
+# ========================================
+# 定数定義
+# ========================================
+
+# HTTP Timeout設定（秒）
+PAYMENT_NETWORK_TIMEOUT = 10.0  # Payment Network通信のタイムアウト
+
+# AP2ステータス定数
+STATUS_SUCCESS = "success"
+STATUS_COMPLETED = "completed"
+STATUS_FAILED = "failed"
+
+# Redis TTL設定（秒）
+WEBAUTHN_CHALLENGE_TTL = 60  # WebAuthn challengeのTTL
+STEPUP_SESSION_TTL = 600  # 10分（Step-upセッションのTTL）
+
+# トークン有効期限（分）
+TOKEN_EXPIRY_MINUTES = 15  # トークンの有効期限
+
+
 class CredentialProviderService(BaseAgent):
     """
     Credential Provider
@@ -175,10 +195,10 @@ class CredentialProviderService(BaseAgent):
                 await self.challenge_store.save_session(
                     challenge_b64url,
                     challenge_data,
-                    ttl_seconds=60  # 60秒で自動削除
+                    ttl_seconds=WEBAUTHN_CHALLENGE_TTL  # WebAuthn challengeのTTL
                 )
 
-                logger.info(f"[register_passkey_challenge] Saved challenge to Redis KV (TTL: 60s)")
+                logger.info(f"[register_passkey_challenge] Saved challenge to Redis KV (TTL: {WEBAUTHN_CHALLENGE_TTL}s)")
 
                 # 注意: 現在は"none" attestationを使用（デモ環境）
                 # 本番環境では"direct"または"indirect"を使用し、challengeを厳密に検証すべき
@@ -653,7 +673,7 @@ class CredentialProviderService(BaseAgent):
                 from datetime import timedelta
                 import secrets
                 now = datetime.now(timezone.utc)
-                expires_at = now + timedelta(minutes=15)  # 15分間有効
+                expires_at = now + timedelta(minutes=TOKEN_EXPIRY_MINUTES)  # 15分間有効
 
                 # 暗号学的に安全なトークン生成
                 # secrets.token_urlsafe()を使用（cryptographically strong random）
@@ -927,7 +947,7 @@ class CredentialProviderService(BaseAgent):
                 # Step-upセッション作成
                 session_id = f"stepup_{uuid.uuid4().hex[:16]}"
                 now = datetime.now(timezone.utc)
-                expires_at = now + timedelta(minutes=10)  # 10分間有効
+                expires_at = now + timedelta(seconds=STEPUP_SESSION_TTL)  # 10分間有効
 
                 session_data = {
                     "session_id": session_id,
@@ -942,7 +962,7 @@ class CredentialProviderService(BaseAgent):
                 }
 
                 # Redis KVに保存（TTL: 10分）
-                await self.session_store.save_session(session_id, session_data, ttl_seconds=10*60)
+                await self.session_store.save_session(session_id, session_data, ttl_seconds=STEPUP_SESSION_TTL)
 
                 # Step-up URL生成
                 step_up_url = f"http://localhost:8003/step-up/{session_id}"
@@ -1202,15 +1222,15 @@ class CredentialProviderService(BaseAgent):
 
                 status = request.get("status", "success")
 
-                if status == "success":
-                    # Step-up成功 - トークン発行
+                # ===== Step-up成功 - トークン発行 =====
+                if status == STATUS_SUCCESS:
                     import secrets
                     random_bytes = secrets.token_urlsafe(32)
                     token = f"tok_stepup_{uuid.uuid4().hex[:8]}_{random_bytes[:24]}"
 
                     # トークンストアに保存（Redis KV、TTL: 15分）
                     now = datetime.now(timezone.utc)
-                    token_expires_at = now + timedelta(minutes=15)
+                    token_expires_at = now + timedelta(minutes=TOKEN_EXPIRY_MINUTES)
 
                     token_data = {
                         "user_id": session_data["user_id"],
@@ -1311,9 +1331,9 @@ class CredentialProviderService(BaseAgent):
                         "message": "Step-up session expired"
                     }
 
-                # 完了状態チェック
+                # ===== 完了状態チェック =====
                 status = session_data.get("status")
-                if status == "completed":
+                if status == STATUS_COMPLETED:
                     logger.info(f"[verify_step_up] Step-up verified successfully: {session_id}")
                     return {
                         "verified": True,
@@ -1321,7 +1341,7 @@ class CredentialProviderService(BaseAgent):
                         "token": session_data.get("token"),
                         "message": "Step-up authentication verified successfully"
                     }
-                elif status == "failed":
+                elif status == STATUS_FAILED:
                     logger.warning(f"[verify_step_up] Step-up failed: {session_id}")
                     return {
                         "verified": False,
@@ -1774,7 +1794,7 @@ class CredentialProviderService(BaseAgent):
                             "timestamp": datetime.now(timezone.utc).isoformat()
                         }
                     },
-                    timeout=10.0  # 10秒タイムアウト
+                    timeout=PAYMENT_NETWORK_TIMEOUT  # 10秒タイムアウト
                 )
 
                 if response.status_code == 200:
