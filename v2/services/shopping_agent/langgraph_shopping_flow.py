@@ -730,9 +730,17 @@ async def fetch_carts_node(state: ShoppingFlowState, agent_instance: Any) -> Sho
         )
 
         if not cart_candidates:
+            # AP2完全準拠: カート候補が空の場合のユーザーフレンドリーなメッセージ
+            # Merchant Agentがタイムアウトまたは承認待ちの可能性がある
             events.append({
                 "type": "agent_text",
-                "content": "申し訳ございません。該当する商品が見つかりませんでした。"
+                "content": (
+                    "申し訳ございません。現在カート候補を作成できませんでした。\n\n"
+                    "以下の理由が考えられます:\n"
+                    "- 該当する商品が見つかりませんでした\n"
+                    "- Merchantの承認待機中にタイムアウトしました（手動承認モードの場合）\n\n"
+                    "もう一度お試しいただくか、別の条件でお探しください。"
+                )
             })
             session["step"] = "error"
 
@@ -844,6 +852,8 @@ async def select_cart_node(state: ShoppingFlowState, agent_instance: Any) -> Sho
             }
 
         # AP2完全準拠: CartMandateを取得
+        # Merchant Agentがポーリングで承認待ちをハンドリングするため、
+        # ここに届くCartMandateは常に署名済み
         cart_mandate = selected_cart_candidate.get("cart_mandate")
         if not cart_mandate:
             raise ValueError("CartMandate not found in selected cart")
@@ -851,7 +861,7 @@ async def select_cart_node(state: ShoppingFlowState, agent_instance: Any) -> Sho
         # Merchant署名の暗号学的検証（AP2完全準拠）
         merchant_signature = cart_mandate.get("merchant_signature")
         if not merchant_signature:
-            raise ValueError("Merchant signature not found in CartMandate")
+            raise ValueError("Merchant signature not found in CartMandate (not pending)")
 
         # merchant_signatureをSignatureオブジェクトに変換（AP2完全準拠）
         if isinstance(merchant_signature, dict):

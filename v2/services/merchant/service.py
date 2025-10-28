@@ -236,6 +236,76 @@ class MerchantService(BaseAgent):
                 logger.error(f"[sign_cart_mandate] Error: {e}", exc_info=True)
                 raise HTTPException(status_code=400, detail=str(e))
 
+        @self.app.post("/poll/cart")
+        async def poll_cart_mandate(request: Dict[str, Any]):
+            """
+            POST /poll/cart - CartMandate承認ステータスをポーリング
+
+            AP2完全準拠: 署名依頼と分離されたポーリングエンドポイント
+            cart_mandate_idのみを受け取り、現在のステータスと署名済みCartMandateを返す
+
+            リクエスト:
+            {
+              "cart_mandate_id": "cart_abc123"
+            }
+
+            レスポンス:
+            - 承認待ち: {"status": "pending_merchant_signature", "cart_mandate_id": "cart_abc123"}
+            - 承認完了: {"status": "signed", "signed_cart_mandate": {...}}
+            - 拒否: {"status": "rejected", "cart_mandate_id": "cart_abc123", "reason": "..."}
+            - 未登録: {"status": "not_found", "cart_mandate_id": "cart_abc123"}
+            """
+            try:
+                cart_mandate_id = request.get("cart_mandate_id")
+                if not cart_mandate_id:
+                    raise HTTPException(status_code=400, detail="cart_mandate_id is required")
+
+                async with self.db_manager.get_session() as session:
+                    # DBからCartMandateを取得
+                    mandate = await MandateCRUD.get_by_id(session, cart_mandate_id)
+
+                    if not mandate:
+                        logger.warning(f"[poll_cart_mandate] CartMandate not found: {cart_mandate_id}")
+                        return {
+                            "status": "not_found",
+                            "cart_mandate_id": cart_mandate_id
+                        }
+
+                    # ステータスに応じてレスポンスを返す
+                    if mandate.status == "signed":
+                        # 承認完了: 署名済みCartMandateを返す
+                        payload = json.loads(mandate.payload) if isinstance(mandate.payload, str) else mandate.payload
+                        logger.info(f"[poll_cart_mandate] CartMandate signed: {cart_mandate_id}")
+                        return {
+                            "status": "signed",
+                            "signed_cart_mandate": payload
+                        }
+                    elif mandate.status == "pending_merchant_signature":
+                        # 承認待ち
+                        logger.debug(f"[poll_cart_mandate] CartMandate still pending: {cart_mandate_id}")
+                        return {
+                            "status": "pending_merchant_signature",
+                            "cart_mandate_id": cart_mandate_id
+                        }
+                    elif mandate.status == "rejected":
+                        # 拒否
+                        logger.info(f"[poll_cart_mandate] CartMandate rejected: {cart_mandate_id}")
+                        return {
+                            "status": "rejected",
+                            "cart_mandate_id": cart_mandate_id,
+                            "reason": mandate.rejection_reason or "Rejected by merchant"
+                        }
+                    else:
+                        # 想定外のステータス
+                        logger.error(f"[poll_cart_mandate] Unexpected status: {mandate.status}")
+                        raise HTTPException(status_code=500, detail=f"Unexpected status: {mandate.status}")
+
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"[poll_cart_mandate] Error: {e}", exc_info=True)
+                raise HTTPException(status_code=500, detail=str(e))
+
         @self.app.get("/products")
         async def list_products(limit: int = 100):
             """
