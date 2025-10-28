@@ -33,6 +33,26 @@ from v2.common.redis_client import RedisClient, TokenStore, SessionStore
 logger = get_logger(__name__, service_name='credential_provider')
 
 
+# ========================================
+# 定数定義
+# ========================================
+
+# HTTP Timeout設定（秒）
+PAYMENT_NETWORK_TIMEOUT = 10.0  # Payment Network通信のタイムアウト
+
+# AP2ステータス定数
+STATUS_SUCCESS = "success"
+STATUS_COMPLETED = "completed"
+STATUS_FAILED = "failed"
+
+# Redis TTL設定（秒）
+WEBAUTHN_CHALLENGE_TTL = 60  # WebAuthn challengeのTTL
+STEPUP_SESSION_TTL = 600  # 10分（Step-upセッションのTTL）
+
+# トークン有効期限（分）
+TOKEN_EXPIRY_MINUTES = 15  # トークンの有効期限
+
+
 class CredentialProviderService(BaseAgent):
     """
     Credential Provider
@@ -82,6 +102,34 @@ class CredentialProviderService(BaseAgent):
 
         # 領収書はデータベースで永続化
         # receiptsテーブルを使用
+
+        # ヘルパークラスの初期化
+        from services.credential_provider.utils import (
+            PasskeyHelpers,
+            PaymentMethodHelpers,
+            StepUpHelpers,
+            ReceiptHelpers,
+            TokenHelpers,
+        )
+
+        self.passkey_helpers = PasskeyHelpers(
+            db_manager=self.db_manager,
+            key_manager=self.key_manager,
+            attestation_manager=self.attestation_manager,
+            challenge_store=self.challenge_store
+        )
+        self.payment_method_helpers = PaymentMethodHelpers(
+            db_manager=self.db_manager,
+            token_store=self.token_store
+        )
+        self.stepup_helpers = StepUpHelpers(
+            db_manager=self.db_manager,
+            session_store=self.session_store,
+            challenge_store=self.challenge_store,
+            payment_network_url=self.payment_network_url
+        )
+        self.receipt_helpers = ReceiptHelpers(db_manager=self.db_manager)
+        self.token_helpers = TokenHelpers(db_manager=self.db_manager)
 
         # 起動イベントハンドラー登録
         @self.app.on_event("startup")
@@ -175,10 +223,10 @@ class CredentialProviderService(BaseAgent):
                 await self.challenge_store.save_session(
                     challenge_b64url,
                     challenge_data,
-                    ttl_seconds=60  # 60秒で自動削除
+                    ttl_seconds=WEBAUTHN_CHALLENGE_TTL  # WebAuthn challengeのTTL
                 )
 
-                logger.info(f"[register_passkey_challenge] Saved challenge to Redis KV (TTL: 60s)")
+                logger.info(f"[register_passkey_challenge] Saved challenge to Redis KV (TTL: {WEBAUTHN_CHALLENGE_TTL}s)")
 
                 # 注意: 現在は"none" attestationを使用（デモ環境）
                 # 本番環境では"direct"または"indirect"を使用し、challengeを厳密に検証すべき
@@ -653,7 +701,7 @@ class CredentialProviderService(BaseAgent):
                 from datetime import timedelta
                 import secrets
                 now = datetime.now(timezone.utc)
-                expires_at = now + timedelta(minutes=15)  # 15分間有効
+                expires_at = now + timedelta(minutes=TOKEN_EXPIRY_MINUTES)  # 15分間有効
 
                 # 暗号学的に安全なトークン生成
                 # secrets.token_urlsafe()を使用（cryptographically strong random）
@@ -927,7 +975,7 @@ class CredentialProviderService(BaseAgent):
                 # Step-upセッション作成
                 session_id = f"stepup_{uuid.uuid4().hex[:16]}"
                 now = datetime.now(timezone.utc)
-                expires_at = now + timedelta(minutes=10)  # 10分間有効
+                expires_at = now + timedelta(seconds=STEPUP_SESSION_TTL)  # 10分間有効
 
                 session_data = {
                     "session_id": session_id,
@@ -942,7 +990,7 @@ class CredentialProviderService(BaseAgent):
                 }
 
                 # Redis KVに保存（TTL: 10分）
-                await self.session_store.save_session(session_id, session_data, ttl_seconds=10*60)
+                await self.session_store.save_session(session_id, session_data, ttl_seconds=STEPUP_SESSION_TTL)
 
                 # Step-up URL生成
                 step_up_url = f"http://localhost:8003/step-up/{session_id}"
@@ -1202,15 +1250,15 @@ class CredentialProviderService(BaseAgent):
 
                 status = request.get("status", "success")
 
-                if status == "success":
-                    # Step-up成功 - トークン発行
+                # ===== Step-up成功 - トークン発行 =====
+                if status == STATUS_SUCCESS:
                     import secrets
                     random_bytes = secrets.token_urlsafe(32)
                     token = f"tok_stepup_{uuid.uuid4().hex[:8]}_{random_bytes[:24]}"
 
                     # トークンストアに保存（Redis KV、TTL: 15分）
                     now = datetime.now(timezone.utc)
-                    token_expires_at = now + timedelta(minutes=15)
+                    token_expires_at = now + timedelta(minutes=TOKEN_EXPIRY_MINUTES)
 
                     token_data = {
                         "user_id": session_data["user_id"],
@@ -1311,9 +1359,9 @@ class CredentialProviderService(BaseAgent):
                         "message": "Step-up session expired"
                     }
 
-                # 完了状態チェック
+                # ===== 完了状態チェック =====
                 status = session_data.get("status")
-                if status == "completed":
+                if status == STATUS_COMPLETED:
                     logger.info(f"[verify_step_up] Step-up verified successfully: {session_id}")
                     return {
                         "verified": True,
@@ -1321,7 +1369,7 @@ class CredentialProviderService(BaseAgent):
                         "token": session_data.get("token"),
                         "message": "Step-up authentication verified successfully"
                     }
-                elif status == "failed":
+                elif status == STATUS_FAILED:
                     logger.warning(f"[verify_step_up] Step-up failed: {session_id}")
                     return {
                         "verified": False,
@@ -1395,58 +1443,12 @@ class CredentialProviderService(BaseAgent):
         @self.app.post("/receipts")
         async def receive_receipt(receipt_data: Dict[str, Any]):
             """
-            POST /receipts - 領収書受信
-            
+            POST /receipts - 領収書受信（ヘルパーメソッドに委譲）
+
             AP2 Step 29対応: Payment Processorから領収書通知を受信
-            
-            リクエスト:
-            {
-              "transaction_id": "txn_abc123",
-              "receipt_url": "http://localhost:8004/receipts/txn_abc123.pdf",
-              "payer_id": "user_demo_001",
-              "amount": {"value": "8068.00", "currency": "JPY"},
-              "timestamp": "2025-10-18T12:34:56Z"
-            }
-            
-            レスポンス:
-            {
-              "status": "received",
-              "message": "Receipt stored successfully"
-            }
             """
             try:
-                transaction_id = receipt_data.get("transaction_id")
-                receipt_url = receipt_data.get("receipt_url")
-                payer_id = receipt_data.get("payer_id")
-
-                if not transaction_id or not receipt_url or not payer_id:
-                    raise HTTPException(
-                        status_code=400,
-                        detail="transaction_id, receipt_url, and payer_id are required"
-                    )
-
-                # 領収書情報をDBに保存
-                async with self.db_manager.get_session() as session:
-                    receipt = await ReceiptCRUD.create(session, {
-                        "user_id": payer_id,
-                        "transaction_id": transaction_id,
-                        "receipt_url": receipt_url,
-                        "amount": receipt_data.get("amount"),
-                        "payment_timestamp": receipt_data.get("timestamp")
-                    })
-
-                logger.info(
-                    f"[CredentialProvider] Receipt received and stored to DB: "
-                    f"transaction_id={transaction_id}, payer_id={payer_id}, "
-                    f"receipt_url={receipt_url}"
-                )
-
-                return {
-                    "status": "received",
-                    "message": "Receipt stored successfully",
-                    "transaction_id": transaction_id
-                }
-                
+                return await self.receipt_helpers.receive_receipt(receipt_data)
             except HTTPException:
                 raise
             except Exception as e:
@@ -1456,34 +1458,10 @@ class CredentialProviderService(BaseAgent):
         @self.app.get("/receipts")
         async def get_receipts(user_id: str):
             """
-            GET /receipts?user_id=... - ユーザーの領収書一覧取得
-
-            レスポンス:
-            {
-              "user_id": "user_demo_001",
-              "receipts": [
-                {
-                  "transaction_id": "txn_abc123",
-                  "receipt_url": "...",
-                  "amount": {...},
-                  "received_at": "...",
-                  "payment_timestamp": "..."
-                }
-              ]
-            }
+            GET /receipts?user_id=... - ユーザーの領収書一覧取得（ヘルパーメソッドに委譲）
             """
             try:
-                # DBから領収書を取得
-                async with self.db_manager.get_session() as session:
-                    receipt_records = await ReceiptCRUD.get_by_user_id(session, user_id)
-                    receipts = [receipt.to_dict() for receipt in receipt_records]
-
-                return {
-                    "user_id": user_id,
-                    "receipts": receipts,
-                    "total_count": len(receipts)
-                }
-
+                return await self.receipt_helpers.get_receipts(user_id)
             except Exception as e:
                 logger.error(f"[get_receipts] Error: {e}", exc_info=True)
                 raise HTTPException(status_code=500, detail=str(e))
@@ -1774,7 +1752,7 @@ class CredentialProviderService(BaseAgent):
                             "timestamp": datetime.now(timezone.utc).isoformat()
                         }
                     },
-                    timeout=10.0  # 10秒タイムアウト
+                    timeout=PAYMENT_NETWORK_TIMEOUT  # 10秒タイムアウト
                 )
 
                 if response.status_code == 200:
@@ -1810,22 +1788,13 @@ class CredentialProviderService(BaseAgent):
 
     def _generate_token(self, payment_mandate: Dict[str, Any], attestation: Dict[str, Any]) -> str:
         """
-        認証トークン発行（WebAuthn attestation検証後）
+        認証トークン発行（WebAuthn attestation検証後）（ヘルパーメソッドに委譲）
 
         AP2仕様準拠：
         - 暗号学的に安全なトークンを生成
         - トークンは一時的（有効期限付き）
         """
-        import secrets
-
-        # 暗号学的に安全なトークン生成
-        # secrets.token_urlsafe()を使用（cryptographically strong random）
-        random_bytes = secrets.token_urlsafe(32)  # 32バイト = 256ビット
-        secure_token = f"cred_token_{uuid.uuid4().hex[:8]}_{random_bytes[:24]}"
-
-        logger.info(f"[CredentialProvider] Generated attestation token for user: {payment_mandate.get('payer_id')}")
-
-        return secure_token
+        return self.token_helpers.generate_token(payment_mandate, attestation)
 
     async def _save_attestation(
         self,
@@ -1836,32 +1805,13 @@ class CredentialProviderService(BaseAgent):
         agent_token: Optional[str] = None
     ):
         """
-        Attestationをデータベースに保存
+        Attestationをデータベースに保存（ヘルパーメソッドに委譲）
         """
-        from sqlalchemy import Column, String, Integer, DateTime, Text
-        from v2.common.database import Base
-
-        # AttestationDBモデルを使用してSQLAlchemyに保存
-        async with self.db_manager.get_session() as session:
-            from v2.common.database import Attestation
-
-            attestation_record = Attestation(
-                id=str(uuid.uuid4()),
-                user_id=user_id,
-                attestation_raw=json.dumps(attestation_raw),
-                verified=1 if verified else 0,  # SQLiteはboolを0/1で保存
-                verification_details=json.dumps({
-                    "token": token,
-                    "agent_token": agent_token,  # 決済ネットワークから取得したAgent Token
-                    "verified_at": datetime.now(timezone.utc).isoformat()
-                }) if token else None
-            )
-
-            session.add(attestation_record)
-            await session.commit()
-
-        logger.info(
-            f"[CredentialProvider] Saved attestation: "
-            f"user={user_id}, verified={verified}, agent_token={agent_token[:32] if agent_token else 'None'}..."
+        await self.token_helpers.save_attestation(
+            user_id=user_id,
+            attestation_raw=attestation_raw,
+            verified=verified,
+            token=token,
+            agent_token=agent_token
         )
 

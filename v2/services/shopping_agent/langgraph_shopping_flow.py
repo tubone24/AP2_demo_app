@@ -23,8 +23,9 @@ import asyncio
 import json
 import logging
 import re
-from typing import Any, Dict, List, Optional, TypedDict, Annotated
+from typing import Any, Dict, List, Optional, TypedDict
 from langgraph.graph import StateGraph, END
+from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
@@ -61,17 +62,16 @@ if LANGFUSE_ENABLED:
 # State定義
 # ============================================================================
 
-def add_events(existing: List[Dict[str, Any]], new: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """イベントのreducer（新しいイベントを追加）"""
-    return existing + new
-
-
 class ShoppingFlowState(TypedDict):
-    """LangGraph StateGraphの状態"""
+    """LangGraph StateGraphの状態
+
+    注意: eventsはreducerを使わず、各ノードが新しいイベントのみを返す
+    これにより、フロントエンドには今回の実行で生成されたイベントのみが送信される
+    """
     user_input: str
     session_id: str
     session: Dict[str, Any]
-    events: Annotated[List[Dict[str, Any]], add_events]
+    events: List[Dict[str, Any]]  # reducerなし：各ノードが新しいイベントのみを返す
     next_step: Optional[str]
     error: Optional[str]
 
@@ -414,6 +414,13 @@ async def select_cp_node(state: ShoppingFlowState, agent_instance: Any) -> Shopp
     try:
         user_id = session.get("user_id", "anonymous")
 
+        # デバッグログ: Checkpointerによるループ問題の調査
+        logger.info(
+            f"[select_cp_node] DEBUG: user_input='{user_input}', "
+            f"session['step']='{session.get('step')}', "
+            f"is_digit={user_input.isdigit()}"
+        )
+
         # AP2完全準拠: DID Resolverを使ってCredential Providerリストを取得
         # 本番環境: ユーザーDBから取得したCP DIDリストを使用
         # デモ環境: デフォルトのCP DIDを使用
@@ -723,9 +730,17 @@ async def fetch_carts_node(state: ShoppingFlowState, agent_instance: Any) -> Sho
         )
 
         if not cart_candidates:
+            # AP2完全準拠: カート候補が空の場合のユーザーフレンドリーなメッセージ
+            # Merchant Agentがタイムアウトまたは承認待ちの可能性がある
             events.append({
                 "type": "agent_text",
-                "content": "申し訳ございません。該当する商品が見つかりませんでした。"
+                "content": (
+                    "申し訳ございません。現在カート候補を作成できませんでした。\n\n"
+                    "以下の理由が考えられます:\n"
+                    "- 該当する商品が見つかりませんでした\n"
+                    "- Merchantの承認待機中にタイムアウトしました（手動承認モードの場合）\n\n"
+                    "もう一度お試しいただくか、別の条件でお探しください。"
+                )
             })
             session["step"] = "error"
 
@@ -837,6 +852,8 @@ async def select_cart_node(state: ShoppingFlowState, agent_instance: Any) -> Sho
             }
 
         # AP2完全準拠: CartMandateを取得
+        # Merchant Agentがポーリングで承認待ちをハンドリングするため、
+        # ここに届くCartMandateは常に署名済み
         cart_mandate = selected_cart_candidate.get("cart_mandate")
         if not cart_mandate:
             raise ValueError("CartMandate not found in selected cart")
@@ -844,7 +861,7 @@ async def select_cart_node(state: ShoppingFlowState, agent_instance: Any) -> Sho
         # Merchant署名の暗号学的検証（AP2完全準拠）
         merchant_signature = cart_mandate.get("merchant_signature")
         if not merchant_signature:
-            raise ValueError("Merchant signature not found in CartMandate")
+            raise ValueError("Merchant signature not found in CartMandate (not pending)")
 
         # merchant_signatureをSignatureオブジェクトに変換（AP2完全準拠）
         if isinstance(merchant_signature, dict):
@@ -906,18 +923,20 @@ async def cart_signature_waiting_node(state: ShoppingFlowState) -> ShoppingFlowS
 
     # `_cart_signature_completed`トークンで署名完了を検知（AP2完全準拠）
     if user_input.startswith("_cart_signature_completed"):
-        # 署名完了、次のステップへ
+        # 署名完了、次のステップ（支払い方法選択）へ自動遷移
         session["step"] = "payment_mandate_creation"
         events.append({
             "type": "agent_text",
             "content": "✅ CartMandate署名完了しました！"
         })
 
+        # LangGraphベストプラクティス: 次のステップが明確な場合は自動遷移
+        # AP2完全準拠: 署名完了後は支払い方法選択（ステップ13-14）に進む
         return {
             **state,
             "session": session,
             "events": events,
-            "next_step": END
+            "next_step": "select_payment_method"
         }
     else:
         # 署名待ちメッセージを表示（AP2完全準拠）
@@ -1122,28 +1141,52 @@ async def step_up_auth_node(state: ShoppingFlowState, agent_instance: Any) -> Sh
 
 
 async def webauthn_auth_node(state: ShoppingFlowState, agent_instance: Any) -> ShoppingFlowState:
-    """ノード11: WebAuthn/Passkey認証（AP2ステップ19-22）"""
+    """ノード11: WebAuthn/Passkey認証待機（AP2ステップ19-22）
+
+    LangGraphベストプラクティス: 外部API待機パターン
+    - `_payment_signature_completed`トークンで署名完了を検知
+    - 署名完了後、execute_paymentノードに自動遷移
+    """
     session = state["session"]
+    user_input = state["user_input"]
     events = []
 
-    payment_mandate = session["payment_mandate"]
+    # `_payment_signature_completed`トークンで署名完了を検知
+    if user_input.startswith("_payment_signature_completed"):
+        # 署名完了、決済実行へ
+        events.append({
+            "type": "agent_text",
+            "content": "✅ PaymentMandate署名完了しました！決済を実行します..."
+        })
 
-    # WebAuthn署名リクエスト（AP2完全準拠）
-    # フロントエンド互換性のため、mandateフィールド名とmandate_type="payment"を使用
-    events.append({
-        "type": "signature_request",
-        "mandate": payment_mandate,
-        "mandate_type": "payment"
-    })
+        # LangGraphベストプラクティス: 次のステップが明確な場合は自動遷移
+        # AP2完全準拠: 署名完了後は決済実行（ステップ23-27）に進む
+        return {
+            **state,
+            "session": session,
+            "events": events,
+            "next_step": "execute_payment"
+        }
+    else:
+        # 初回アクセス: WebAuthn署名リクエスト
+        payment_mandate = session["payment_mandate"]
 
-    session["step"] = "webauthn_signature_requested"
+        # WebAuthn署名リクエスト（AP2完全準拠）
+        # フロントエンド互換性のため、mandateフィールド名とmandate_type="payment"を使用
+        events.append({
+            "type": "signature_request",
+            "mandate": payment_mandate,
+            "mandate_type": "payment"
+        })
 
-    return {
-        **state,
-        "session": session,
-        "events": events,
-        "next_step": END  # 外部API（POST /payment/submit-signature）を待つ
-    }
+        session["step"] = "webauthn_signature_requested"
+
+        return {
+            **state,
+            "session": session,
+            "events": events,
+            "next_step": END  # 外部API（POST /payment/submit-signature）を待つ
+        }
 
 
 async def execute_payment_node(state: ShoppingFlowState, agent_instance: Any) -> ShoppingFlowState:
@@ -1451,9 +1494,15 @@ def create_shopping_flow_graph(agent_instance: Any):
             node_name,
             route_from_node,
             {
+                "greeting": "greeting",
+                "collect_intent": "collect_intent",
+                "collect_shipping": "collect_shipping",
                 "select_cp": "select_cp",  # AP2 Step 4
                 "get_payment_methods": "get_payment_methods",  # AP2 Step 6-7
                 "fetch_carts": "fetch_carts",  # AP2 Step 8-12
+                "select_cart": "select_cart",
+                "cart_signature_waiting": "cart_signature_waiting",
+                "select_payment_method": "select_payment_method",  # AP2 Step 13-18 (追加)
                 "step_up_auth": "step_up_auth",
                 "webauthn_auth": "webauthn_auth",
                 "execute_payment": "execute_payment",
@@ -1467,9 +1516,17 @@ def create_shopping_flow_graph(agent_instance: Any):
     workflow.add_edge("completed", END)
     workflow.add_edge("error", END)
 
-    # コンパイル
-    compiled = workflow.compile()
+    # Checkpointerを追加（AP2完全準拠: トレース継続のための状態永続化）
+    # MemorySaverを使ってthread_idベースの状態管理を実現
+    # これにより、同じsession_idでの複数の呼び出しが1つの連続したトレースになる
+    checkpointer = MemorySaver()
 
-    logger.info("[create_shopping_flow_graph] LangGraph shopping flow compiled successfully (14 nodes, AP2 compliant)")
+    # コンパイル（Checkpointer付き）
+    compiled = workflow.compile(checkpointer=checkpointer)
+
+    logger.info(
+        "[create_shopping_flow_graph] LangGraph shopping flow compiled successfully "
+        "(14 nodes, AP2 compliant, with checkpointer for trace continuity)"
+    )
 
     return compiled
