@@ -82,6 +82,19 @@ class MerchantService(BaseAgent):
         # 署名モード設定（メモリ内管理、本番環境ではDBに保存）
         self.auto_sign_mode = DEFAULT_AUTO_SIGN_MODE
 
+        # ヘルパークラスの初期化
+        from services.merchant.utils import (
+            SignatureHelpers,
+            ValidationHelpers,
+            InventoryHelpers,
+            JWTHelpers,
+        )
+
+        self.signature_helpers = SignatureHelpers()
+        self.validation_helpers = ValidationHelpers(merchant_id=self.merchant_id)
+        self.inventory_helpers = InventoryHelpers(db_manager=self.db_manager)
+        self.jwt_helpers = JWTHelpers(key_manager=self.key_manager)
+
         # 起動イベントハンドラー登録
         @self.app.on_event("startup")
         async def startup_event():
@@ -734,72 +747,26 @@ class MerchantService(BaseAgent):
 
     def _validate_cart_mandate(self, cart_mandate: Dict[str, Any]):
         """
-        CartMandateを検証（AP2準拠）
+        CartMandateを検証（ヘルパーメソッドに委譲）
 
         - merchant_idが一致するか（_metadataから取得）
         - 価格が正しいか
         - 有効期限内か
         """
-        # AP2準拠：CartMandate.contents.cart_expiryを確認
-        contents = cart_mandate.get("contents")
-        if not contents:
-            raise ValueError("CartMandate.contents is missing")
-
-        # merchant_id確認（_metadataから取得）
-        metadata = cart_mandate.get("_metadata", {})
-        cart_merchant_id = metadata.get("merchant_id")
-        if cart_merchant_id and cart_merchant_id != self.merchant_id:
-            raise ValueError(f"Merchant ID mismatch: expected={self.merchant_id}, got={cart_merchant_id}")
-
-        # 有効期限確認（CartContents.cart_expiry）
-        cart_expiry_str = contents.get("cart_expiry")
-        if cart_expiry_str:
-            cart_expiry = datetime.fromisoformat(cart_expiry_str.replace('Z', '+00:00'))
-            if datetime.now(timezone.utc) > cart_expiry:
-                raise ValueError("CartMandate has expired")
-
-        cart_id = contents.get("id")
-        logger.info(f"[Merchant] CartMandate validation passed: {cart_id}")
+        self.validation_helpers.validate_cart_mandate(cart_mandate)
 
     async def _check_inventory(self, cart_mandate: Dict[str, Any]):
         """
-        在庫を確認（AP2準拠）
+        在庫を確認（ヘルパーメソッドに委譲）
 
         全アイテムの在庫が十分にあるか確認
         _metadata.raw_itemsから元のアイテム情報を取得
         """
-        # AP2準拠：_metadata.raw_itemsから商品情報を取得
-        metadata = cart_mandate.get("_metadata", {})
-        raw_items = metadata.get("raw_items", [])
-
-        if not raw_items:
-            # raw_itemsがない場合はスキップ（後方互換性）
-            logger.warning("[Merchant] No raw_items in _metadata, skipping inventory check")
-            return
-
-        async with self.db_manager.get_session() as session:
-            for item in raw_items:
-                sku = item.get("sku")
-                if not sku:
-                    continue
-
-                product = await ProductCRUD.get_by_sku(session, sku)
-                if not product:
-                    raise ValueError(f"Product not found: {sku}")
-
-                required_quantity = item.get("quantity", 0)
-                if product.inventory_count < required_quantity:
-                    raise ValueError(
-                        f"Insufficient inventory for {product.name}: "
-                        f"required={required_quantity}, available={product.inventory_count}"
-                    )
-
-        cart_id = cart_mandate.get("contents", {}).get("id")
-        logger.info(f"[Merchant] Inventory check passed for CartMandate: {cart_id}")
+        await self.inventory_helpers.check_inventory(cart_mandate)
 
     def _compute_cart_hash(self, cart_mandate: Dict[str, Any]) -> str:
         """
-        Cart Contentsのハッシュを計算
+        Cart Contentsのハッシュを計算（ヘルパーメソッドに委譲）
 
         Args:
             cart_mandate: CartMandate
@@ -807,12 +774,11 @@ class MerchantService(BaseAgent):
         Returns:
             str: cart_hash
         """
-        from v2.common.user_authorization import compute_mandate_hash
-        return compute_mandate_hash(cart_mandate)
+        return self.signature_helpers.compute_cart_hash(cart_mandate)
 
     def _build_jwt_header(self, merchant_id: str) -> Dict[str, str]:
         """
-        JWTヘッダーを構築
+        JWTヘッダーを構築（ヘルパーメソッドに委譲）
 
         Args:
             merchant_id: Merchant ID
@@ -820,15 +786,11 @@ class MerchantService(BaseAgent):
         Returns:
             Dict[str, str]: JWTヘッダー
         """
-        return {
-            "alg": "ES256",  # ECDSA with SHA-256
-            "kid": f"{merchant_id}#key-1",  # Key ID
-            "typ": "JWT"
-        }
+        return self.jwt_helpers.build_jwt_header(merchant_id)
 
     def _build_merchant_jwt_payload(self, merchant_id: str, cart_hash: str) -> Dict[str, Any]:
         """
-        Merchant用JWTペイロードを構築
+        Merchant用JWTペイロードを構築（ヘルパーメソッドに委譲）
 
         Args:
             merchant_id: Merchant ID
@@ -837,26 +799,11 @@ class MerchantService(BaseAgent):
         Returns:
             Dict[str, Any]: JWTペイロード
         """
-        import time
-        import uuid
-
-        now = datetime.now(timezone.utc)
-
-        # AP2準拠: JWTの有効期限は1時間（3600秒）に設定
-        # CartMandateのcart_expiry（15分）とは独立して、署名の有効性を保証
-        return {
-            "iss": merchant_id,  # Issuer: Merchant
-            "sub": merchant_id,  # Subject: Merchant (same as issuer)
-            "aud": "did:ap2:agent:payment_processor",  # Audience: Payment Processor
-            "iat": int(now.timestamp()),  # Issued At
-            "exp": int(now.timestamp()) + 3600,  # Expiry: 1時間後（AP2準拠）
-            "jti": str(uuid.uuid4()),  # JWT ID（リプレイ攻撃防止）
-            "cart_hash": cart_hash  # CartContentsのハッシュ
-        }
+        return self.jwt_helpers.build_merchant_jwt_payload(merchant_id, cart_hash)
 
     def _base64url_encode_jwt_part(self, data: Dict[str, Any]) -> str:
         """
-        JWTパート（header/payload）をBase64urlエンコード
+        JWTパート（header/payload）をBase64urlエンコード（ヘルパーメソッドに委譲）
 
         Args:
             data: エンコードするデータ
@@ -864,15 +811,11 @@ class MerchantService(BaseAgent):
         Returns:
             str: Base64urlエンコードされた文字列
         """
-        import base64
-        import json
-
-        json_str = json.dumps(data, separators=(',', ':'))
-        return base64.urlsafe_b64encode(json_str.encode('utf-8')).rstrip(b'=').decode('utf-8')
+        return self.jwt_helpers.base64url_encode_jwt_part(data)
 
     def _sign_jwt_message(self, message: str, key_id: str) -> str:
         """
-        JWTメッセージに署名
+        JWTメッセージに署名（ヘルパーメソッドに委譲）
 
         Args:
             message: 署名対象メッセージ（header_b64.payload_b64）
@@ -884,28 +827,7 @@ class MerchantService(BaseAgent):
         Raises:
             ValueError: 署名失敗時
         """
-        import base64
-        from cryptography.hazmat.primitives import hashes
-        from cryptography.hazmat.primitives.asymmetric import ec
-
-        try:
-            private_key = self.key_manager.get_private_key(key_id)
-
-            if private_key is None:
-                raise ValueError(f"Merchant private key not found: {key_id}")
-
-            # ECDSA署名（ES256: ECDSA with SHA-256）
-            signature_bytes = private_key.sign(
-                message.encode('utf-8'),
-                ec.ECDSA(hashes.SHA256())
-            )
-
-            # Base64URLエンコード（パディングなし）
-            return base64.urlsafe_b64encode(signature_bytes).rstrip(b'=').decode('utf-8')
-
-        except Exception as e:
-            logger.error(f"[_sign_jwt_message] Failed to generate signature: {e}")
-            raise ValueError(f"Failed to sign JWT message: {e}")
+        return self.jwt_helpers.sign_jwt_message(message, key_id)
 
     def _generate_merchant_authorization_jwt(
         self,
