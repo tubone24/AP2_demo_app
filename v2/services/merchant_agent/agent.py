@@ -31,6 +31,9 @@ from v2.common.logger import get_logger, log_http_request, log_http_response, lo
 # LangGraphエンジンのインポート
 from langgraph_merchant import MerchantLangGraphAgent
 
+# Merchant Agent ユーティリティモジュール
+from services.merchant_agent.utils import CartHelpers, ProductHelpers
+
 logger = get_logger(__name__, service_name='merchant_agent')
 
 
@@ -69,6 +72,10 @@ class MerchantAgent(BaseAgent):
         # このMerchantの情報（固定）
         self.merchant_id = "did:ap2:merchant:mugibo_merchant"
         self.merchant_name = "むぎぼーショップ"
+
+        # ヘルパークラスの初期化
+        self.cart_helpers = CartHelpers()
+        self.product_helpers = ProductHelpers(db_manager=self.db_manager)
 
         # LangGraphエンジンの初期化（AI化）
         self.langgraph_agent = None  # startup時に初期化
@@ -950,6 +957,18 @@ class MerchantAgent(BaseAgent):
         logger.info(f"[_create_multiple_cart_candidates] Created {len(cart_candidates)} cart candidates")
         return cart_candidates
 
+    def _build_cart_items_from_products(
+        self,
+        products: List[Any],
+        quantities: List[int]
+    ) -> tuple[List[Dict[str, Any]], int]:
+        """CartItem作成（ヘルパーメソッドに委譲）"""
+        return self.cart_helpers.build_cart_items_from_products(products, quantities)
+
+    def _calculate_cart_costs(self, subtotal_cents: int) -> Dict[str, int]:
+        """カートコスト計算（ヘルパーメソッドに委譲）"""
+        return self.cart_helpers.calculate_cart_costs(subtotal_cents)
+
     async def _create_cart_from_products(
         self,
         intent_mandate_id: str,
@@ -971,46 +990,14 @@ class MerchantAgent(BaseAgent):
         now = datetime.now(timezone.utc)
         expires_at = now + timedelta(minutes=30)
 
-        # CartItem作成
-        cart_items = []
-        subtotal_cents = 0
+        # 1. CartItem作成と小計計算
+        cart_items, subtotal_cents = self._build_cart_items_from_products(products, quantities)
 
-        for product, quantity in zip(products, quantities):
-            unit_price_cents = product.price
-            total_price_cents = unit_price_cents * quantity
-
-            metadata_dict = json.loads(product.product_metadata) if product.product_metadata else {}
-
-            # AP2準拠: PaymentCurrencyAmount型（value: float、円単位）
-            cart_items.append({
-                "id": f"item_{uuid.uuid4().hex[:8]}",
-                "name": product.name,
-                "description": product.description,
-                "quantity": quantity,
-                "unit_price": {
-                    "value": unit_price_cents / 100,  # AP2準拠: float型、円単位
-                    "currency": "JPY"
-                },
-                "total_price": {
-                    "value": total_price_cents / 100,  # AP2準拠: float型、円単位
-                    "currency": "JPY"
-                },
-                "image_url": metadata_dict.get("image_url"),
-                "sku": product.sku,
-                "category": metadata_dict.get("category"),
-                "brand": metadata_dict.get("brand")
-            })
-
-            subtotal_cents += total_price_cents
-
-        # 税金計算（10%）
-        tax_cents = int(subtotal_cents * 0.1)
-
-        # 送料計算（固定500円）
-        shipping_cost_cents = 50000
-
-        # 合計
-        total_cents = subtotal_cents + tax_cents + shipping_cost_cents
+        # 2. 税金、送料、合計計算
+        costs = self._calculate_cart_costs(subtotal_cents)
+        tax_cents = costs["tax_cents"]
+        shipping_cost_cents = costs["shipping_cost_cents"]
+        total_cents = costs["total_cents"]
 
         # CartMandate作成（未署名）
         # AP2準拠: CartContents + PaymentRequest構造
@@ -1292,49 +1279,5 @@ class MerchantAgent(BaseAgent):
         return None
 
     async def _sync_products_to_meilisearch(self, search_client: MeilisearchClient):
-        """ProductDBからMeilisearchへ全商品を同期（AP2準拠）"""
-        try:
-            # Meilisearchインデックス作成
-            await search_client.create_index(primary_key="id")
-            await search_client.configure_index()
-
-            # 既存のインデックスをクリア
-            await search_client.clear_index()
-
-            # ProductDBから全商品取得
-            async with self.db_manager.get_session() as session:
-                products = await ProductCRUD.list_all(session, limit=1000)
-
-                # Meilisearch用のドキュメント作成
-                documents = []
-                for product in products:
-                    # metadataがSQLAlchemyのMetaDataオブジェクトの場合は空辞書に
-                    if hasattr(product.metadata, '__class__') and product.metadata.__class__.__name__ == 'MetaData':
-                        metadata = {}
-                    else:
-                        metadata = product.metadata or {}
-
-                    # 検索用キーワード生成（商品名 + 説明）
-                    keywords = product.name
-                    if product.description:
-                        keywords += " " + product.description
-
-                    doc = {
-                        "id": product.id,
-                        "name": product.name,
-                        "description": product.description or "",
-                        "keywords": keywords,
-                        "category": metadata.get("category", ""),
-                        "brand": metadata.get("brand", ""),
-                        "price_jpy": product.price / 100.0,  # AP2準拠: float, 円単位
-                        "created_at": product.created_at.isoformat() if product.created_at else ""
-                    }
-                    documents.append(doc)
-
-                # Meilisearchに一括追加
-                if documents:
-                    await search_client.add_documents(documents)
-                    logger.info(f"[_sync_products_to_meilisearch] Synced {len(documents)} products to Meilisearch")
-
-        except Exception as e:
-            logger.error(f"[_sync_products_to_meilisearch] Failed to sync: {e}", exc_info=True)
+        """Meilisearch同期（ヘルパーメソッドに委譲）"""
+        await self.product_helpers.sync_products_to_meilisearch(search_client)

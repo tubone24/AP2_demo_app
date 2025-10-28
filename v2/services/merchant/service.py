@@ -797,6 +797,116 @@ class MerchantService(BaseAgent):
         cart_id = cart_mandate.get("contents", {}).get("id")
         logger.info(f"[Merchant] Inventory check passed for CartMandate: {cart_id}")
 
+    def _compute_cart_hash(self, cart_mandate: Dict[str, Any]) -> str:
+        """
+        Cart Contentsのハッシュを計算
+
+        Args:
+            cart_mandate: CartMandate
+
+        Returns:
+            str: cart_hash
+        """
+        from v2.common.user_authorization import compute_mandate_hash
+        return compute_mandate_hash(cart_mandate)
+
+    def _build_jwt_header(self, merchant_id: str) -> Dict[str, str]:
+        """
+        JWTヘッダーを構築
+
+        Args:
+            merchant_id: Merchant ID
+
+        Returns:
+            Dict[str, str]: JWTヘッダー
+        """
+        return {
+            "alg": "ES256",  # ECDSA with SHA-256
+            "kid": f"{merchant_id}#key-1",  # Key ID
+            "typ": "JWT"
+        }
+
+    def _build_merchant_jwt_payload(self, merchant_id: str, cart_hash: str) -> Dict[str, Any]:
+        """
+        Merchant用JWTペイロードを構築
+
+        Args:
+            merchant_id: Merchant ID
+            cart_hash: CartContentsのハッシュ
+
+        Returns:
+            Dict[str, Any]: JWTペイロード
+        """
+        import time
+        import uuid
+
+        now = datetime.now(timezone.utc)
+
+        # AP2準拠: JWTの有効期限は1時間（3600秒）に設定
+        # CartMandateのcart_expiry（15分）とは独立して、署名の有効性を保証
+        return {
+            "iss": merchant_id,  # Issuer: Merchant
+            "sub": merchant_id,  # Subject: Merchant (same as issuer)
+            "aud": "did:ap2:agent:payment_processor",  # Audience: Payment Processor
+            "iat": int(now.timestamp()),  # Issued At
+            "exp": int(now.timestamp()) + 3600,  # Expiry: 1時間後（AP2準拠）
+            "jti": str(uuid.uuid4()),  # JWT ID（リプレイ攻撃防止）
+            "cart_hash": cart_hash  # CartContentsのハッシュ
+        }
+
+    def _base64url_encode_jwt_part(self, data: Dict[str, Any]) -> str:
+        """
+        JWTパート（header/payload）をBase64urlエンコード
+
+        Args:
+            data: エンコードするデータ
+
+        Returns:
+            str: Base64urlエンコードされた文字列
+        """
+        import base64
+        import json
+
+        json_str = json.dumps(data, separators=(',', ':'))
+        return base64.urlsafe_b64encode(json_str.encode('utf-8')).rstrip(b'=').decode('utf-8')
+
+    def _sign_jwt_message(self, message: str, key_id: str) -> str:
+        """
+        JWTメッセージに署名
+
+        Args:
+            message: 署名対象メッセージ（header_b64.payload_b64）
+            key_id: 秘密鍵のID
+
+        Returns:
+            str: Base64urlエンコードされた署名
+
+        Raises:
+            ValueError: 署名失敗時
+        """
+        import base64
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.asymmetric import ec
+
+        try:
+            private_key = self.key_manager.get_private_key(key_id)
+
+            if private_key is None:
+                raise ValueError(f"Merchant private key not found: {key_id}")
+
+            # ECDSA署名（ES256: ECDSA with SHA-256）
+            signature_bytes = private_key.sign(
+                message.encode('utf-8'),
+                ec.ECDSA(hashes.SHA256())
+            )
+
+            # Base64URLエンコード（パディングなし）
+            return base64.urlsafe_b64encode(signature_bytes).rstrip(b'=').decode('utf-8')
+
+        except Exception as e:
+            logger.error(f"[_sign_jwt_message] Failed to generate signature: {e}")
+            raise ValueError(f"Failed to sign JWT message: {e}")
+
     def _generate_merchant_authorization_jwt(
         self,
         cart_mandate: Dict[str, Any],
@@ -822,71 +932,35 @@ class MerchantService(BaseAgent):
         refs/AP2-main/src/ap2/types/mandate.py - CartMandate.merchant_authorization
 
         完全なES256署名を使用したJWTを生成
+
+        Args:
+            cart_mandate: CartMandate
+            merchant_id: Merchant ID
+
+        Returns:
+            str: JWT文字列
+
+        Raises:
+            ValueError: JWT生成失敗時
         """
-        import base64
-        import hashlib
-        import time
-
-        now = datetime.now(timezone.utc)
-
-        # 1. Cart Contentsのハッシュ計算
-        # CartMandateの署名フィールドを除外してハッシュ化（AP2仕様）
-        # RFC 8785準拠のcompute_mandate_hash関数を使用して一貫性を保つ
-        from v2.common.user_authorization import compute_mandate_hash
-        cart_hash = compute_mandate_hash(cart_mandate)
-
-        # 2. JWTのHeader
-        header = {
-            "alg": "ES256",  # ECDSA with SHA-256
-            "kid": f"{merchant_id}#key-1",  # Key ID
-            "typ": "JWT"
-        }
-
-        # 3. JWTのPayload
-        # AP2準拠: JWTの有効期限は1時間（3600秒）に設定
-        # CartMandateのcart_expiry（15分）とは独立して、署名の有効性を保証
-        payload = {
-            "iss": merchant_id,  # Issuer: Merchant
-            "sub": merchant_id,  # Subject: Merchant (same as issuer)
-            "aud": "did:ap2:agent:payment_processor",  # Audience: Payment Processor
-            "iat": int(now.timestamp()),  # Issued At
-            "exp": int(now.timestamp()) + 3600,  # Expiry: 1時間後（AP2準拠）
-            "jti": str(uuid.uuid4()),  # JWT ID（リプレイ攻撃防止）
-            "cart_hash": cart_hash  # CartContentsのハッシュ
-        }
-
-        # 4. Base64url エンコード
-        def base64url_encode(data):
-            json_str = json.dumps(data, separators=(',', ':'))
-            return base64.urlsafe_b64encode(json_str.encode('utf-8')).rstrip(b'=').decode('utf-8')
-
-        header_b64 = base64url_encode(header)
-        payload_b64 = base64url_encode(payload)
-
-        # 5. 署名生成
-        # AP2仕様: ES256（ECDSA with P-256 and SHA-256）
         try:
-            # 秘密鍵を取得（agent_idから鍵IDを抽出）
+            # 1. Cart Contentsのハッシュ計算
+            cart_hash = self._compute_cart_hash(cart_mandate)
+
+            # 2. JWTのHeader構築
+            header = self._build_jwt_header(merchant_id)
+
+            # 3. JWTのPayload構築
+            payload = self._build_merchant_jwt_payload(merchant_id, cart_hash)
+
+            # 4. Base64url エンコード
+            header_b64 = self._base64url_encode_jwt_part(header)
+            payload_b64 = self._base64url_encode_jwt_part(payload)
+
+            # 5. 署名生成
             key_id = self.agent_id.split(":")[-1]  # did:ap2:merchant -> merchant
-            private_key = self.key_manager.get_private_key(key_id)
-
-            if private_key is None:
-                raise ValueError(f"Merchant private key not found: {key_id}")
-
-            # 署名対象データ（header_b64.payload_b64）
-            message_to_sign = f"{header_b64}.{payload_b64}".encode('utf-8')
-
-            # ECDSA署名（ES256: ECDSA with SHA-256）
-            from cryptography.hazmat.primitives import hashes
-            from cryptography.hazmat.primitives.asymmetric import ec
-
-            signature_bytes = private_key.sign(
-                message_to_sign,
-                ec.ECDSA(hashes.SHA256())
-            )
-
-            # Base64URLエンコード（パディングなし）
-            signature_b64 = base64.urlsafe_b64encode(signature_bytes).rstrip(b'=').decode('utf-8')
+            message_to_sign = f"{header_b64}.{payload_b64}"
+            signature_b64 = self._sign_jwt_message(message_to_sign, key_id)
 
             logger.info(
                 f"[_generate_merchant_authorization_jwt] Generated signed JWT for CartMandate: "
@@ -894,16 +968,16 @@ class MerchantService(BaseAgent):
                 f"alg=ES256, kid={header['kid']}"
             )
 
+            # 6. JWT組み立て
+            jwt_token = f"{header_b64}.{payload_b64}.{signature_b64}"
+
+            return jwt_token
+
         except Exception as e:
             logger.error(
-                f"[_generate_merchant_authorization_jwt] Failed to generate signature: {e}"
+                f"[_generate_merchant_authorization_jwt] Failed to generate JWT: {e}"
             )
-            raise ValueError(f"Failed to sign merchant_authorization JWT: {e}")
-
-        # 6. JWT組み立て
-        jwt_token = f"{header_b64}.{payload_b64}.{signature_b64}"
-
-        return jwt_token
+            raise ValueError(f"Failed to generate merchant_authorization JWT: {e}")
 
     async def _sign_cart_mandate(self, cart_mandate: Dict[str, Any]) -> Signature:
         """
