@@ -99,7 +99,7 @@ def route_by_step(state: ShoppingFlowState) -> str:
     if should_reset and current_step in ["error", "completed"]:
         return "greeting"
 
-    # ステップに基づいてルーティング（AP2完全準拠）
+    # ステップに基づいてルーティング
     if current_step in ["initial", "reset"]:
         return "greeting"
     elif current_step in ["ask_intent", "collecting_intent_info"]:
@@ -518,6 +518,21 @@ async def select_cp_node(state: ShoppingFlowState, agent_instance: Any) -> Shopp
                 f"[select_cp_node] AP2 Step 4: Presenting {len(available_cps)} Credential Providers to user\n"
                 f"  User ID: {user_id}"
             )
+
+            # エージェントからのメッセージ
+            cp_msg = "Credential Providerを選択してください"
+            for char in cp_msg:
+                events.append({
+                    "type": "agent_text_chunk",
+                    "content": char
+                })
+
+            events.append({
+                "type": "agent_text_complete",
+                "content": ""
+            })
+
+            await asyncio.sleep(0.2)
 
             # CP選択UIを表示
             events.append({

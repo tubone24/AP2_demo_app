@@ -468,6 +468,70 @@ async def build_cart_mandates(params: Dict[str, Any]) -> Dict[str, Any]:
 
 ## 開発者向け情報
 
+### utils/ ヘルパーパターン
+
+Merchant Agent MCPは複雑なビジネスロジックを`utils/`ヘルパークラスに分離しています。
+
+| ヘルパークラス | ファイル | 責務 | 主要メソッド |
+|------------|------|------|------------|
+| `ProductHelpers` | `utils/product_helpers.py` (55行) | 商品データマッピング | `map_products_to_list()` |
+| `CartMandateHelpers` | `utils/cart_mandate_helpers.py` (147行) | CartMandate構築、税・送料計算 | `build_cart_items()`, `calculate_tax()`, `calculate_shipping_fee()`, `build_cart_mandate_structure()` |
+
+**実装例**:
+
+```python
+# main.py でヘルパークラスをインポート
+from services.merchant_agent_mcp.utils import CartMandateHelpers, ProductHelpers
+
+# グローバル初期化
+cart_mandate_helpers = CartMandateHelpers(
+    merchant_id=MERCHANT_ID,
+    merchant_name=MERCHANT_NAME,
+    merchant_url=MERCHANT_URL,
+    shipping_fee=SHIPPING_FEE,
+    free_shipping_threshold=FREE_SHIPPING_THRESHOLD,
+    tax_rate=TAX_RATE
+)
+product_helpers = ProductHelpers()
+
+@mcp.tool(name="search_products", ...)
+async def search_products(params: Dict[str, Any]) -> Dict[str, Any]:
+    # Step 1: Meilisearchで全文検索
+    product_ids = await search_client.search(query, limit=limit)
+
+    # Step 2: Product DBから詳細情報取得
+    products = [await ProductCRUD.get_by_id(session, pid) for pid in product_ids]
+
+    # Step 3: ヘルパーでマッピング
+    products_list = product_helpers.map_products_to_list(products)
+    return {"products": products_list}
+
+@mcp.tool(name="build_cart_mandates", ...)
+async def build_cart_mandates(params: Dict[str, Any]) -> Dict[str, Any]:
+    # カートアイテム構築（ヘルパーに委譲）
+    display_items, raw_items, subtotal = cart_mandate_helpers.build_cart_items(cart_plan, products_map)
+
+    # 税金計算（ヘルパーに委譲）
+    tax, tax_label = cart_mandate_helpers.calculate_tax(subtotal)
+
+    # 送料計算（ヘルパーに委譲）
+    shipping_fee = cart_mandate_helpers.calculate_shipping_fee(subtotal)
+
+    # CartMandate構築（ヘルパーに委譲）
+    cart_mandate = cart_mandate_helpers.build_cart_mandate_structure(
+        display_items, raw_items, total, shipping_address, session_data
+    )
+    return {"cart_mandate": cart_mandate}
+```
+
+**ヘルパーパターンの利点**:
+- **責務分離**: MCPツールはMeilisearch通信とDB取得に集中、ビジネスロジックはヘルパーに委譲
+- **再利用性**: CartMandateHelpers は税・送料計算ロジックを一元管理
+- **テスタビリティ**: tax_rate, shipping_feeをコンストラクタ注入でテスト容易化
+- **保守性**: 税率変更がCartMandateHelpersの1箇所に集約
+
+---
+
 ### ローカル開発
 
 ```bash

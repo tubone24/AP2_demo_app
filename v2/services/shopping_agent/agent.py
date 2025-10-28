@@ -22,7 +22,6 @@ import logging
 
 import httpx
 from fastapi import HTTPException, Depends
-from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sse_starlette.sse import EventSourceResponse
 
@@ -37,7 +36,6 @@ from v2.common.models import (
     A2AMessage,
     ChatStreamRequest,
     StreamEvent,
-    ProductSearchRequest,
     # 認証用モデル
     UserCreate,
     UserLogin,
@@ -61,28 +59,21 @@ from v2.common.database import (
     PasskeyCredentialCRUD,
 )
 from v2.common.risk_assessment import RiskAssessmentEngine
-from v2.common.crypto import WebAuthnChallengeManager, CryptoError
+from v2.common.crypto import WebAuthnChallengeManager
 from v2.common.user_authorization import create_user_authorization_vp
 from v2.common.auth import (
     # JWT認証
     create_access_token,
-    verify_access_token,
     get_current_user,
     # パスワード認証（2025年ベストプラクティス - Argon2id）
     hash_password,
     verify_password,
     validate_password_strength,
 )
-from v2.common.logger import (
-    get_logger,
-    log_http_request,
-    log_http_response,
-    log_a2a_message,
-    log_database_operation
-)
+from v2.common.logger import get_logger
 
 # OpenTelemetry 手動トレーシング
-from v2.common.telemetry import get_tracer, create_http_span, is_telemetry_enabled
+from v2.common.telemetry import get_tracer, create_http_span
 
 # Shopping Agent ユーティリティモジュール
 from services.shopping_agent.utils import (
@@ -91,6 +82,8 @@ from services.shopping_agent.utils import (
     CartHelpers,
     A2AHelpers
 )
+from services.shopping_agent.utils.signature_handlers import SignatureHandlers
+from services.shopping_agent.utils.merchant_integration import MerchantIntegrationHelpers
 
 # NOTE: 古いLangGraph実装（langgraph_agent, langgraph_conversation, langgraph_shopping）は廃止
 # 新しいStateGraph版（langgraph_shopping_flow.py）を使用
@@ -1208,71 +1201,15 @@ class ShoppingAgent(BaseAgent):
                 # 1. AP2仕様: Mandate署名はCredential Providerで検証される
                 # 2. Credential Providerはハードウェアバックドキーの公開鍵を管理
                 # 3. Shopping AgentはCredential Providerに検証をデリゲート
-                try:
-                    # Credential Providerに署名検証をリクエスト（AP2完全準拠）
-                    # /verify/attestation エンドポイントを使用
-                    # payment_mandateフィールドにcart_mandateを渡す（検証ロジックは共通）
-                    verification_response = await self.http_client.post(
-                        f"{self.credential_provider_url}/verify/attestation",
-                        json={
-                            "payment_mandate": cart_mandate,  # 検証対象のMandate
-                            "attestation": webauthn_assertion   # WebAuthn assertion
-                        }
-                    )
 
-                    logger.info(
-                        f"[submit_cart_signature] Sent WebAuthn verification request to Credential Provider: "
-                        f"user_id={user_id}"
-                    )
-
-                    if verification_response.status_code != 200:
-                        logger.error(
-                            f"[submit_cart_signature] WebAuthn verification failed: "
-                            f"status={verification_response.status_code}"
-                        )
-                        raise HTTPException(
-                            status_code=400,
-                            detail="WebAuthn signature verification failed"
-                        )
-
-                    verification_result = verification_response.json()
-
-                    if not verification_result.get("verified"):
-                        logger.error(
-                            f"[submit_cart_signature] WebAuthn verification returned false: "
-                            f"{verification_result.get('details')}"
-                        )
-                        raise HTTPException(
-                            status_code=400,
-                            detail=f"Invalid WebAuthn signature: {verification_result.get('details', {}).get('error')}"
-                        )
-
-                    logger.info(
-                        f"[submit_cart_signature] ✅ WebAuthn signature verified successfully: "
-                        f"counter={verification_result.get('details', {}).get('counter')}, "
-                        f"attestation_type={verification_result.get('details', {}).get('attestation_type')}"
-                    )
-
-                except httpx.HTTPError as e:
-                    logger.error(
-                        f"[submit_cart_signature] Failed to communicate with Credential Provider: {e}",
-                        exc_info=True
-                    )
-                    raise HTTPException(
-                        status_code=503,
-                        detail=f"Credential Provider unavailable: {e}"
-                    )
-                except HTTPException:
-                    raise
-                except Exception as e:
-                    logger.error(
-                        f"[submit_cart_signature] WebAuthn verification error: {e}",
-                        exc_info=True
-                    )
-                    raise HTTPException(
-                        status_code=500,
-                        detail=f"WebAuthn verification failed: {e}"
-                    )
+                # SignatureHandlersを使用してCredential Providerで署名検証
+                verification_result = await SignatureHandlers.verify_cart_signature_with_cp(
+                    http_client=self.http_client,
+                    credential_provider_url=self.credential_provider_url,
+                    cart_mandate=cart_mandate,
+                    webauthn_assertion=webauthn_assertion,
+                    user_id=user_id
+                )
 
                 # AP2完全準拠: CartMandateは変更せず、Merchant署名のままPayment Processorに送信
                 # User署名情報（WebAuthn assertion）はPaymentMandateのuser_authorizationに含める
@@ -1403,10 +1340,12 @@ class ShoppingAgent(BaseAgent):
 
                 logger.info(f"[submit_payment_attestation] Verifying attestation for PaymentMandate: {payment_mandate['id']}")
 
-                verification_result = await self._verify_attestation_with_cp(
-                    payment_mandate,
-                    attestation,
-                    selected_cp["url"]
+                # SignatureHandlersを使用してCredential Providerで検証
+                verification_result = await SignatureHandlers.verify_payment_attestation_with_cp(
+                    http_client=self.http_client,
+                    credential_provider_url=selected_cp["url"],
+                    payment_mandate=payment_mandate,
+                    attestation=attestation
                 )
 
                 if not verification_result.get("verified"):
@@ -1437,29 +1376,16 @@ class ShoppingAgent(BaseAgent):
                 try:
                     # credential_idを取得してCredential Providerから公開鍵を取得
                     credential_id = attestation.get("id")
-                    public_key_cose = None
+                    selected_cp = session.get("selected_credential_provider", self.credential_providers[0])
 
-                    if credential_id:
-                        try:
-                            # Credential Providerから公開鍵を取得
-                            selected_cp = session.get("selected_credential_provider", self.credential_providers[0])
-                            public_key_response = await self.http_client.post(
-                                f"{selected_cp['url']}/passkey/get-public-key",
-                                json={"credential_id": credential_id, "user_id": user_id},
-                                timeout=SHORT_HTTP_TIMEOUT
-                            )
-                            public_key_response.raise_for_status()
-                            public_key_data = public_key_response.json()
-                            public_key_cose = public_key_data.get("public_key_cose")
-
-                            logger.info(
-                                f"[submit_payment_attestation] Public key retrieved from Credential Provider: "
-                                f"credential_id={credential_id[:16]}..."
-                            )
-                        except Exception as pk_error:
-                            logger.warning(
-                                f"[submit_payment_attestation] Failed to retrieve public key from CP: {pk_error}"
-                            )
+                    # SignatureHandlersを使用してCredential Providerから公開鍵を取得
+                    public_key_cose = await SignatureHandlers.retrieve_public_key_from_cp(
+                        http_client=self.http_client,
+                        credential_provider_url=selected_cp['url'],
+                        credential_id=credential_id,
+                        user_id=user_id,
+                        timeout=SHORT_HTTP_TIMEOUT
+                    )
 
                     # VP生成時、PaymentMandateからuser_authorizationフィールドを除外
                     # （ハッシュ計算の一貫性を保つため）
@@ -2105,94 +2031,17 @@ class ShoppingAgent(BaseAgent):
         Returns:
             決済結果（Merchant Agent経由で受信）
         """
-        logger.info(f"[ShoppingAgent] Requesting payment processing via Merchant Agent for PaymentMandate: {payment_mandate['id']}")
-
-        try:
-            # A2Aメッセージのペイロード：PaymentMandateとCartMandateを含める
-            # VDC交換の原則：暗号的に署名されたVDCをエージェント間で交換
-            payload = {
-                "payment_mandate": payment_mandate,
-                "cart_mandate": cart_mandate  # 領収書生成に必要
-            }
-
-            # A2Aメッセージを作成（署名付き）
-            # AP2 Step 24: Merchant Agent経由での決済処理依頼
-            message = self.a2a_handler.create_response_message(
-                recipient="did:ap2:agent:merchant_agent",  # Merchant Agentに送信
-                data_type="ap2.mandates.PaymentMandate",  # AP2仕様準拠: PaymentMandateを使用
-                data_id=payment_mandate["id"],
-                payload=payload,
-                sign=True
-            )
-
-            # Merchant AgentにA2Aメッセージを送信
-            import json as json_lib
-            logger.info(
-                f"\n{'='*80}\n"
-                f"[ShoppingAgent → MerchantAgent] A2Aメッセージ送信（PaymentRequest）\n"
-                f"  URL: {self.merchant_agent_url}/a2a/message\n"
-                f"  メッセージID: {message.header.message_id}\n"
-                f"  タイプ: {message.dataPart.type}\n"
-                f"  ペイロード: {json_lib.dumps(payment_mandate, ensure_ascii=False, indent=2)}\n"
-                f"{'='*80}"
-            )
-
-            # AP2準拠: Merchant AgentのAI処理時間を考慮して300秒（5分）タイムアウト
-            # LangGraph処理（Intent分析→商品検索→カート最適化→署名）に時間がかかる
-            # LLMのリトライも含めて十分な時間を確保
-
-            # OpenTelemetry 手動トレーシング: A2A通信
-            with create_http_span(
-                tracer,
-                "POST",
-                f"{self.merchant_agent_url}/a2a/message",
-                **{
-                    "a2a.message_type": "ap2.mandates.PaymentMandate",
-                    "a2a.recipient": "did:ap2:agent:merchant_agent",
-                    "a2a.message_id": message.header.message_id
-                }
-            ) as span:
-                response = await self.http_client.post(
-                    f"{self.merchant_agent_url}/a2a/message",
-                    json=message.model_dump(by_alias=True),
-                    timeout=A2A_COMMUNICATION_TIMEOUT
-                )
-                response.raise_for_status()
-                span.set_attribute("http.status_code", response.status_code)
-                result = response.json()
-
-            logger.info(
-                f"\n{'='*80}\n"
-                f"[ShoppingAgent ← MerchantAgent] A2Aレスポンス受信\n"
-                f"  Status: {response.status_code}\n"
-                f"  Response Body: {json_lib.dumps(result, ensure_ascii=False, indent=2)}\n"
-                f"{'='*80}"
-            )
-
-            # A2Aレスポンスからpayloadを抽出
-            if isinstance(result, dict) and "dataPart" in result:
-                data_part = result["dataPart"]
-                # @typeエイリアスを使用
-                response_type = data_part.get("@type") or data_part.get("type")
-
-                if response_type == "ap2.responses.PaymentResult":
-                    payload = data_part["payload"]
-                    logger.info(f"[ShoppingAgent] Payment processing completed: status={payload.get('status')}")
-                    return payload
-                elif response_type == "ap2.errors.Error":
-                    error_payload = data_part["payload"]
-                    raise ValueError(f"Merchant Agent/Payment Processor error: {error_payload.get('error_message')}")
-                else:
-                    raise ValueError(f"Unexpected response type: {response_type}")
-            else:
-                raise ValueError("Invalid response format from Merchant Agent")
-
-        except httpx.HTTPError as e:
-            logger.error(f"[_process_payment_via_merchant_agent] HTTP error: {e}")
-            raise ValueError(f"Failed to process payment via Merchant Agent: {e}")
-        except Exception as e:
-            logger.error(f"[_process_payment_via_merchant_agent] Error: {e}", exc_info=True)
-            raise
+        # MerchantIntegrationHelpersを使用して決済処理を実行
+        return await MerchantIntegrationHelpers.process_payment_via_merchant(
+            a2a_handler=self.a2a_handler,
+            http_client=self.http_client,
+            merchant_agent_url=self.merchant_agent_url,
+            payment_mandate=payment_mandate,
+            cart_mandate=cart_mandate,
+            tracer=tracer,
+            create_http_span=create_http_span,
+            a2a_communication_timeout=A2A_COMMUNICATION_TIMEOUT
+        )
 
     async def _search_products_via_merchant_agent(
         self,
@@ -2210,123 +2059,17 @@ class ShoppingAgent(BaseAgent):
         3. Merchant AgentがIntentMandateに基づいて複数のカート候補を生成
         4. Merchant Agentが署名済みCartMandateをArtifact形式で返却（ap2.responses.CartCandidates）
         """
-        logger.info(f"[ShoppingAgent] Requesting cart candidates from Merchant Agent for IntentMandate: {intent_mandate['id']}")
-
-        try:
-            # AP2仕様準拠：配送先情報を含めてMerchant Agentに送信
-            # 配送先によって配送料が変わるため、CartMandate作成前に必要
-            shipping_address = session.get("shipping_address")
-
-            # ペイロードにIntentMandateと配送先を含める
-            payload = {
-                "intent_mandate": intent_mandate,
-                "shipping_address": shipping_address  # AP2仕様：CartMandate作成前に配送先を提供
-            }
-
-            # A2Aメッセージを作成（署名付き）
-            message = self.a2a_handler.create_response_message(
-                recipient="did:ap2:agent:merchant_agent",
-                data_type="ap2.mandates.IntentMandate",
-                data_id=intent_mandate["id"],
-                payload=payload,
-                sign=True
-            )
-
-            # 重要：A2AメッセージIDを保存（CartMandateとConsentから参照）
-            intent_message_id = message.header.message_id
-            session["intent_message_id"] = intent_message_id
-
-            logger.info(
-                f"[ShoppingAgent] Intent A2A message created: "
-                f"message_id={intent_message_id}, intent_mandate_id={intent_mandate['id']}"
-            )
-
-            # Merchant AgentにA2Aメッセージを送信
-            import json as json_lib
-            logger.info(
-                f"\n{'='*80}\n"
-                f"[ShoppingAgent → MerchantAgent] A2Aメッセージ送信\n"
-                f"  URL: {self.merchant_agent_url}/a2a/message\n"
-                f"  メッセージID: {message.header.message_id}\n"
-                f"  タイプ: {message.dataPart.type}\n"
-                f"  ペイロード: {json_lib.dumps(intent_mandate, ensure_ascii=False, indent=2)}\n"
-                f"{'='*80}"
-            )
-
-            # AP2準拠: Merchant AgentのAI処理時間を考慮して300秒（5分）タイムアウト
-            # LangGraph処理（Intent分析→商品検索→カート最適化→署名）に時間がかかる
-            # LLMのリトライも含めて十分な時間を確保
-
-            # OpenTelemetry 手動トレーシング: A2A通信
-            with create_http_span(
-                tracer,
-                "POST",
-                f"{self.merchant_agent_url}/a2a/message",
-                **{
-                    "a2a.message_type": "ap2.mandates.IntentMandate",
-                    "a2a.recipient": "did:ap2:agent:merchant_agent",
-                    "a2a.message_id": message.header.message_id
-                }
-            ) as span:
-                response = await self.http_client.post(
-                    f"{self.merchant_agent_url}/a2a/message",
-                    json=message.model_dump(by_alias=True),
-                    timeout=A2A_COMMUNICATION_TIMEOUT
-                )
-                response.raise_for_status()
-                span.set_attribute("http.status_code", response.status_code)
-                result = response.json()
-
-            logger.info(
-                f"\n{'='*80}\n"
-                f"[ShoppingAgent ← MerchantAgent] A2Aレスポンス受信\n"
-                f"  Status: {response.status_code}\n"
-                f"  Response Body: {json_lib.dumps(result, ensure_ascii=False, indent=2)[:1000]}...\n"
-                f"{'='*80}"
-            )
-
-            # A2AレスポンスからCart Candidatesを抽出
-            if isinstance(result, dict) and "dataPart" in result:
-                data_part = result["dataPart"]
-                # @typeエイリアスを使用
-                response_type = data_part.get("@type") or data_part.get("type")
-
-                # AP2/A2A仕様準拠：CartCandidatesレスポンス
-                if response_type == "ap2.responses.CartCandidates":
-                    cart_candidates = data_part["payload"].get("cart_candidates", [])
-                    logger.info(f"[ShoppingAgent] Received {len(cart_candidates)} cart candidates from Merchant Agent")
-
-                    # AP2完全準拠: 元のArtifact構造をそのまま返す
-                    # フロントエンド変換は呼び出し側で実施
-                    logger.debug(f"[ShoppingAgent] Returning {len(cart_candidates)} artifacts in original A2A format")
-                    return cart_candidates
-
-                # 後方互換性：ProductListレスポンス（旧形式）
-                elif response_type == "ap2.responses.ProductList":
-                    logger.warning("[ShoppingAgent] Received ProductList (old format). Converting to cart candidates.")
-                    products = data_part["payload"].get("products", [])
-                    # 旧形式をカート候補形式に変換（後方互換性のため）
-                    logger.info(f"[ShoppingAgent] Received {len(products)} products (old format)")
-                    return products
-
-                # エラーレスポンス
-                elif response_type == "ap2.errors.Error":
-                    error_payload = data_part.get("payload", {})
-                    error_msg = error_payload.get("error_message", "Unknown error")
-                    logger.error(f"[ShoppingAgent] Merchant Agent returned error: {error_msg}")
-                    raise ValueError(f"Merchant Agent error: {error_msg}")
-
-                else:
-                    raise ValueError(f"Unexpected response type: {response_type}")
-            else:
-                raise ValueError("Invalid response format from Merchant Agent")
-
-        except httpx.HTTPError as e:
-            logger.error(f"[_search_products_via_merchant_agent] HTTP error: {e}")
-            raise ValueError(f"Failed to search products via Merchant Agent: {e}")
-        except Exception as e:
-            logger.error(f"[_search_products_via_merchant_agent] Error: {e}", exc_info=True)
-            raise
+        # MerchantIntegrationHelpersを使用してカート候補を取得
+        return await MerchantIntegrationHelpers.search_products_via_merchant(
+            a2a_handler=self.a2a_handler,
+            http_client=self.http_client,
+            merchant_agent_url=self.merchant_agent_url,
+            intent_mandate=intent_mandate,
+            session=session,
+            tracer=tracer,
+            create_http_span=create_http_span,
+            a2a_communication_timeout=A2A_COMMUNICATION_TIMEOUT
+        )
 
     def _build_cart_request(
         self,
@@ -2428,78 +2171,14 @@ class ShoppingAgent(BaseAgent):
         2. MerchantがCartMandateに署名
         3. Shopping AgentがMerchant署名を検証
         """
-        logger.info(f"[ShoppingAgent] Requesting Merchant signature for CartMandate: {cart_mandate['id']}")
-
-        try:
-            # MerchantにPOST /sign/cartで署名依頼
-            import json as json_lib
-            logger.info(
-                f"\n{'='*80}\n"
-                f"[ShoppingAgent → Merchant] 署名リクエスト送信\n"
-                f"  URL: {self.merchant_url}/sign/cart\n"
-                f"  CartMandate ID: {cart_mandate['id']}\n"
-                f"  ペイロード: {json_lib.dumps(cart_mandate, ensure_ascii=False, indent=2)}\n"
-                f"{'='*80}"
-            )
-
-            response = await self.http_client.post(
-                f"{self.merchant_url}/sign/cart",
-                json={"cart_mandate": cart_mandate},
-                timeout=SHORT_HTTP_TIMEOUT
-            )
-            response.raise_for_status()
-            result = response.json()
-
-            logger.info(
-                f"\n{'='*80}\n"
-                f"[ShoppingAgent ← Merchant] 署名レスポンス受信\n"
-                f"  Status: {response.status_code}\n"
-                f"  Response Body: {json_lib.dumps(result, ensure_ascii=False, indent=2)}\n"
-                f"{'='*80}"
-            )
-
-            # 署名済みCartMandateを取得
-            signed_cart_mandate = result.get("signed_cart_mandate")
-            if not signed_cart_mandate:
-                raise ValueError("Merchant did not return signed_cart_mandate")
-
-            # Merchant署名を検証
-            merchant_signature = signed_cart_mandate.get("merchant_signature")
-            if not merchant_signature:
-                raise ValueError("CartMandate does not contain merchant_signature")
-
-            # v2.common.models.Signatureに変換
-            from v2.common.models import Signature
-            signature_obj = Signature(
-                algorithm=merchant_signature.get("algorithm", "ECDSA").upper(),
-                value=merchant_signature["value"],
-                public_key=merchant_signature["public_key"],
-                signed_at=merchant_signature["signed_at"]
-            )
-
-            # 署名対象データ（merchant_signature除外）
-            cart_data_for_verification = signed_cart_mandate.copy()
-            cart_data_for_verification.pop("merchant_signature", None)
-            cart_data_for_verification.pop("user_signature", None)
-
-            # 署名検証
-            is_valid = self.signature_manager.verify_mandate_signature(
-                cart_data_for_verification,
-                signature_obj
-            )
-
-            if not is_valid:
-                raise ValueError("Merchant signature verification failed")
-
-            logger.info(f"[ShoppingAgent] Merchant signature verified for CartMandate: {cart_mandate['id']}")
-            return signed_cart_mandate
-
-        except httpx.HTTPError as e:
-            logger.error(f"[_request_merchant_signature] HTTP error: {e}")
-            raise ValueError(f"Failed to request Merchant signature: {e}")
-        except Exception as e:
-            logger.error(f"[_request_merchant_signature] Error: {e}", exc_info=True)
-            raise
+        # MerchantIntegrationHelpersを使用して署名リクエスト
+        return await MerchantIntegrationHelpers.request_merchant_signature(
+            http_client=self.http_client,
+            merchant_url=self.merchant_url,
+            cart_mandate=cart_mandate,
+            signature_manager=self.signature_manager,
+            timeout=SHORT_HTTP_TIMEOUT
+        )
 
     async def _get_payment_methods_from_cp(self, user_id: str, credential_provider_url: str) -> list[Dict[str, Any]]:
         """

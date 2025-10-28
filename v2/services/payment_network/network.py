@@ -27,6 +27,8 @@ from pydantic import BaseModel
 # 親ディレクトリを追加
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
+from services.payment_network.utils import TokenHelpers
+
 logger = logging.getLogger(__name__)
 
 
@@ -100,6 +102,12 @@ class PaymentNetworkService:
         # 本番環境ではRedis等のKVストアやデータベースを使用
         self.agent_token_store: Dict[str, Dict[str, Any]] = {}
 
+        # Helperクラス初期化
+        self.token_helpers = TokenHelpers(
+            network_name=self.network_name,
+            token_store=self.agent_token_store
+        )
+
         # エンドポイント登録
         self.register_endpoints()
 
@@ -172,35 +180,17 @@ class PaymentNetworkService:
                         detail="Invalid payment_method_token format"
                     )
 
-                # Agent Token生成（暗号学的に安全）
-                # 実際の決済ネットワークでは、ネットワーク固有のトークン化ロジックを実装
-                now = datetime.now(timezone.utc)
-                expires_at = now + timedelta(hours=1)  # 1時間有効
-
-                # secrets.token_urlsafe()を使用（cryptographically strong random）
-                random_bytes = secrets.token_urlsafe(32)  # 32バイト = 256ビット
-                agent_token = f"agent_tok_{self.network_name.lower()}_{uuid.uuid4().hex[:8]}_{random_bytes[:24]}"
-
-                # トークンストアに保存
-                self.agent_token_store[agent_token] = {
-                    "payment_mandate_id": payment_mandate.get("id"),
-                    "payment_method_token": payment_method_token,
-                    "payer_id": payment_mandate.get("payer_id"),
-                    "amount": payment_mandate.get("amount"),
-                    "issued_at": now.isoformat(),
-                    "expires_at": expires_at.isoformat(),
-                    "network_name": self.network_name,
-                    "attestation_verified": request.attestation is not None
-                }
-
-                logger.info(
-                    f"[{self.network_name}] Issued Agent Token: {agent_token[:32]}..., "
-                    f"expires_at={expires_at.isoformat()}"
+                # Agent Token生成（ヘルパーメソッドに委譲）
+                agent_token, expires_at_iso = self.token_helpers.generate_agent_token(
+                    payment_mandate=payment_mandate,
+                    payment_method_token=payment_method_token,
+                    attestation_verified=request.attestation is not None,
+                    expiry_hours=1
                 )
 
                 return TokenizeResponse(
                     agent_token=agent_token,
-                    expires_at=expires_at.isoformat().replace('+00:00', 'Z'),
+                    expires_at=expires_at_iso.replace('+00:00', 'Z'),
                     network_name=self.network_name,
                     token_type="agent_token"
                 )
@@ -240,43 +230,13 @@ class PaymentNetworkService:
             try:
                 agent_token = request.agent_token
 
-                logger.info(f"[{self.network_name}] Verifying Agent Token: {agent_token[:32]}...")
-
-                # トークンストアから取得
-                token_data = self.agent_token_store.get(agent_token)
-                if not token_data:
-                    logger.warning(f"[{self.network_name}] Agent Token not found: {agent_token[:32]}...")
-                    return VerifyTokenResponse(
-                        valid=False,
-                        error="Agent Token not found"
-                    )
-
-                # 有効期限確認
-                expires_at = datetime.fromisoformat(token_data["expires_at"])
-                if datetime.now(timezone.utc) > expires_at:
-                    logger.warning(f"[{self.network_name}] Agent Token expired: {agent_token[:32]}...")
-                    # 期限切れトークンを削除
-                    del self.agent_token_store[agent_token]
-                    return VerifyTokenResponse(
-                        valid=False,
-                        error="Agent Token expired"
-                    )
-
-                logger.info(
-                    f"[{self.network_name}] Agent Token valid: "
-                    f"payment_mandate_id={token_data.get('payment_mandate_id')}"
-                )
+                # Agent Token検証（ヘルパーメソッドに委譲）
+                valid, token_info, error = self.token_helpers.verify_agent_token(agent_token)
 
                 return VerifyTokenResponse(
-                    valid=True,
-                    token_info={
-                        "payment_mandate_id": token_data.get("payment_mandate_id"),
-                        "payer_id": token_data.get("payer_id"),
-                        "amount": token_data.get("amount"),
-                        "network_name": token_data.get("network_name"),
-                        "issued_at": token_data.get("issued_at"),
-                        "expires_at": token_data.get("expires_at")
-                    }
+                    valid=valid,
+                    token_info=token_info,
+                    error=error
                 )
 
             except Exception as e:

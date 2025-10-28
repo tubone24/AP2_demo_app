@@ -47,7 +47,8 @@ Shopping Agentは、ユーザーに代わって購買プロセスを管理する
 
 - **入力**: ユーザーの自然言語入力（"むぎぼーのグッズが欲しい"）
 - **出力**: SSEストリーミングイベント（agent_text、cart_options、signature_request等）
-- **LangGraph統合**: AI による意図抽出（オプション）
+- **LangGraph StateGraph統合**: 14ノードの会話フロー管理（`langgraph_shopping_flow.py`）
+- **MCP統合**: Shopping Agent MCP（Port 8010）の6ツールを活用
 
 ### 2. Mandateライフサイクル管理
 
@@ -112,9 +113,59 @@ eventSource.onmessage = (event) => {
 };
 ```
 
-**実装**: `agent.py:443-482`
+**実装**: `agent.py:961` (`chat_stream`エンドポイント)
 
-### 2. Intent Mandate作成
+**LangGraph StateGraph統合**:
+
+`POST /chat/stream` → `shopping_flow_graph.ainvoke()` → 14ノードのステート駆動フロー
+
+```mermaid
+graph LR
+    Start[ユーザー入力] --> Router{route_by_step}
+    Router -->|initial| Greeting[greeting_node]
+    Router -->|extract_intent| Extract[extract_intent_node<br/>LLM呼び出し]
+    Router -->|build_intent| BuildIntent[build_intent_node<br/>MCP: build_intent_mandate]
+    Router -->|request_carts| RequestCarts[request_carts_node<br/>MCP: request_cart_candidates]
+    Router -->|select_cart| SelectCart[select_cart_node]
+    Router -->|cart_signature_pending| ConsentSig[consent_signature_node<br/>MCP: select_and_sign_cart]
+    Router -->|select_payment| SelectPay[select_payment_node<br/>MCP: assess_payment_risk<br/>MCP: build_payment_mandate]
+    Router -->|execute_payment| ExecutePay[execute_payment_node<br/>MCP: execute_payment]
+    Router -->|completed| Complete[completed_node]
+
+    BuildIntent --> MCP1[Shopping Agent MCP<br/>:8010]
+    RequestCarts --> MCP1
+    ConsentSig --> MCP1
+    SelectPay --> MCP1
+    ExecutePay --> MCP1
+
+    style Router fill:#fff3e0
+    style MCP1 fill:#e1bee7
+```
+
+**StateGraphの特徴**:
+- **14ノード**: greeting, extract_intent, build_intent, ask_max_amount, ask_categories, ask_shipping, request_carts, select_cart, consent_signature, select_payment, webauthn_auth, execute_payment, completed, error_handler
+- **ステート駆動**: `session["step"]`に基づいて適切なノードに自動遷移
+- **Checkpointer**: LangGraphのMemorySaver機能で会話の継続性を保証
+- **MCP連携**: 6ツールをHTTP経由で呼び出し（Port 8010）
+
+**ファイル**: `langgraph_shopping_flow.py` (1547行)
+
+### 2. Shopping Agent MCP統合（6ツール）
+
+**MCPサーバー**: `http://shopping_agent_mcp:8010`
+
+| MCPツール | 説明 | 使用ノード |
+|---------|------|----------|
+| `build_intent_mandate` | IntentMandate構築 | build_intent_node |
+| `request_cart_candidates` | Merchant AgentにA2A送信、Cart候補取得 | request_carts_node |
+| `select_and_sign_cart` | CartMandateにユーザー署名追加 | consent_signature_node |
+| `assess_payment_risk` | RiskAssessmentEngine実行 | select_payment_node |
+| `build_payment_mandate` | PaymentMandate構築 | select_payment_node |
+| `execute_payment` | Payment Processorに決済依頼 | execute_payment_node |
+
+**実装**: `shopping_agent_mcp/main.py`
+
+### 3. Intent Mandate作成
 
 **フロー**:
 1. Challenge生成: `POST /intent/challenge`
@@ -269,40 +320,63 @@ eventSource.onmessage = (event) => {
 
 ## エンドポイント一覧
 
-### ユーザー対話
+**合計**: 17エンドポイント
+
+### 認証・ユーザー管理
 
 | エンドポイント | メソッド | 説明 | 実装 |
 |--------------|---------|------|------|
-| `/chat/stream` | POST | SSEストリーミングチャット | `agent.py:443` |
-| `/` | GET | ヘルスチェック | `base_agent.py:175` |
-| `/health` | GET | Docker向けヘルスチェック | `base_agent.py:263` |
+| `/auth/register` | POST | ユーザー登録 | `agent.py:294` |
+| `/auth/login` | POST | ログイン | `agent.py:368` |
+| `/auth/passkey/register/challenge` | POST | Passkey登録Challenge生成 | `agent.py:442` |
+| `/auth/passkey/register` | POST | Passkey登録 | `agent.py:488` |
+| `/auth/passkey/login/challenge` | POST | PasskeyログインChallenge生成 | `agent.py:550` |
+| `/auth/passkey/login` | POST | Passkeyログイン | `agent.py:602` |
+| `/auth/me` | GET | ユーザー情報取得 | `agent.py:665` |
+
+### チャット・会話フロー
+
+| エンドポイント | メソッド | 説明 | 実装 |
+|--------------|---------|------|------|
+| `/chat/stream` | POST | **SSEストリーミングチャット（LangGraph StateGraph統合）** | `agent.py:961` |
 
 ### Intent Mandate管理
 
 | エンドポイント | メソッド | 説明 | 実装 |
 |--------------|---------|------|------|
-| `/intent/challenge` | POST | Intent署名用Challenge生成 | `agent.py:171` |
-| `/intent/submit` | POST | 署名付きIntent提出 | `agent.py:215` |
+| `/intent/challenge` | POST | Intent署名用Challenge生成 | `agent.py:689` |
+| `/intent/submit` | POST | 署名付きIntent提出 | `agent.py:733` |
 
-### Consent管理
-
-| エンドポイント | メソッド | 説明 | 実装 |
-|--------------|---------|------|------|
-| `/consent/challenge` | POST | Consent署名用Challenge生成 | `agent.py:291` |
-| `/consent/submit` | POST | 署名付きConsent提出 | `agent.py:349` |
-
-### A2A通信
+### Cart Consent管理
 
 | エンドポイント | メソッド | 説明 | 実装 |
 |--------------|---------|------|------|
+| `/consent/challenge` | POST | Consent署名用Challenge生成 | `agent.py:809` |
+| `/consent/submit` | POST | 署名付きConsent提出 | `agent.py:867` |
+| `/cart/submit-signature` | POST | CartMandate署名送信 | `agent.py:1137` |
+
+### Payment処理
+
+| エンドポイント | メソッド | 説明 | 実装 |
+|--------------|---------|------|------|
+| `/payment/step-up-callback` | POST | Step-up認証コールバック | `agent.py:1049` |
+| `/payment/submit-attestation` | POST | PaymentMandate署名送信（WebAuthn） | `agent.py:1310` |
+
+### その他
+
+| エンドポイント | メソッド | 説明 | 実装 |
+|--------------|---------|------|------|
+| `/products` | GET | 商品一覧取得 | `agent.py:1015` |
+| `/transactions/{transaction_id}` | GET | トランザクション詳細取得 | `agent.py:1038` |
+
+### 継承元（BaseAgent）
+
+| エンドポイント | メソッド | 説明 | 実装 |
+|--------------|---------|------|------|
+| `/` | GET | ヘルスチェック | `base_agent.py:175` |
+| `/health` | GET | Docker向けヘルスチェック | `base_agent.py:263` |
 | `/a2a/message` | POST | A2Aメッセージ受信 | `base_agent.py:185` |
 | `/.well-known/agent-card.json` | GET | AgentCard取得 | `base_agent.py:268` |
-
-### デバッグ用
-
-| エンドポイント | メソッド | 説明 | 実装 |
-|--------------|---------|------|------|
-| `/products` | GET | 商品検索（デバッグ） | `agent.py:484` |
 
 ---
 
@@ -631,6 +705,48 @@ risk_result = risk_engine.assess_payment_mandate(payment)
 ---
 
 ## 開発者向け情報
+
+### utils/ ヘルパーパターン
+
+Shopping Agentは複雑なビジネスロジックを`utils/`ヘルパークラスに分離しています。
+
+| ヘルパークラス | ファイル | 責務 | 主要メソッド |
+|------------|------|------|------------|
+| `HashHelpers` | `utils/hash_helpers.py` (32行) | Mandateハッシュ計算 | `compute_mandate_hash()` |
+| `PaymentHelpers` | `utils/payment_helpers.py` (127行) | Payment処理ロジック | `create_payment_mandate()`, `verify_payment_result()` |
+| `CartHelpers` | `utils/cart_helpers.py` (89行) | Cart管理 | `select_cart()`, `verify_merchant_signature()` |
+| `A2AHelpers` | `utils/a2a_helpers.py` (78行) | A2A通信ヘルパー | `send_a2a_message()`, `create_request_payload()` |
+
+**実装例**:
+
+```python
+# agent.py でヘルパークラスをインポート
+from services.shopping_agent.utils import HashHelpers, PaymentHelpers, CartHelpers, A2AHelpers
+
+# agent.py の __init__ でインスタンス化
+self.hash_helpers = HashHelpers()
+self.payment_helpers = PaymentHelpers(key_manager=self.key_manager)
+self.cart_helpers = CartHelpers(key_manager=self.key_manager)
+self.a2a_helpers = A2AHelpers(http_client=self.http_client)
+
+# メソッド内でヘルパーを使用
+async def create_payment_mandate(self, cart_mandate, payment_method):
+    # ビジネスロジックをヘルパーに委譲
+    payment_mandate = self.payment_helpers.create_payment_mandate(
+        cart_mandate=cart_mandate,
+        payment_method=payment_method,
+        risk_assessment=risk_result
+    )
+    return payment_mandate
+```
+
+**ヘルパーパターンの利点**:
+- **再利用性**: 同じロジックを複数エンドポイントで共有
+- **テスタビリティ**: ヘルパークラスを独立してテスト可能
+- **保守性**: ビジネスロジックの変更がヘルパークラスに集約
+- **可読性**: メインクラスがHTTPルーティングに集中
+
+---
 
 ### ローカル開発
 
