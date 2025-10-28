@@ -1001,6 +1001,21 @@ async def select_payment_method_node(state: ShoppingFlowState, agent_instance: A
 
         # ステップ13-14: 初回アクセス時は支払い方法選択UIを表示
         if user_input == "_cart_signature_completed" or session.get("step") == "payment_mandate_creation":
+            # エージェントからのメッセージ（ストリーミング）
+            payment_msg = "支払い方法を選択してください。"
+            for char in payment_msg:
+                events.append({
+                    "type": "agent_text_chunk",
+                    "content": char
+                })
+
+            events.append({
+                "type": "agent_text_complete",
+                "content": ""
+            })
+
+            await asyncio.sleep(0.2)
+
             # カート署名完了直後: 支払い方法選択UIを表示
             events.append({
                 "type": "payment_method_selection",
