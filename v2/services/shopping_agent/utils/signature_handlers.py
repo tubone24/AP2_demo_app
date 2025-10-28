@@ -5,7 +5,7 @@ WebAuthn署名・Attestation検証処理のヘルパーメソッド
 """
 
 import logging
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional
 import httpx
 from fastapi import HTTPException
 

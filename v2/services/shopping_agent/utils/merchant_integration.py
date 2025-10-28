@@ -354,3 +354,112 @@ class MerchantIntegrationHelpers:
         except Exception as e:
             logger.error(f"[MerchantIntegration] Error: {e}", exc_info=True)
             raise
+
+    @staticmethod
+    async def request_merchant_signature(
+        http_client: httpx.AsyncClient,
+        merchant_url: str,
+        cart_mandate: Dict[str, Any],
+        signature_manager,
+        timeout: float = 10.0
+    ) -> Dict[str, Any]:
+        """
+        MerchantにCartMandateの署名を依頼
+
+        AP2仕様準拠：
+        1. Shopping AgentがCartMandateを作成（未署名）
+        2. MerchantがCartMandateに署名
+        3. Shopping AgentがMerchant署名を検証
+
+        Args:
+            http_client: HTTPクライアント
+            merchant_url: Merchant URL
+            cart_mandate: CartMandate（未署名）
+            signature_manager: 署名検証用マネージャー
+            timeout: リクエストタイムアウト（秒）
+
+        Returns:
+            Dict[str, Any]: 署名済みCartMandate
+
+        Raises:
+            ValueError: 署名リクエスト失敗時
+        """
+        logger.info(
+            f"[MerchantIntegration] Requesting Merchant signature for CartMandate: "
+            f"{cart_mandate['id']}"
+        )
+
+        try:
+            # MerchantにPOST /sign/cartで署名依頼
+            logger.info(
+                f"\n{'='*80}\n"
+                f"[ShoppingAgent → Merchant] 署名リクエスト送信\n"
+                f"  URL: {merchant_url}/sign/cart\n"
+                f"  CartMandate ID: {cart_mandate['id']}\n"
+                f"{'='*80}"
+            )
+
+            response = await http_client.post(
+                f"{merchant_url}/sign/cart",
+                json={"cart_mandate": cart_mandate},
+                timeout=timeout
+            )
+            response.raise_for_status()
+            result = response.json()
+
+            logger.info(
+                f"\n{'='*80}\n"
+                f"[ShoppingAgent ← Merchant] 署名レスポンス受信\n"
+                f"  Status: {response.status_code}\n"
+                f"{'='*80}"
+            )
+
+            # 署名済みCartMandateを取得
+            signed_cart_mandate = result.get("signed_cart_mandate")
+            if not signed_cart_mandate:
+                raise ValueError("Merchant did not return signed_cart_mandate")
+
+            # Merchant署名を検証
+            merchant_signature = signed_cart_mandate.get("merchant_signature")
+            if not merchant_signature:
+                raise ValueError("CartMandate does not contain merchant_signature")
+
+            # v2.common.models.Signatureに変換
+            import sys
+            from pathlib import Path
+            sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
+            from v2.common.models import Signature
+
+            signature_obj = Signature(
+                algorithm=merchant_signature.get("algorithm", "ECDSA").upper(),
+                value=merchant_signature["value"],
+                public_key=merchant_signature["public_key"],
+                signed_at=merchant_signature["signed_at"]
+            )
+
+            # 署名対象データ（merchant_signature除外）
+            cart_data_for_verification = signed_cart_mandate.copy()
+            cart_data_for_verification.pop("merchant_signature", None)
+            cart_data_for_verification.pop("user_signature", None)
+
+            # 署名検証
+            is_valid = signature_manager.verify_mandate_signature(
+                cart_data_for_verification,
+                signature_obj
+            )
+
+            if not is_valid:
+                raise ValueError("Merchant signature verification failed")
+
+            logger.info(
+                f"[MerchantIntegration] ✅ Merchant signature verified for CartMandate: "
+                f"{cart_mandate['id']}"
+            )
+            return signed_cart_mandate
+
+        except httpx.HTTPError as e:
+            logger.error(f"[MerchantIntegration] HTTP error: {e}")
+            raise ValueError(f"Failed to request Merchant signature: {e}")
+        except Exception as e:
+            logger.error(f"[MerchantIntegration] Error: {e}", exc_info=True)
+            raise

@@ -22,7 +22,6 @@ import logging
 
 import httpx
 from fastapi import HTTPException, Depends
-from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sse_starlette.sse import EventSourceResponse
 
@@ -37,7 +36,6 @@ from v2.common.models import (
     A2AMessage,
     ChatStreamRequest,
     StreamEvent,
-    ProductSearchRequest,
     # 認証用モデル
     UserCreate,
     UserLogin,
@@ -61,28 +59,21 @@ from v2.common.database import (
     PasskeyCredentialCRUD,
 )
 from v2.common.risk_assessment import RiskAssessmentEngine
-from v2.common.crypto import WebAuthnChallengeManager, CryptoError
+from v2.common.crypto import WebAuthnChallengeManager
 from v2.common.user_authorization import create_user_authorization_vp
 from v2.common.auth import (
     # JWT認証
     create_access_token,
-    verify_access_token,
     get_current_user,
     # パスワード認証（2025年ベストプラクティス - Argon2id）
     hash_password,
     verify_password,
     validate_password_strength,
 )
-from v2.common.logger import (
-    get_logger,
-    log_http_request,
-    log_http_response,
-    log_a2a_message,
-    log_database_operation
-)
+from v2.common.logger import get_logger
 
 # OpenTelemetry 手動トレーシング
-from v2.common.telemetry import get_tracer, create_http_span, is_telemetry_enabled
+from v2.common.telemetry import get_tracer, create_http_span
 
 # Shopping Agent ユーティリティモジュール
 from services.shopping_agent.utils import (
@@ -2180,78 +2171,14 @@ class ShoppingAgent(BaseAgent):
         2. MerchantがCartMandateに署名
         3. Shopping AgentがMerchant署名を検証
         """
-        logger.info(f"[ShoppingAgent] Requesting Merchant signature for CartMandate: {cart_mandate['id']}")
-
-        try:
-            # MerchantにPOST /sign/cartで署名依頼
-            import json as json_lib
-            logger.info(
-                f"\n{'='*80}\n"
-                f"[ShoppingAgent → Merchant] 署名リクエスト送信\n"
-                f"  URL: {self.merchant_url}/sign/cart\n"
-                f"  CartMandate ID: {cart_mandate['id']}\n"
-                f"  ペイロード: {json_lib.dumps(cart_mandate, ensure_ascii=False, indent=2)}\n"
-                f"{'='*80}"
-            )
-
-            response = await self.http_client.post(
-                f"{self.merchant_url}/sign/cart",
-                json={"cart_mandate": cart_mandate},
-                timeout=SHORT_HTTP_TIMEOUT
-            )
-            response.raise_for_status()
-            result = response.json()
-
-            logger.info(
-                f"\n{'='*80}\n"
-                f"[ShoppingAgent ← Merchant] 署名レスポンス受信\n"
-                f"  Status: {response.status_code}\n"
-                f"  Response Body: {json_lib.dumps(result, ensure_ascii=False, indent=2)}\n"
-                f"{'='*80}"
-            )
-
-            # 署名済みCartMandateを取得
-            signed_cart_mandate = result.get("signed_cart_mandate")
-            if not signed_cart_mandate:
-                raise ValueError("Merchant did not return signed_cart_mandate")
-
-            # Merchant署名を検証
-            merchant_signature = signed_cart_mandate.get("merchant_signature")
-            if not merchant_signature:
-                raise ValueError("CartMandate does not contain merchant_signature")
-
-            # v2.common.models.Signatureに変換
-            from v2.common.models import Signature
-            signature_obj = Signature(
-                algorithm=merchant_signature.get("algorithm", "ECDSA").upper(),
-                value=merchant_signature["value"],
-                public_key=merchant_signature["public_key"],
-                signed_at=merchant_signature["signed_at"]
-            )
-
-            # 署名対象データ（merchant_signature除外）
-            cart_data_for_verification = signed_cart_mandate.copy()
-            cart_data_for_verification.pop("merchant_signature", None)
-            cart_data_for_verification.pop("user_signature", None)
-
-            # 署名検証
-            is_valid = self.signature_manager.verify_mandate_signature(
-                cart_data_for_verification,
-                signature_obj
-            )
-
-            if not is_valid:
-                raise ValueError("Merchant signature verification failed")
-
-            logger.info(f"[ShoppingAgent] Merchant signature verified for CartMandate: {cart_mandate['id']}")
-            return signed_cart_mandate
-
-        except httpx.HTTPError as e:
-            logger.error(f"[_request_merchant_signature] HTTP error: {e}")
-            raise ValueError(f"Failed to request Merchant signature: {e}")
-        except Exception as e:
-            logger.error(f"[_request_merchant_signature] Error: {e}", exc_info=True)
-            raise
+        # MerchantIntegrationHelpersを使用して署名リクエスト
+        return await MerchantIntegrationHelpers.request_merchant_signature(
+            http_client=self.http_client,
+            merchant_url=self.merchant_url,
+            cart_mandate=cart_mandate,
+            signature_manager=self.signature_manager,
+            timeout=SHORT_HTTP_TIMEOUT
+        )
 
     async def _get_payment_methods_from_cp(self, user_id: str, credential_provider_url: str) -> list[Dict[str, Any]]:
         """
