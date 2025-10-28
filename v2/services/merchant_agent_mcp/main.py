@@ -31,6 +31,7 @@ from common.database import DatabaseManager, ProductCRUD
 from common.search_engine import MeilisearchClient
 from common.logger import get_logger
 from common.telemetry import setup_telemetry, instrument_fastapi_app
+from services.merchant_agent_mcp.utils import CartMandateHelpers, ProductHelpers
 
 logger = get_logger(__name__, service_name='merchant_agent_mcp')
 
@@ -56,6 +57,17 @@ mcp = MCPServer(
     server_name="merchant_agent_mcp",
     version="1.0.0"
 )
+
+# Helperクラス初期化
+cart_mandate_helpers = CartMandateHelpers(
+    merchant_id=MERCHANT_ID,
+    merchant_name=MERCHANT_NAME,
+    merchant_url=MERCHANT_URL,
+    shipping_fee=SHIPPING_FEE,
+    free_shipping_threshold=FREE_SHIPPING_THRESHOLD,
+    tax_rate=TAX_RATE
+)
+product_helpers = ProductHelpers()
 
 
 @mcp.tool(
@@ -124,32 +136,14 @@ async def search_products(params: Dict[str, Any]) -> Dict[str, Any]:
                 product_ids = [p.id for p in all_products]
                 logger.info(f"[search_products] Fallback to all products: {len(product_ids)} products")
 
+            # 商品データをマッピング（ヘルパーメソッドに委譲）
+            products = []
             for product_id in product_ids:
                 product = await ProductCRUD.get_by_id(session, product_id)
+                if product:
+                    products.append(product)
 
-                if not product or product.inventory_count <= 0:
-                    # 在庫なしはスキップ
-                    continue
-
-                # metadataがSQLAlchemyのMetaDataオブジェクトの場合は空辞書に
-                if hasattr(product.metadata, '__class__') and product.metadata.__class__.__name__ == 'MetaData':
-                    metadata = {}
-                else:
-                    metadata = product.metadata or {}
-
-                products_list.append({
-                    "id": product.id,
-                    "sku": product.sku,
-                    "name": product.name,
-                    "description": product.description,
-                    "price_cents": product.price,  # データベースはcents単位
-                    "price_jpy": product.price / 100.0,  # AP2準拠: float, 円単位
-                    "inventory_count": product.inventory_count,
-                    "category": metadata.get("category"),
-                    "brand": metadata.get("brand"),
-                    "image_url": metadata.get("image_url"),
-                    "refund_period_days": metadata.get("refund_period_days", 30)
-                })
+            products_list = product_helpers.map_products_to_list(products)
 
             logger.info(f"[search_products] Returned {len(products_list)} products for keywords: {keywords}")
             return {"products": products_list}
@@ -160,26 +154,8 @@ async def search_products(params: Dict[str, Any]) -> Dict[str, Any]:
         try:
             async with db_manager.get_session() as session:
                 all_products = await ProductCRUD.get_all_with_stock(session, limit=limit)
-                products_list = []
-                for product in all_products:
-                    if hasattr(product.metadata, '__class__') and product.metadata.__class__.__name__ == 'MetaData':
-                        metadata = {}
-                    else:
-                        metadata = product.metadata or {}
-
-                    products_list.append({
-                        "id": product.id,
-                        "sku": product.sku,
-                        "name": product.name,
-                        "description": product.description,
-                        "price_cents": product.price,
-                        "price_jpy": product.price / 100.0,
-                        "inventory_count": product.inventory_count,
-                        "category": metadata.get("category"),
-                        "brand": metadata.get("brand"),
-                        "image_url": metadata.get("image_url"),
-                        "refund_period_days": metadata.get("refund_period_days", 30)
-                    })
+                # 商品データをマッピング（ヘルパーメソッドに委譲）
+                products_list = product_helpers.map_products_to_list(all_products)
                 logger.info(f"[search_products] Fallback returned {len(products_list)} products")
                 return {"products": products_list}
         except Exception as fallback_error:
@@ -270,56 +246,19 @@ async def build_cart_mandates(params: Dict[str, Any]) -> Dict[str, Any]:
     # 商品IDマッピング
     products_map = {p["id"]: p for p in products}
 
-    # カートアイテム構築
-    display_items = []
-    raw_items = []
-    subtotal = 0.0
+    # カートアイテム構築（ヘルパーメソッドに委譲）
+    display_items, raw_items, subtotal = cart_mandate_helpers.build_cart_items(cart_plan, products_map)
 
-    for item in cart_plan.get("items", []):
-        product_id = item["product_id"]
-        quantity = item["quantity"]
-
-        if product_id not in products_map:
-            continue
-
-        product = products_map[product_id]
-        unit_price_jpy = product["price_jpy"]
-        total_price_jpy = unit_price_jpy * quantity
-
-        # AP2準拠: PaymentItem
-        display_items.append({
-            "label": product["name"],
-            "amount": {
-                "value": total_price_jpy,  # AP2準拠: float, 円単位
-                "currency": "JPY"
-            },
-            "refund_period": product.get("refund_period_days", 30) * 86400  # 秒単位
-        })
-
-        # メタデータ（raw_items）
-        raw_items.append({
-            "product_id": product_id,
-            "name": product["name"],
-            "description": product.get("description"),
-            "quantity": quantity,
-            "unit_price": {"value": unit_price_jpy, "currency": "JPY"},
-            "total_price": {"value": total_price_jpy, "currency": "JPY"},
-            "image_url": product.get("image_url")
-        })
-
-        subtotal += total_price_jpy
-
-    # 税金（AP2準拠：環境変数から税率取得）
-    tax = round(subtotal * TAX_RATE, 2)
-    tax_label = f"消費税（{int(TAX_RATE * 100)}%）"
+    # 税金計算（ヘルパーメソッドに委譲）
+    tax, tax_label = cart_mandate_helpers.calculate_tax(subtotal)
     display_items.append({
         "label": tax_label,
         "amount": {"value": tax, "currency": "JPY"},
         "refund_period": 0
     })
 
-    # 送料（AP2準拠：環境変数から取得）
-    shipping_fee = SHIPPING_FEE if subtotal < FREE_SHIPPING_THRESHOLD else 0.0
+    # 送料計算（ヘルパーメソッドに委譲）
+    shipping_fee = cart_mandate_helpers.calculate_shipping_fee(subtotal)
     if shipping_fee > 0:
         display_items.append({
             "label": "送料",
@@ -329,41 +268,16 @@ async def build_cart_mandates(params: Dict[str, Any]) -> Dict[str, Any]:
 
     total = subtotal + tax + shipping_fee
 
-    # AP2準拠のCartMandate構築
-    cart_id = f"cart_{uuid.uuid4().hex[:8]}"
-    cart_expiry = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat().replace('+00:00', 'Z')
-
-    cart_mandate = {
-        "contents": {
-            "id": cart_id,
-            "user_cart_confirmation_required": True,
-            "payment_request": {
-                "method_data": [],
-                "details": {
-                    "id": cart_id,
-                    "display_items": display_items,
-                    "total": {
-                        "label": "合計",
-                        "amount": {"value": total, "currency": "JPY"}
-                    }
-                },
-                "shipping_address": shipping_address
-            },
-            "cart_expiry": cart_expiry,
-            "merchant_name": MERCHANT_NAME
-        },
-        "merchant_authorization": None,  # 未署名
-        "_metadata": {
-            "intent_mandate_id": params.get("_session_data", {}).get("intent_mandate_id"),
-            "merchant_id": MERCHANT_ID,
-            "created_at": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
-            "cart_name": cart_plan.get("name", "カート"),
-            "cart_description": cart_plan.get("description", ""),
-            "raw_items": raw_items
-        }
+    # AP2準拠のCartMandate構築（ヘルパーメソッドに委譲）
+    session_data = {
+        "intent_mandate_id": params.get("_session_data", {}).get("intent_mandate_id"),
+        "cart_name": cart_plan.get("name", "カート"),
+        "cart_description": cart_plan.get("description", "")
     }
+    cart_mandate = cart_mandate_helpers.build_cart_mandate_structure(
+        display_items, raw_items, total, shipping_address, session_data
+    )
 
-    logger.info(f"[build_cart_mandates] Built CartMandate: {cart_id}")
     return {"cart_mandate": cart_mandate}
 
 
