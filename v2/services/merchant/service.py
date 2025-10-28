@@ -28,6 +28,29 @@ from v2.common.logger import get_logger, log_a2a_message, log_crypto_operation
 
 logger = get_logger(__name__, service_name='merchant')
 
+# ========================================
+# 定数定義
+# ========================================
+
+# Merchant識別情報
+MERCHANT_ID = "did:ap2:merchant:mugibo_merchant"
+MERCHANT_NAME = "むぎぼーショップ"
+
+# 署名モード
+DEFAULT_AUTO_SIGN_MODE = True  # デフォルトは自動署名
+
+# AP2ステータス定数
+STATUS_PENDING_MERCHANT_SIGNATURE = "pending_merchant_signature"
+STATUS_SIGNED = "signed"
+STATUS_REJECTED = "rejected"
+
+# AP2メッセージタイプ
+AP2_TYPE_CART_MANDATE = "ap2.mandates.CartMandate"
+AP2_TYPE_ERROR = "ap2.errors.Error"
+
+# JWT有効期限
+JWT_EXPIRATION_HOURS = 1  # Merchant Authorization JWTの有効期限（時間）
+
 
 class MerchantService(BaseAgent):
     """
@@ -53,11 +76,11 @@ class MerchantService(BaseAgent):
         self.db_manager = DatabaseManager(database_url=database_url)
 
         # このMerchantの情報
-        self.merchant_id = "did:ap2:merchant:mugibo_merchant"
-        self.merchant_name = "むぎぼーショップ"
+        self.merchant_id = MERCHANT_ID
+        self.merchant_name = MERCHANT_NAME
 
         # 署名モード設定（メモリ内管理、本番環境ではDBに保存）
-        self.auto_sign_mode = True  # デフォルトは自動署名
+        self.auto_sign_mode = DEFAULT_AUTO_SIGN_MODE
 
         # 起動イベントハンドラー登録
         @self.app.on_event("startup")
@@ -96,7 +119,7 @@ class MerchantService(BaseAgent):
         Merchantが受信するA2Aメッセージ：
         - ap2/CartMandate: Merchant Agentからの署名依頼
         """
-        self.a2a_handler.register_handler("ap2.mandates.CartMandate", self.handle_cart_mandate_sign_request)
+        self.a2a_handler.register_handler(AP2_TYPE_CART_MANDATE, self.handle_cart_mandate_sign_request)
 
     def register_endpoints(self):
         """
@@ -128,7 +151,7 @@ class MerchantService(BaseAgent):
 
             レスポンス（手動モード）:
             {
-              "status": "pending_merchant_signature",
+              "status": STATUS_PENDING_MERCHANT_SIGNATURE,
               "cart_mandate_id": "...",
               "message": "Manual approval required"
             }
@@ -147,7 +170,7 @@ class MerchantService(BaseAgent):
                 cart_id = cart_mandate["contents"]["id"]
 
                 if self.auto_sign_mode:
-                    # 自動署名モード
+                    # ===== 自動署名モード =====
                     signature = await self._sign_cart_mandate(cart_mandate)
                     signed_cart_mandate = cart_mandate.copy()
                     signed_cart_mandate["merchant_signature"] = signature.model_dump()
@@ -161,7 +184,7 @@ class MerchantService(BaseAgent):
 
                     # データベースに保存（既存のものがあれば更新）
                     async with self.db_manager.get_session() as db_session:
-                        # 既存のMandateをチェック
+                        # 既存のMandateをチェック（AP2冪等性）
                         existing_mandate = await MandateCRUD.get_by_id(db_session, cart_id)
 
                         if existing_mandate:
@@ -169,7 +192,7 @@ class MerchantService(BaseAgent):
                             await MandateCRUD.update_status(
                                 db_session,
                                 cart_id,
-                                "signed",
+                                STATUS_SIGNED,
                                 signed_cart_mandate
                             )
                             logger.info(f"[Merchant] Updated existing CartMandate: {cart_id}")
@@ -178,7 +201,7 @@ class MerchantService(BaseAgent):
                             await MandateCRUD.create(db_session, {
                                 "id": cart_id,
                                 "type": "Cart",
-                                "status": "signed",
+                                "status": STATUS_SIGNED,
                                 "payload": signed_cart_mandate,
                                 "issuer": self.agent_id
                             })
@@ -195,8 +218,8 @@ class MerchantService(BaseAgent):
                         "merchant_authorization": merchant_authorization_jwt
                     }
                 else:
-                    # 手動署名モード：承認待ちとして保存（既存がある場合は更新）
-                    # AP2仕様準拠：Cart Mandateは冪等であり、同じIDで複数回リクエスト可能
+                    # ===== 手動署名モード =====
+                    # 承認待ちとして保存（AP2冪等性：既存がある場合は更新）
                     async with self.db_manager.get_session() as session:
                         # 既存のCart Mandateをチェック
                         existing = await MandateCRUD.get_by_id(session, cart_id)
@@ -206,7 +229,7 @@ class MerchantService(BaseAgent):
                             await MandateCRUD.update_status(
                                 session,
                                 cart_id,
-                                status="pending_merchant_signature",
+                                status=STATUS_PENDING_MERCHANT_SIGNATURE,
                                 payload=cart_mandate
                             )
                             logger.info(
@@ -218,7 +241,7 @@ class MerchantService(BaseAgent):
                             await MandateCRUD.create(session, {
                                 "id": cart_id,
                                 "type": "Cart",
-                                "status": "pending_merchant_signature",
+                                "status": STATUS_PENDING_MERCHANT_SIGNATURE,
                                 "payload": cart_mandate,
                                 "issuer": self.agent_id
                             })
@@ -227,7 +250,7 @@ class MerchantService(BaseAgent):
                     logger.info(f"[Merchant] CartMandate pending manual approval: {cart_id}")
 
                     return {
-                        "status": "pending_merchant_signature",
+                        "status": STATUS_PENDING_MERCHANT_SIGNATURE,
                         "cart_mandate_id": cart_id,
                         "message": "Manual approval required by merchant"
                     }
@@ -250,9 +273,9 @@ class MerchantService(BaseAgent):
             }
 
             レスポンス:
-            - 承認待ち: {"status": "pending_merchant_signature", "cart_mandate_id": "cart_abc123"}
-            - 承認完了: {"status": "signed", "signed_cart_mandate": {...}}
-            - 拒否: {"status": "rejected", "cart_mandate_id": "cart_abc123", "reason": "..."}
+            - 承認待ち: {"status": STATUS_PENDING_MERCHANT_SIGNATURE, "cart_mandate_id": "cart_abc123"}
+            - 承認完了: {"status": STATUS_SIGNED, "signed_cart_mandate": {...}}
+            - 拒否: {"status": STATUS_REJECTED, "cart_mandate_id": "cart_abc123", "reason": "..."}
             - 未登録: {"status": "not_found", "cart_mandate_id": "cart_abc123"}
             """
             try:
@@ -272,26 +295,26 @@ class MerchantService(BaseAgent):
                         }
 
                     # ステータスに応じてレスポンスを返す
-                    if mandate.status == "signed":
+                    if mandate.status == STATUS_SIGNED:
                         # 承認完了: 署名済みCartMandateを返す
                         payload = json.loads(mandate.payload) if isinstance(mandate.payload, str) else mandate.payload
                         logger.info(f"[poll_cart_mandate] CartMandate signed: {cart_mandate_id}")
                         return {
-                            "status": "signed",
+                            "status": STATUS_SIGNED,
                             "signed_cart_mandate": payload
                         }
-                    elif mandate.status == "pending_merchant_signature":
+                    elif mandate.status == STATUS_PENDING_MERCHANT_SIGNATURE:
                         # 承認待ち
                         logger.debug(f"[poll_cart_mandate] CartMandate still pending: {cart_mandate_id}")
                         return {
-                            "status": "pending_merchant_signature",
+                            "status": STATUS_PENDING_MERCHANT_SIGNATURE,
                             "cart_mandate_id": cart_mandate_id
                         }
-                    elif mandate.status == "rejected":
+                    elif mandate.status == STATUS_REJECTED:
                         # 拒否
                         logger.info(f"[poll_cart_mandate] CartMandate rejected: {cart_mandate_id}")
                         return {
-                            "status": "rejected",
+                            "status": STATUS_REJECTED,
                             "cart_mandate_id": cart_mandate_id,
                             "reason": mandate.rejection_reason or "Rejected by merchant"
                         }
@@ -356,7 +379,7 @@ class MerchantService(BaseAgent):
             try:
                 async with self.db_manager.get_session() as session:
                     # 署名待ちのCartMandateを取得
-                    mandates = await MandateCRUD.get_by_status(session, "pending_merchant_signature")
+                    mandates = await MandateCRUD.get_by_status(session, STATUS_PENDING_MERCHANT_SIGNATURE)
 
                     return {
                         "orders": [
@@ -416,7 +439,7 @@ class MerchantService(BaseAgent):
             """
             try:
                 async with self.db_manager.get_session() as session:
-                    mandates = await MandateCRUD.get_by_status(session, "pending_merchant_signature")
+                    mandates = await MandateCRUD.get_by_status(session, STATUS_PENDING_MERCHANT_SIGNATURE)
 
                     return {
                         "pending_cart_mandates": [
@@ -477,7 +500,7 @@ class MerchantService(BaseAgent):
                     if not mandate:
                         raise HTTPException(status_code=404, detail="CartMandate not found")
 
-                    if mandate.status != "pending_merchant_signature":
+                    if mandate.status != STATUS_PENDING_MERCHANT_SIGNATURE:
                         raise HTTPException(
                             status_code=400,
                             detail=f"CartMandate is not pending approval (status: {mandate.status})"
@@ -499,7 +522,7 @@ class MerchantService(BaseAgent):
                     signed_cart_mandate["merchant_authorization"] = merchant_authorization_jwt
 
                     # ステータス更新
-                    await MandateCRUD.update_status(session, cart_mandate_id, "signed", signed_cart_mandate)
+                    await MandateCRUD.update_status(session, cart_mandate_id, STATUS_SIGNED, signed_cart_mandate)
 
                     logger.info(
                         f"[Merchant] Manually approved and signed CartMandate: {cart_mandate_id} "
@@ -536,20 +559,20 @@ class MerchantService(BaseAgent):
                     if not mandate:
                         raise HTTPException(status_code=404, detail="CartMandate not found")
 
-                    if mandate.status != "pending_merchant_signature":
+                    if mandate.status != STATUS_PENDING_MERCHANT_SIGNATURE:
                         raise HTTPException(
                             status_code=400,
                             detail=f"CartMandate is not pending approval (status: {mandate.status})"
                         )
 
                     # ステータス更新
-                    await MandateCRUD.update_status(session, cart_mandate_id, "rejected", mandate.payload)
+                    await MandateCRUD.update_status(session, cart_mandate_id, STATUS_REJECTED, mandate.payload)
 
                     rejection_reason = reason.get("reason", "No reason provided") if reason else "No reason provided"
                     logger.info(f"[Merchant] Rejected CartMandate: {cart_mandate_id}, reason: {rejection_reason}")
 
                     return {
-                        "status": "rejected",
+                        "status": STATUS_REJECTED,
                         "cart_mandate_id": cart_mandate_id,
                         "reason": rejection_reason
                     }

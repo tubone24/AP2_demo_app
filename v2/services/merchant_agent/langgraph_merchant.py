@@ -40,6 +40,22 @@ from v2.common.telemetry import get_tracer, create_http_span, is_telemetry_enabl
 logger = get_logger(__name__, service_name='langgraph_merchant')
 tracer = get_tracer(__name__)
 
+# ========================================
+# 定数定義
+# ========================================
+
+# CartMandate承認待機設定
+MAX_CART_APPROVAL_WAIT_TIME = 270  # 秒（4.5分 - Shopping Agentの300秒タイムアウトより短く設定）
+CART_APPROVAL_POLL_INTERVAL = 5    # 秒（ポーリング間隔）
+
+# CartMandate有効期限
+CART_MANDATE_EXPIRY_MINUTES = 30   # 分（CartMandateの有効期限）
+
+# AP2ステータス定数
+STATUS_PENDING_MERCHANT_SIGNATURE = "pending_merchant_signature"
+STATUS_SIGNED = "signed"
+STATUS_REJECTED = "rejected"
+
 # Langfuseトレーシング設定
 LANGFUSE_ENABLED = os.getenv("LANGFUSE_ENABLED", "false").lower() == "true"
 CallbackHandler = None
@@ -683,7 +699,7 @@ JSON配列形式で返答してください:
 
                 # AP2準拠：Merchantからのレスポンスを処理
                 # 自動署名: signed_cart_mandate が即座に返る
-                # 手動署名: status="pending_merchant_signature" でポーリング必要
+                # 手動署名: status=STATUS_PENDING_MERCHANT_SIGNATURE でポーリング必要
                 status = signed_cart_response.get("status")
                 signed_cart_mandate = signed_cart_response.get("signed_cart_mandate")
                 cart_mandate_id = signed_cart_response.get("cart_mandate_id")
@@ -699,7 +715,7 @@ JSON配列形式で返答してください:
                     )
                     # 後続の処理（706行目以降）で署名済みCartMandateを使用
 
-                elif status == "pending_merchant_signature":
+                elif status == STATUS_PENDING_MERCHANT_SIGNATURE:
                     # 手動署名モード: 承認待ちの場合、ポーリングして承認完了まで待機
                     # 理由: AP2仕様では「Merchant Entity(エージェントではなく)によって署名される」必要がある
                     # Merchant Agentが承認待ちをハンドリングすることで、Shopping Agentは常に署名済みCartMandateだけを受け取る
@@ -709,18 +725,16 @@ JSON配列形式で返答してください:
                         f"{cart_mandate_id}, plan={plan.get('name')} - Starting polling..."
                     )
 
-                    # ポーリング処理: Merchant承認完了まで待機
+                    # ===== ポーリング処理: Merchant承認完了まで待機 =====
                     # AP2完全準拠 & LangGraphベストプラクティス:
                     # Shopping Agentのタイムアウト（300秒）より短く設定し、
                     # 必ずShopping Agentにレスポンスを返せるようにする
                     import asyncio
-                    max_wait_time = 270  # 最大4.5分待機（SA timeout 300秒より短い）
-                    poll_interval = 5  # 5秒ごとにチェック
                     elapsed_time = 0
 
-                    while elapsed_time < max_wait_time:
-                        await asyncio.sleep(poll_interval)
-                        elapsed_time += poll_interval
+                    while elapsed_time < MAX_CART_APPROVAL_WAIT_TIME:
+                        await asyncio.sleep(CART_APPROVAL_POLL_INTERVAL)
+                        elapsed_time += CART_APPROVAL_POLL_INTERVAL
 
                         logger.info(
                             f"[build_cart_mandates] Polling Merchant for approval: "
@@ -739,7 +753,7 @@ JSON配列形式で返答してください:
                             poll_result = poll_response.json()
 
                             poll_status = poll_result.get("status")
-                            if poll_status == "signed":
+                            if poll_status == STATUS_SIGNED:
                                 # 承認完了！署名済みCartMandateを取得
                                 signed_cart_mandate = poll_result.get("signed_cart_mandate")
                                 logger.info(
@@ -747,11 +761,11 @@ JSON配列形式で返答してください:
                                     f"{cart_mandate_id} after {elapsed_time}s"
                                 )
                                 break
-                            elif poll_status == "pending_merchant_signature":
+                            elif poll_status == STATUS_PENDING_MERCHANT_SIGNATURE:
                                 # まだ承認待ち、ポーリング継続
                                 logger.debug(f"[build_cart_mandates] Still pending: {cart_mandate_id}")
                                 continue
-                            elif poll_status == "rejected":
+                            elif poll_status == STATUS_REJECTED:
                                 # 拒否された
                                 reason = poll_result.get("reason", "Unknown reason")
                                 logger.warning(
@@ -773,7 +787,7 @@ JSON配列形式で返答してください:
                             # ポーリングエラーは無視して継続
 
                     # タイムアウトチェック
-                    if elapsed_time >= max_wait_time:
+                    if elapsed_time >= MAX_CART_APPROVAL_WAIT_TIME:
                         status_dict["timeout"] = True
                         logger.warning(
                             f"[build_cart_mandates] Timeout waiting for approval ({elapsed_time}s): "
