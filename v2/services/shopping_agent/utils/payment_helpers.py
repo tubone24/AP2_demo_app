@@ -7,7 +7,7 @@ v2/services/shopping_agent/utils/payment_helpers.py
 import os
 import uuid
 import logging
-from typing import Dict, Any, Optional, tuple
+from typing import Dict, Any, Optional, Tuple
 from datetime import datetime, timezone
 
 from v2.common.user_authorization import create_user_authorization_vp
@@ -156,7 +156,7 @@ class PaymentHelpers:
         cart_mandate: Dict[str, Any],
         total_amount: Dict[str, Any],
         payment_response: Dict[str, Any]
-    ) -> tuple[str, Dict[str, Any]]:
+    ) -> Tuple[str, Dict[str, Any]]:
         """
         PaymentMandateContentsを構築（AP2公式型定義準拠）
 
@@ -236,7 +236,7 @@ class PaymentHelpers:
         payment_mandate: Dict[str, Any],
         cart_mandate: Dict[str, Any],
         intent_mandate: Optional[Dict[str, Any]]
-    ) -> tuple[int, list[str]]:
+    ) -> Tuple[int, list]:
         """
         リスク評価を実施してリスクスコアと不正指標を返す
 

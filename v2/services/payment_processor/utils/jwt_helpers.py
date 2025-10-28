@@ -8,7 +8,7 @@ import base64
 import json
 import time
 import logging
-from typing import Dict, Any, tuple
+from typing import Dict, Any, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +38,7 @@ class JWTHelpers:
         padding = '=' * (4 - len(data) % 4)
         return base64.urlsafe_b64decode(data + padding)
 
-    def parse_jwt_parts(self, jwt_string: str) -> tuple[Dict[str, Any], Dict[str, Any], str, str, str]:
+    def parse_jwt_parts(self, jwt_string: str) -> Tuple[Dict[str, Any], Dict[str, Any], str, str, str]:
         """
         JWTを分解してheader、payload、署名部分を返す
 

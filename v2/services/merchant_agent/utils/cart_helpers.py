@@ -7,7 +7,7 @@ v2/services/merchant_agent/utils/cart_helpers.py
 import uuid
 import json
 import logging
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +19,7 @@ class CartHelpers:
     def build_cart_items_from_products(
         products: List[Any],
         quantities: List[int]
-    ) -> tuple[List[Dict[str, Any]], int]:
+    ) -> Tuple[List[Dict[str, Any]], int]:
         """
         商品リストからCartItemを作成し、小計を計算
 
