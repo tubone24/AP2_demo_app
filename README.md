@@ -1,6 +1,6 @@
 # AP2 (Agent Payments Protocol) デモアプリケーション v2
 
-このアプリケーションは、[AP2プロトコル](https://ap2-protocol.org/)の完全なマイクロサービス実装です。AIエージェント間の安全な決済処理を、エンドツーエンドで体験できます。
+このアプリケーションは、[AP2プロトコル](https://ap2-protocol.org/)マイクロサービス実装です。AIエージェント間の安全な決済処理を、エンドツーエンドで体験できます。
 
 ![demo](./v2/docs/images/demo.gif)
 
@@ -20,16 +20,18 @@
 
 ### AP2とは？
 
-**AP2 (Agent Payments Protocol)** は、AIエージェントが安全に決済を実行するためのオープンプロトコルです。Googleと60以上の組織によって開発され、以下の特徴があります：
+AP2については、公式ドキュメントをご覧ください <https://ap2-protocol.org/>
 
-- **エージェント間通信 (A2A)**: 署名付きメッセージによる安全な通信
-- **3種類のMandate**: IntentMandate（購買意図）、CartMandate（カート）、PaymentMandate（決済）
-- **WebAuthn/Passkey**: ハードウェアベースの認証
-- **リスク評価**: 不正検知とリスクスコアリング
-- **Agent Token**: 決済ネットワークによるトークン化
-- **VDC (Verifiable Digital Credentials)**: 検証可能なデジタル資格情報
+このデモでは、以下のAP2の主要コンセプトを実装しています。
 
-### v2アプリの特徴
+- **エージェント間通信 (A2A)**
+  - 署名付きメッセージによる安全な通信
+- **3種類のMandate**
+  - IntentMandate、CartMandate、PaymentMandateの作成・署名・検証
+- 署名方式
+  - 各エンティティはECDSAまたはEd25519鍵ペアを使用して署名
+  - WebAuthn/Passkey (FIDO2) によるユーザー署名
+
 
 このv2実装は、AP2仕様を100%準拠した実装で、以下を提供します：
 

@@ -36,6 +36,7 @@ from common.logger import get_logger
 from common.a2a_handler import A2AMessageHandler
 from common.risk_assessment import RiskAssessmentEngine
 from common.telemetry import setup_telemetry, instrument_fastapi_app
+from services.shopping_agent_mcp.utils import MandateBuilders, A2AHelpers
 
 logger = get_logger(__name__, service_name='shopping_agent_mcp')
 
@@ -98,27 +99,8 @@ async def build_intent_mandate(params: Dict[str, Any]) -> Dict[str, Any]:
     session_data = params["session_data"]
 
     try:
-        # IntentMandate ID生成
-        intent_id = f"intent_{uuid.uuid4().hex[:16]}"
-
-        # AP2準拠IntentMandate構築
-        intent_mandate = {
-            "id": intent_id,
-            "natural_language_description": intent_data["natural_language_description"],
-            "user_cart_confirmation_required": intent_data.get("user_cart_confirmation_required", True),
-            "merchants": intent_data.get("merchants"),
-            "skus": intent_data.get("skus"),
-            "requires_refundability": intent_data.get("requires_refundability", False),
-            "intent_expiry": intent_data["intent_expiry"],
-            # メタデータ（AP2仕様外、内部管理用）
-            "_metadata": {
-                "user_id": session_data.get("user_id"),
-                "session_id": session_data.get("session_id"),
-                "created_at": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
-            }
-        }
-
-        logger.info(f"[build_intent_mandate] Built IntentMandate: {intent_id}")
+        # AP2準拠IntentMandate構築（ヘルパーメソッドに委譲）
+        intent_mandate = MandateBuilders.build_intent_mandate_structure(intent_data, session_data)
         return {"intent_mandate": intent_mandate}
 
     except Exception as e:
@@ -163,11 +145,8 @@ async def request_cart_candidates(params: Dict[str, Any]) -> Dict[str, Any]:
         if a2a_handler is None:
             raise RuntimeError("A2AMessageHandler not initialized. Server startup may have failed.")
 
-        # A2Aメッセージペイロード作成
-        payload = {
-            "intent_mandate": intent_mandate,
-            "shipping_address": shipping_address
-        }
+        # A2Aメッセージペイロード作成（ヘルパーメソッドに委譲）
+        payload = A2AHelpers.build_cart_request_payload(intent_mandate, shipping_address)
 
         # A2Aメッセージ作成（署名付き）
         message = a2a_handler.create_response_message(
@@ -241,11 +220,8 @@ async def select_and_sign_cart(params: Dict[str, Any]) -> Dict[str, Any]:
     user_signature = params["user_signature"]
 
     try:
-        # CartMandateにユーザー署名を追加
-        signed_cart_mandate = cart_mandate.copy()
-        signed_cart_mandate["user_authorization"] = user_signature
-
-        logger.info(f"[select_and_sign_cart] Cart signed: {cart_mandate['contents']['id']}")
+        # CartMandateにユーザー署名を追加（ヘルパーメソッドに委譲）
+        signed_cart_mandate = A2AHelpers.add_user_signature_to_cart(cart_mandate, user_signature)
         return {"signed_cart_mandate": signed_cart_mandate}
 
     except Exception as e:
@@ -352,20 +328,10 @@ async def build_payment_mandate(params: Dict[str, Any]) -> Dict[str, Any]:
     risk_assessment = params["risk_assessment"]
 
     try:
-        # PaymentMandate ID生成
-        payment_id = f"payment_{uuid.uuid4().hex[:16]}"
-
-        # AP2準拠PaymentMandate構築
-        payment_mandate = {
-            "id": payment_id,
-            "cart_mandate": cart_mandate,
-            "payment_method": payment_method,
-            "risk_score": risk_assessment.get("risk_score", 0),
-            "fraud_indicators": risk_assessment.get("fraud_indicators", []),
-            "created_at": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
-        }
-
-        logger.info(f"[build_payment_mandate] Built PaymentMandate: {payment_id}")
+        # AP2準拠PaymentMandate構築（ヘルパーメソッドに委譲）
+        payment_mandate = MandateBuilders.build_payment_mandate_structure(
+            cart_mandate, payment_method, risk_assessment
+        )
         return {"payment_mandate": payment_mandate}
 
     except Exception as e:
@@ -424,22 +390,16 @@ async def execute_payment(params: Dict[str, Any]) -> Dict[str, Any]:
         return {"error": str(e)}
 
 
-# FastAPIアプリ
-app = mcp.app
+# Lifespan イベントハンドラー
+from contextlib import asynccontextmanager
+from fastapi import FastAPI
 
-# OpenTelemetryセットアップ（Jaegerトレーシング）
-service_name = os.getenv("OTEL_SERVICE_NAME", "shopping_agent_mcp")
-setup_telemetry(service_name)
-
-# FastAPI計装（AP2完全準拠：MCP通信の可視化）
-instrument_fastapi_app(app)
-
-
-@app.on_event("startup")
-async def startup_event():
-    """起動時にデータベース・鍵・A2Aハンドラー初期化"""
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan イベントハンドラー（起動・シャットダウン処理）"""
     global a2a_handler, key_manager, risk_engine
 
+    # Startup処理
     try:
         logger.info("[Shopping Agent MCP] Starting up...")
 
@@ -500,13 +460,25 @@ async def startup_event():
         logger.error(f"[Shopping Agent MCP] Startup failed: {e}", exc_info=True)
         raise
 
+    # yieldでリクエスト処理へ
+    yield
 
-@app.on_event("shutdown")
-async def shutdown_event():
-    """シャットダウン時にHTTPクライアント終了"""
+    # Shutdown処理
     logger.info("[Shopping Agent MCP] Shutting down...")
     await http_client.aclose()
     logger.info("[Shopping Agent MCP] HTTP client closed")
+
+
+# FastAPIアプリ（lifespan付き）
+app = mcp.app
+app.router.lifespan_context = lifespan
+
+# OpenTelemetryセットアップ（Jaegerトレーシング）
+service_name = os.getenv("OTEL_SERVICE_NAME", "shopping_agent_mcp")
+setup_telemetry(service_name)
+
+# FastAPI計装（AP2完全準拠：MCP通信の可視化）
+instrument_fastapi_app(app)
 
 
 if __name__ == "__main__":
