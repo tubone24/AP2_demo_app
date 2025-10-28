@@ -1156,3 +1156,111 @@ curl -X POST http://localhost:8003/payment-methods/tokenize \
 - **COSE (CBOR Object Signing and Encryption)**: https://datatracker.ietf.org/doc/html/rfc8152
 - **AP2プロトコル**: https://ap2-protocol.org/specification/
 - **3D Secure**: https://www.emvco.com/emv-technologies/3d-secure/
+
+---
+
+## 開発者向け情報
+
+### utils/ ヘルパーパターン
+
+Credential Providerは複雑なビジネスロジックを`utils/`ヘルパークラスに分離しています。
+
+| ヘルパークラス | ファイル | 責務 | 主要メソッド |
+|------------|------|------|------------|
+| `PasskeyHelpers` | `utils/passkey_helpers.py` (176行) | WebAuthn Challenge/検証、Credential作成 | `generate_challenge()`, `verify_challenge()`, `create_credential()`, `verify_webauthn_attestation()` |
+| `TokenHelpers` | `utils/token_helpers.py` (67行) | Token生成・検証（Redis TTL管理） | `generate_token()`, `verify_token()` |
+| `StepUpHelpers` | `utils/stepup_helpers.py` (115行) | Step-up認証フロー管理（Redis Session） | `generate_step_up_challenge()`, `create_step_up_session()`, `verify_step_up_signature()` |
+| `PaymentMethodHelpers` | `utils/payment_method_helpers.py` (88行) | 支払い方法CRUD | `format_payment_methods()`, `create_payment_method()` |
+| `ReceiptHelpers` | `utils/receipt_helpers.py` (23行) | 領収書DB保存 | `save_receipt()` |
+
+**実装例（PasskeyHelpers）**:
+
+```python
+# provider.py でヘルパークラスをインポート
+from services.credential_provider.utils import PasskeyHelpers, TokenHelpers, StepUpHelpers
+
+# provider.py の __init__ でインスタンス化
+self.passkey_helpers = PasskeyHelpers(
+    rp_id=RP_ID,
+    rp_name=RP_NAME,
+    challenge_store=self.challenge_store,  # Redis SessionStore（TTL: 60秒）
+    db_manager=self.db_manager
+)
+self.token_helpers = TokenHelpers(
+    token_store=self.token_store  # Redis TokenStore（TTL: 15分）
+)
+self.stepup_helpers = StepUpHelpers(
+    session_store=self.session_store,  # Redis SessionStore（TTL: 10分）
+    challenge_store=self.challenge_store,
+    db_manager=self.db_manager
+)
+
+# エンドポイント内でヘルパーを使用（Challenge生成）
+@app.post("/register/passkey/challenge")
+async def register_passkey_challenge(request: PasskeyRegistrationChallengeRequest):
+    # ビジネスロジックをヘルパーに委譲
+    challenge, challenge_b64url = await self.passkey_helpers.generate_challenge(
+        user_id=request.user_id,
+        user_email=request.user_email
+    )
+    # ヘルパーが内部でRedisに保存（TTL: 60秒）
+    return {
+        "challenge": challenge_b64url,
+        "rp_id": RP_ID,
+        "rp_name": RP_NAME,
+        ...
+    }
+
+# エンドポイント内でヘルパーを使用（Challenge検証）
+@app.post("/register/passkey")
+async def register_passkey(request: PasskeyRegistrationRequest):
+    # Challenge検証をヘルパーに委譲
+    challenge_data = await self.passkey_helpers.verify_challenge(
+        challenge=extracted_challenge,
+        user_id=request.user_id
+    )
+    # ヘルパーが内部でRedisから削除（リプレイ攻撃防止）
+
+    # Credential作成をヘルパーに委譲
+    credential = await self.passkey_helpers.create_credential(
+        user_id=request.user_id,
+        credential_id=request.credential_id,
+        public_key=public_key_pem,
+        counter=authenticator_data_parsed["counter"]
+    )
+    return {"verified": True, "credential_id": credential.id}
+```
+
+**実装例（TokenHelpers + Redis TTL）**:
+
+```python
+# エンドポイント内でヘルパーを使用（トークン化）
+@app.post("/payment-methods/tokenize")
+async def tokenize_payment_method(request: TokenizePaymentMethodRequest):
+    # トークン生成をヘルパーに委譲
+    token = await self.token_helpers.generate_token(
+        payment_method_id=payment_method.id,
+        user_id=request.user_id,
+        ttl_seconds=15 * 60  # 15分（デフォルト）
+    )
+    # ヘルパーが内部でRedisに保存（TTL: 15分）
+    return {"token": token}
+
+# エンドポイント内でヘルパーを使用（トークン検証）
+@app.post("/credentials/verify")
+async def verify_credentials(request: VerifyCredentialsRequest):
+    # トークン検証をヘルパーに委譲（Redisから取得）
+    token_data = await self.token_helpers.verify_token(
+        token=request.token
+    )
+    # ヘルパーが内部でRedisからTTLを確認し、期限切れならNone返却
+    if not token_data:
+        raise HTTPException(status_code=401, detail="Token expired or invalid")
+    return {"verified": True, "credential_info": token_data}
+```
+
+**ヘルパーパターンの利点**:
+- **責務分離**: エンドポイントはHTTPルーティングに集中、ビジネスロジックはヘルパーに委譲
+- **Redis統合の抽象化**: TokenStore/SessionStoreをヘルパーに注入し、TTL管理を隠蔽
+- **テスタビリティ**: ヘルパークラスをモックRedisでテスト可能
+- **保守性**: WebAuthn仕様変更がPasskeyHelpersの1箇所に集約

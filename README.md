@@ -35,14 +35,17 @@ AP2については、公式ドキュメントをご覧ください <https://ap2-
 
 このv2実装は、AP2仕様を100%準拠した実装で、以下を提供します：
 
-✅ **12つのマイクロサービス**: Shopping Agent、Shopping Agent MCP、Merchant Agent、Merchant Agent MCP、Merchant、Credential Provider、Payment Processor、Payment Network、Meilisearch、Jaeger、Redis、Frontend
+✅ **12のマイクロサービス**: Shopping Agent、Shopping Agent MCP、Merchant Agent、Merchant Agent MCP、Merchant、Credential Provider、Payment Processor、Payment Network、Meilisearch、Jaeger、Redis、Frontend
 ✅ **完全なA2A通信**: ECDSA/Ed25519署名、Nonce検証、DID解決
-✅ **WebAuthn/Passkey対応**: FIDO2準拠の署名検証
-✅ **SSE/Streaming Chat**: リアルタイムな対話型UI
-✅ **AI駆動の商品検索**: LangGraph + MCP統合、Meilisearch全文検索
-✅ **決済ネットワーク統合**: Agent Token発行・トークン化
-✅ **Docker Compose**: ワンコマンドで全サービス起動
-✅ **統一ロギング**: JSON/テキスト形式、機密データマスキング
+✅ **WebAuthn/Passkey対応**: FIDO2準拠の署名検証（AP2 Step 19-22）
+✅ **SSE/Streaming Chat**: リアルタイムな対話型UI（Server-Sent Events）
+✅ **AI駆動の会話フロー**: LangGraph StateGraph（14ノード）+ MCP統合（9ツール）
+✅ **全文検索**: Meilisearch統合（商品名、説明、カテゴリ、ブランド、キーワード検索）
+✅ **Redis KVストア**: 一時データ管理（Token/Session/Challenge、TTL自動削除）
+✅ **決済ネットワーク統合**: Agent Token発行・トークン化（AP2 Step 23-27）
+✅ **分散トレーシング**: OpenTelemetry + Jaeger（全サービスの可視化）
+✅ **Docker Compose**: ワンコマンドで全サービス起動（ヘルスチェック対応）
+✅ **統一ロギング**: JSON/テキスト形式、機密データマスキング、構造化ログ
 
 ---
 
@@ -57,57 +60,66 @@ graph TB
     end
 
     subgraph "Backend Services"
-        SA[Shopping Agent<br/>Port 8000<br/>v2/services/shopping_agent/]
-        MA[Merchant Agent<br/>Port 8001<br/>v2/services/merchant_agent/]
-        MA_MCP[Merchant Agent MCP<br/>Port 8011<br/>v2/services/merchant_agent_mcp/]
-        M[Merchant<br/>Port 8002<br/>v2/services/merchant/]
-        CP[Credential Provider<br/>Port 8003<br/>v2/services/credential_provider/]
-        PP[Payment Processor<br/>Port 8004<br/>v2/services/payment_processor/]
-        PN[Payment Network<br/>Port 8005<br/>v2/services/payment_network/]
+        SA[Shopping Agent<br/>Port 8000<br/>LangGraph StateGraph<br/>14ノード]
+        SA_MCP[Shopping Agent MCP<br/>Port 8010<br/>MCPツール×6]
+        MA[Merchant Agent<br/>Port 8001<br/>LangGraph統合]
+        MA_MCP[Merchant Agent MCP<br/>Port 8011<br/>MCPツール×3]
+        M[Merchant<br/>Port 8002<br/>Cart署名・在庫管理]
+        CP[Credential Provider<br/>Port 8003<br/>WebAuthn・Token]
+        PP[Payment Processor<br/>Port 8004<br/>決済処理・領収書]
+        PN[Payment Network<br/>Port 8005<br/>Agent Token発行]
+    end
+
+    subgraph "Infrastructure Services"
         MS[Meilisearch<br/>Port 7700<br/>全文検索エンジン]
+        REDIS[(Redis<br/>Port 6379<br/>KV Store<br/>TTL自動削除)]
+        JAEGER[Jaeger<br/>Port 16686<br/>分散トレーシング]
     end
 
     subgraph "Data Layer"
-        DB1[(Shopping Agent DB<br/>SQLite<br/>v2/data/shopping_agent.db)]
-        DB2[(Merchant Agent DB<br/>SQLite<br/>v2/data/merchant_agent.db)]
-        DB3[(Credential Provider DB<br/>SQLite<br/>v2/data/credential_provider.db)]
-        DB4[(Payment Processor DB<br/>SQLite<br/>v2/data/payment_processor.db)]
-        REDIS[(Redis KV Store<br/>Port 6379<br/>一時データ管理)]
+        DB1[(Shopping Agent DB<br/>SQLite)]
+        DB2[(Merchant Agent DB<br/>SQLite)]
+        DB3[(Credential Provider DB<br/>SQLite<br/>永続データ)]
+        DB4[(Payment Processor DB<br/>SQLite)]
     end
 
     subgraph "Security & Crypto"
-        KEYS[Keys Storage<br/>ECDSA + Ed25519<br/>AES-256 Encrypted<br/>v2/keys/]
-        DID[DID Documents<br/>JSON<br/>v2/data/did_documents/]
+        KEYS[Keys Storage<br/>ECDSA + Ed25519<br/>AES-256 Encrypted]
+        DID[DID Documents<br/>JSON]
     end
 
-    subgraph "Common Modules<br/>v2/common/"
+    subgraph "Common Modules (v2/common/)"
         BASE[base_agent.py<br/>BaseAgent]
         A2A[a2a_handler.py<br/>A2AMessageHandler]
         CRYPTO[crypto.py<br/>KeyManager<br/>SignatureManager]
-        MODELS[models.py<br/>Pydantic Models]
-        DB[database.py<br/>DatabaseManager]
-        RISK[risk_assessment.py<br/>RiskEngine]
-        DID_RESOLVER[did_resolver.py<br/>DIDResolver]
         REDIS_CLIENT[redis_client.py<br/>RedisClient<br/>TokenStore<br/>SessionStore]
+        SEARCH[search_engine.py<br/>MeilisearchClient]
+        TELEMETRY[telemetry.py<br/>OpenTelemetry]
     end
 
-    UI -->|SSE/Stream| SA
+    UI -->|SSE/Stream<br/>POST /chat/stream| SA
     UI -->|REST API| M
+
+    SA -->|LangGraph Tools<br/>HTTP| SA_MCP
+    SA_MCP -->|build_intent_mandate<br/>request_cart_candidates<br/>select_and_sign_cart<br/>assess_payment_risk<br/>build_payment_mandate<br/>execute_payment| SA
 
     SA -->|A2A Message<br/>POST /a2a/message| MA
     SA -->|A2A Message| CP
     SA -->|A2A Message| M
-    MA -->|A2A Message| PP
-    MA -->|LangGraph Tools| MA_MCP
-    MA_MCP -->|商品検索| MS
-    CP -->|Agent Token発行| PN
+
+    MA -->|LangGraph Tools<br/>HTTP| MA_MCP
+    MA_MCP -->|search_products<br/>check_inventory<br/>build_cart_mandates| MA
+    MA_MCP -->|全文検索| MS
+
+    MA -->|A2A Message| M
+    CP -->|HTTP POST<br/>Agent Token発行| PN
 
     SA -.->|Read/Write| DB1
     MA -.->|Read/Write| DB2
     CP -.->|Read/Write<br/>永続データ| DB3
     PP -.->|Read/Write| DB4
 
-    CP -.->|Read/Write<br/>一時データ<br/>TTL管理| REDIS
+    CP -.->|Token/Session/Challenge<br/>TTL: 15min/10min/60sec| REDIS
 
     SA -.->|Load Keys| KEYS
     MA -.->|Load Keys| KEYS
@@ -126,22 +138,20 @@ graph TB
 
     BASE --> A2A
     BASE --> CRYPTO
-    BASE --> MODELS
-
-    A2A --> CRYPTO
-    A2A --> DID_RESOLVER
-
-    SA --> DB
-    MA --> DB
-    CP --> DB
-    PP --> DB
 
     CP --> REDIS_CLIENT
+    MA_MCP --> SEARCH
 
-    SA --> RISK
+    SA --> TELEMETRY
+    MA --> TELEMETRY
+    M --> TELEMETRY
+    CP --> TELEMETRY
+    PP --> TELEMETRY
+    TELEMETRY -.->|Traces| JAEGER
 
     style UI fill:#e1f5ff
     style SA fill:#fff4e6
+    style SA_MCP fill:#e1bee7
     style MA fill:#fff4e6
     style MA_MCP fill:#e1bee7
     style M fill:#fff4e6
@@ -150,34 +160,121 @@ graph TB
     style PN fill:#b2dfdb
     style MS fill:#ffccbc
     style REDIS fill:#fce4ec
+    style JAEGER fill:#e0f2f1
     style BASE fill:#ffe0b2
     style A2A fill:#ffe0b2
     style CRYPTO fill:#ffe0b2
     style REDIS_CLIENT fill:#ffe0b2
+    style SEARCH fill:#ffe0b2
+    style TELEMETRY fill:#ffe0b2
 ```
 
 ### マイクロサービス一覧
 
-| サービス | ポート | 役割 | 主要エンドポイント |
-|---------|--------|------|-------------------|
-| **Frontend** | 3000 | ユーザーインターフェース | `/`, `/chat`, `/merchant` |
-| **Shopping Agent** | 8000 | ユーザー代理エージェント、LangGraph統合 | `/chat/stream`, `/intent/challenge`, `/consent/submit` |
-| **Shopping Agent MCP** | 8010 | MCPツールサーバー（LangGraph用） | `/mcp/tools/list`, `/mcp/tools/call` |
-| **Merchant Agent** | 8001 | 商品検索・Cart作成、LangGraph統合 | `/search`, `/create-cart`, `/a2a/message` |
-| **Merchant Agent MCP** | 8011 | MCPツールサーバー（LangGraph用） | `/mcp/tools/list`, `/mcp/tools/call` |
-| **Merchant** | 8002 | Cart署名・在庫管理（Agentと分離） | `/sign/cart`, `/inventory/{sku}` |
-| **Credential Provider** | 8003 | WebAuthn検証・トークン発行・Step-up | `/verify/attestation`, `/payment-methods/tokenize` |
-| **Payment Processor** | 8004 | 決済処理・Mandate連鎖検証・領収書生成 | `/process`, `/transactions/{id}`, `/receipts/{id}.pdf` |
-| **Payment Network** | 8005 | Agent Token発行・決済ネットワークスタブ | `/network/tokenize`, `/network/validate-token` |
-| **Meilisearch** | 7700 | 全文検索エンジン（商品検索） | `/indexes/products/search` |
-| **Jaeger** | 16686 | OpenTelemetry分散トレーシングUI | `/search` |
-| **Redis** | 6379 | KVストア（一時データ・セッション管理） | N/A（内部使用） |
+| サービス | ポート | タイプ | 役割 | 主要エンドポイント（計） |
+|---------|--------|------|------|----------------------|
+| **Frontend** | 3000 | Web UI | Next.js UI（Chat + Merchant Dashboard） | `/`, `/chat`, `/merchant` |
+| **Shopping Agent** | 8000 | Backend | ユーザー代理エージェント（LangGraph StateGraph統合） | **17エンドポイント**: `/chat/stream`, `/intent/submit`, `/consent/submit`, `/cart/submit-signature`, `/payment/submit-attestation`, 他 |
+| **Shopping Agent MCP** | 8010 | MCP Server | MCPツール提供（LangGraph用、データアクセス専用） | **6 MCPツール**: `build_intent_mandate`, `request_cart_candidates`, `select_and_sign_cart`, `assess_payment_risk`, `build_payment_mandate`, `execute_payment` |
+| **Merchant Agent** | 8001 | Backend | 商品検索・Cart作成（LangGraph統合） | **4エンドポイント**: `/search`, `/create-cart`, `/inventory`, `/inventory/update` |
+| **Merchant Agent MCP** | 8011 | MCP Server | MCPツール提供（LangGraph用、Meilisearch統合） | **3 MCPツール**: `search_products`, `check_inventory`, `build_cart_mandates` |
+| **Merchant** | 8002 | Backend | Cart署名・在庫管理・商品管理（Agentと分離） | **15エンドポイント**: `/sign/cart`, `/poll/cart`, `/products`, `/orders/pending`, `/cart-mandates/{id}/approve`, 他 |
+| **Credential Provider** | 8003 | Backend | WebAuthn検証・トークン発行・Step-up認証 | **16エンドポイント**: `/register/passkey/challenge`, `/verify/attestation`, `/payment-methods/tokenize`, `/step-up/{session_id}/complete`, 他 |
+| **Payment Processor** | 8004 | Backend | 決済処理・Mandate連鎖検証・領収書生成 | **4エンドポイント**: `/process`, `/transactions/{id}`, `/refund`, `/receipts/{id}.pdf` |
+| **Payment Network** | 8005 | Backend | Agent Token発行・決済ネットワークスタブ | **4エンドポイント**: `/health`, `/network/tokenize`, `/network/verify-token`, `/network/info` |
+| **Meilisearch** | 7700 | Infrastructure | 全文検索エンジン（商品名・説明・カテゴリ・ブランド） | `/indexes/products/search` |
+| **Jaeger** | 16686 | Infrastructure | OpenTelemetry分散トレーシングUI | `/search`, `/trace/{traceID}` |
+| **Redis** | 6379 | Infrastructure | KVストア（Token/Session/Challenge、TTL自動削除） | N/A（内部使用、credential_providerから接続） |
+
+**合計**: 59エンドポイント + 9 MCPツール
 
 ---
 
 ## 主要フロー
 
-### 1. 購買フロー全体（実装ベース）
+### 1. LangGraph StateGraph統合フロー（実装アーキテクチャ）
+
+Shopping AgentはLangGraph StateGraphを使用して会話フローを管理します。以下は実装の詳細です。
+
+```mermaid
+graph TB
+    Start[ユーザー入力<br/>POST /chat/stream] --> Router{route_by_step<br/>session.step}
+
+    Router -->|"initial"| Greeting[greeting_node<br/>挨拶]
+    Router -->|"extract_intent"| ExtractIntent[extract_intent_node<br/>LLM: 意図抽出]
+    Router -->|"build_intent"| BuildIntent[build_intent_node<br/>MCP: build_intent_mandate]
+    Router -->|"request_carts"| RequestCarts[request_carts_node<br/>MCP: request_cart_candidates]
+    Router -->|"select_cart"| SelectCart[select_cart_node<br/>カート選択]
+    Router -->|"cart_signature_pending"| ConsentSig[consent_signature_node<br/>MCP: select_and_sign_cart]
+    Router -->|"select_payment"| SelectPayment[select_payment_node<br/>支払い方法選択]
+    Router -->|"webauthn_auth"| WebAuthn[webauthn_auth_node<br/>WebAuthn認証待機]
+    Router -->|"execute_payment"| ExecutePay[execute_payment_node<br/>MCP: execute_payment]
+    Router -->|"completed"| Completed[completed_node<br/>完了]
+
+    Greeting -->|step更新| End[SSEストリーム返却]
+    ExtractIntent -->|LLM呼び出し| End
+    BuildIntent -->|HTTP POST<br/>Shopping Agent MCP| BuildIntentMCP[Shopping Agent MCP<br/>:8010<br/>build_intent_mandate]
+    BuildIntentMCP -->|IntentMandate| End
+
+    RequestCarts -->|HTTP POST<br/>Shopping Agent MCP| RequestCartsMCP[Shopping Agent MCP<br/>:8010<br/>request_cart_candidates]
+    RequestCartsMCP -->|A2A Message| MerchantAgent[Merchant Agent<br/>:8001]
+    MerchantAgent -->|HTTP POST<br/>Merchant Agent MCP| MerchantMCP[Merchant Agent MCP<br/>:8011<br/>build_cart_mandates]
+    MerchantMCP -->|Meilisearch検索| Meili[(Meilisearch<br/>:7700)]
+    MerchantMCP -->|Cart候補| MerchantAgent
+    MerchantAgent -->|A2A Message| Merchant[Merchant<br/>:8002<br/>Cart署名]
+    Merchant -->|署名済みCart| MerchantAgent
+    MerchantAgent -->|Cart候補リスト| RequestCartsMCP
+    RequestCartsMCP -->|Cart候補| End
+
+    SelectCart -->|カート選択| End
+    ConsentSig -->|HTTP POST<br/>Shopping Agent MCP| ConsentMCP[Shopping Agent MCP<br/>:8010<br/>select_and_sign_cart]
+    ConsentMCP -->|署名済みCart| End
+
+    SelectPayment -->|HTTP POST<br/>Shopping Agent MCP| AssessRisk[Shopping Agent MCP<br/>:8010<br/>assess_payment_risk]
+    AssessRisk -->|RiskEngine| RiskScore[リスクスコア計算]
+    RiskScore -->|HTTP POST<br/>Shopping Agent MCP| BuildPayment[Shopping Agent MCP<br/>:8010<br/>build_payment_mandate]
+    BuildPayment -->|PaymentMandate| End
+
+    WebAuthn -->|WebAuthn検証| End
+    ExecutePay -->|HTTP POST<br/>Shopping Agent MCP| ExecuteMCP[Shopping Agent MCP<br/>:8010<br/>execute_payment]
+    ExecuteMCP -->|HTTP POST| PaymentProcessor[Payment Processor<br/>:8004<br/>/process]
+    PaymentProcessor -->|Credential検証| CP[Credential Provider<br/>:8003]
+    CP -->|Token検証| PN[Payment Network<br/>:8005<br/>/network/verify-token]
+    PN -->|検証結果| CP
+    CP -->|検証結果| PaymentProcessor
+    PaymentProcessor -->|決済結果<br/>領収書URL| ExecuteMCP
+    ExecuteMCP -->|決済結果| End
+
+    Completed -->|取引完了| End
+
+    style Start fill:#e1f5ff
+    style Router fill:#fff3e0
+    style BuildIntentMCP fill:#e1bee7
+    style RequestCartsMCP fill:#e1bee7
+    style MerchantMCP fill:#e1bee7
+    style ConsentMCP fill:#e1bee7
+    style AssessRisk fill:#e1bee7
+    style BuildPayment fill:#e1bee7
+    style ExecuteMCP fill:#e1bee7
+    style Meili fill:#ffccbc
+    style PaymentProcessor fill:#e8f5e9
+    style CP fill:#e8f5e9
+    style PN fill:#b2dfdb
+    style End fill:#c8e6c9
+```
+
+**LangGraph StateGraphの特徴**:
+- **14ノード**: greeting、extract_intent、build_intent、request_carts、select_cart、consent_signature、select_payment、webauthn_auth、execute_payment、completed等
+- **ステート駆動ルーティング**: `session["step"]`に基づいて適切なノードに自動遷移
+- **MCP統合**: 各ノードからShopping Agent MCP（Port 8010）の6ツールを呼び出し
+- **Checkpointer**: LangGraphのcheckpointer機能で会話の継続性を保証
+- **SSEストリーミング**: 各ノードの実行結果をServer-Sent Eventsでリアルタイム配信
+
+**ファイル**: `v2/services/shopping_agent/langgraph_shopping_flow.py` (1547行)
+
+---
+
+### 2. 購買フロー全体（実装ベース）
 
 ```mermaid
 sequenceDiagram
@@ -881,6 +978,223 @@ v2/
 │
 └── README.md                  # このファイル
 ```
+
+---
+
+### エンドポイント完全一覧
+
+各サービスのエンドポイント完全一覧（実装ベース）：
+
+#### Shopping Agent (Port 8000) - 17エンドポイント
+
+| エンドポイント | メソッド | 説明 | ファイル:行 |
+|-------------|---------|------|-----------|
+| `/auth/register` | POST | ユーザー登録 | `agent.py:294` |
+| `/auth/login` | POST | ログイン | `agent.py:368` |
+| `/auth/passkey/register/challenge` | POST | Passkey登録Challenge生成 | `agent.py:442` |
+| `/auth/passkey/register` | POST | Passkey登録 | `agent.py:488` |
+| `/auth/passkey/login/challenge` | POST | PasskeyログインChallenge生成 | `agent.py:550` |
+| `/auth/passkey/login` | POST | Passkeyログイン | `agent.py:602` |
+| `/auth/me` | GET | ユーザー情報取得 | `agent.py:665` |
+| `/intent/challenge` | POST | Intent Mandate Challenge生成 | `agent.py:689` |
+| `/intent/submit` | POST | Intent Mandate署名検証・保存 | `agent.py:733` |
+| `/consent/challenge` | POST | Cart Consent Challenge生成 | `agent.py:809` |
+| `/consent/submit` | POST | Cart署名検証・保存 | `agent.py:867` |
+| `/chat/stream` | POST | **SSEストリーミングチャット（LangGraph統合）** | `agent.py:961` |
+| `/products` | GET | 商品一覧取得 | `agent.py:1015` |
+| `/transactions/{transaction_id}` | GET | トランザクション詳細取得 | `agent.py:1038` |
+| `/payment/step-up-callback` | POST | Step-up認証コールバック | `agent.py:1049` |
+| `/cart/submit-signature` | POST | CartMandate署名送信 | `agent.py:1137` |
+| `/payment/submit-attestation` | POST | PaymentMandate署名送信（WebAuthn） | `agent.py:1310` |
+
+**主要メソッドチェーン**:
+- `POST /chat/stream` → `shopping_flow_graph.ainvoke()` (LangGraph) → Shopping Agent MCP ツール (6個) → A2A通信 → Merchant Agent
+
+#### Shopping Agent MCP (Port 8010) - 6 MCPツール
+
+| MCPツール | 説明 | ファイル:行 |
+|---------|------|-----------|
+| `build_intent_mandate` | IntentMandate構築（ヘルパー: `MandateBuilders.build_intent_mandate_structure`） | `main.py:71` |
+| `request_cart_candidates` | Merchant AgentにA2A送信、Cart候補取得（ヘルパー: `A2AHelpers.build_cart_request_payload`） | `main.py:111` |
+| `select_and_sign_cart` | CartMandateにユーザー署名追加（ヘルパー: `A2AHelpers.add_user_signature_to_cart`） | `main.py:192` |
+| `assess_payment_risk` | RiskAssessmentEngine実行 | `main.py:232` |
+| `build_payment_mandate` | PaymentMandate構築（ヘルパー: `MandateBuilders.build_payment_mandate_structure`） | `main.py:295` |
+| `execute_payment` | Payment Processorに決済依頼 | `main.py:342` |
+
+**ヘルパークラス**:
+- `shopping_agent_mcp/utils/mandate_builders.py` (87行) - `MandateBuilders`クラス
+- `shopping_agent_mcp/utils/a2a_helpers.py` (59行) - `A2AHelpers`クラス
+
+#### Merchant Agent (Port 8001) - 4エンドポイント
+
+| エンドポイント | メソッド | 説明 | ファイル:行 |
+|-------------|---------|------|-----------|
+| `/search` | GET | 商品検索 | `agent.py:177` |
+| `/create-cart` | POST | Cart候補作成 | `agent.py:210` |
+| `/inventory` | GET | 在庫確認 | `agent.py:243` |
+| `/inventory/update` | POST | 在庫更新 | `agent.py:268` |
+
+#### Merchant Agent MCP (Port 8011) - 3 MCPツール
+
+| MCPツール | 説明 | ファイル:行 |
+|---------|------|-----------|
+| `search_products` | **Meilisearch全文検索** → Product DB照合（ヘルパー: `ProductHelpers.map_products_to_list`） | `main.py:73` |
+| `check_inventory` | 在庫状況確認 | `main.py:166` |
+| `build_cart_mandates` | CartMandate構築（ヘルパー: `CartMandateHelpers.build_cart_items`, `calculate_tax`, `calculate_shipping_fee`, `build_cart_mandate_structure`） | `main.py:210` |
+
+**ヘルパークラス**:
+- `merchant_agent_mcp/utils/product_helpers.py` (55行) - `ProductHelpers`クラス
+- `merchant_agent_mcp/utils/cart_mandate_helpers.py` (147行) - `CartMandateHelpers`クラス
+
+#### Merchant (Port 8002) - 15エンドポイント
+
+| エンドポイント | メソッド | 説明 | 主要ヘルパー |
+|-------------|---------|------|-----------|
+| `/sign/cart` | POST | Cart署名（ECDSA） | `SignatureHelpers.sign_cart_mandate` |
+| `/poll/cart` | POST | Cart状態ポーリング | - |
+| `/products` | GET | 商品一覧取得 | - |
+| `/products/{product_id}` | PATCH | 商品更新 | - |
+| `/orders/pending` | GET | 未処理注文一覧 | - |
+| `/settings/signature-mode` | GET | 署名モード取得 | - |
+| `/settings/signature-mode` | POST | 署名モード設定 | - |
+| `/cart-mandates/pending` | GET | 未承認CartMandate一覧 | - |
+| `/cart-mandates/{cart_mandate_id}` | GET | CartMandate詳細 | - |
+| `/cart-mandates/{cart_mandate_id}/approve` | POST | **CartMandate承認・署名** | `ValidationHelpers.validate_cart_mandate` |
+| `/cart-mandates/{cart_mandate_id}/reject` | POST | CartMandate拒否 | - |
+| `/transactions` | GET | トランザクション一覧 | - |
+| `/products` | POST | 商品作成 | - |
+| `/products/{product_id}` | DELETE | 商品削除 | `InventoryHelpers.check_inventory` |
+
+**ヘルパークラス**:
+- `merchant/utils/signature_helpers.py` (97行) - `SignatureHelpers`クラス
+- `merchant/utils/validation_helpers.py` (106行) - `ValidationHelpers`クラス
+- `merchant/utils/inventory_helpers.py` (45行) - `InventoryHelpers`クラス
+- `merchant/utils/jwt_helpers.py` (85行) - `JWTHelpers`クラス
+
+#### Credential Provider (Port 8003) - 16エンドポイント
+
+| エンドポイント | メソッド | 説明 | 主要ヘルパー |
+|-------------|---------|------|-----------|
+| `/register/passkey/challenge` | POST | **Passkey登録Challenge生成（Redis保存、TTL:60秒）** | `PasskeyHelpers.generate_challenge` |
+| `/register/passkey` | POST | **Passkey登録・検証（Redis Challenge削除）** | `PasskeyHelpers.verify_challenge`, `PasskeyHelpers.create_credential` |
+| `/verify/attestation` | POST | WebAuthn Attestation検証 | `PasskeyHelpers.verify_webauthn_attestation` |
+| `/payment-methods` | GET | 支払い方法一覧取得 | `PaymentMethodHelpers.format_payment_methods` |
+| `/payment-methods` | POST | 支払い方法追加 | `PaymentMethodHelpers.create_payment_method` |
+| `/payment-methods/tokenize` | POST | **支払い方法トークン化（Redis保存、TTL:15分）** | `TokenHelpers.generate_token` |
+| `/payment-methods/step-up-challenge` | GET | Step-up Challenge生成 | `StepUpHelpers.generate_step_up_challenge` |
+| `/payment-methods/initiate-step-up` | POST | **Step-up認証開始（Redisセッション、TTL:10分）** | `StepUpHelpers.create_step_up_session` |
+| `/step-up/{session_id}` | GET | Step-upセッション取得 | - |
+| `/step-up/{session_id}/complete` | POST | **Step-up認証完了（Redisセッション削除）** | `StepUpHelpers.verify_step_up_signature` |
+| `/payment-methods/verify-step-up` | POST | Step-up署名検証 | - |
+| `/passkey/get-public-key` | POST | Passkey公開鍵取得 | - |
+| `/receipts` | POST | 領収書保存（DB） | `ReceiptHelpers.save_receipt` |
+| `/receipts` | GET | 領収書一覧取得 | - |
+| `/credentials/verify` | POST | **Credential Token検証（Redis照合）** | `TokenHelpers.verify_token` |
+
+**ヘルパークラス**:
+- `credential_provider/utils/passkey_helpers.py` (176行) - `PasskeyHelpers`クラス
+- `credential_provider/utils/token_helpers.py` (67行) - `TokenHelpers`クラス
+- `credential_provider/utils/stepup_helpers.py` (115行) - `StepUpHelpers`クラス
+- `credential_provider/utils/payment_method_helpers.py` (88行) - `PaymentMethodHelpers`クラス
+- `credential_provider/utils/receipt_helpers.py` (23行) - `ReceiptHelpers`クラス
+
+#### Payment Processor (Port 8004) - 4エンドポイント
+
+| エンドポイント | メソッド | 説明 | 主要ヘルパー |
+|-------------|---------|------|-----------|
+| `/process` | POST | **決済処理実行（3層署名検証）** | `MandateHelpers.validate_payment_mandate`, `JWTHelpers.verify_jwt_signature` |
+| `/transactions/{transaction_id}` | GET | トランザクション取得 | - |
+| `/refund` | POST | 返金処理 | - |
+| `/receipts/{transaction_id}.pdf` | GET | **領収書PDFダウンロード（JWT認証）** | - |
+
+**ヘルパークラス**:
+- `payment_processor/utils/mandate_helpers.py` (48行) - `MandateHelpers`クラス
+- `payment_processor/utils/jwt_helpers.py` (138行) - `JWTHelpers`クラス
+
+#### Payment Network (Port 8005) - 4エンドポイント
+
+| エンドポイント | メソッド | 説明 | 主要ヘルパー |
+|-------------|---------|------|-----------|
+| `/health` | GET | ヘルスチェック | - |
+| `/network/tokenize` | POST | **Agent Token発行（AP2 Step 23）** | `TokenHelpers.generate_agent_token` |
+| `/network/verify-token` | POST | Agent Token検証 | `TokenHelpers.verify_agent_token` |
+| `/network/info` | GET | ネットワーク情報取得 | - |
+
+**ヘルパークラス**:
+- `payment_network/utils/token_helpers.py` (85行) - `TokenHelpers`クラス
+
+---
+
+### utils/ ヘルパーパターン
+
+**v2実装の特徴**: 複雑なビジネスロジックを`utils/`サブディレクトリのヘルパークラスに分離し、メインサービスクラスをシンプルに保つパターンを採用。
+
+**合計**: 8サービスで18個のヘルパークラス（2312行）
+
+#### ヘルパークラスの役割分担
+
+| サービス | ヘルパークラス | 責務 | 行数 |
+|---------|------------|------|-----|
+| shopping_agent_mcp | `MandateBuilders` | IntentMandate/PaymentMandate構築 | 87 |
+| | `A2AHelpers` | A2Aメッセージペイロード作成、署名追加 | 59 |
+| merchant_agent_mcp | `ProductHelpers` | 商品データマッピング | 55 |
+| | `CartMandateHelpers` | CartMandate構築、税・送料計算 | 147 |
+| merchant | `SignatureHelpers` | CartMandate署名 | 97 |
+| | `ValidationHelpers` | CartMandate検証 | 106 |
+| | `InventoryHelpers` | 在庫確認ロジック | 45 |
+| | `JWTHelpers` | Merchant Authorization JWT生成 | 85 |
+| credential_provider | `PasskeyHelpers` | WebAuthn Challenge/検証、Credential作成 | 176 |
+| | `TokenHelpers` | Token生成・検証（Redis TTL管理） | 67 |
+| | `StepUpHelpers` | Step-up認証フロー管理（Redis Session） | 115 |
+| | `PaymentMethodHelpers` | 支払い方法CRUD | 88 |
+| | `ReceiptHelpers` | 領収書DB保存 | 23 |
+| payment_processor | `MandateHelpers` | PaymentMandate検証 | 48 |
+| | `JWTHelpers` | JWT検証（User/Merchant Authorization） | 138 |
+| payment_network | `TokenHelpers` | Agent Token生成・検証 | 85 |
+| shopping_agent | `HashHelpers` | ハッシュ計算 | 32 |
+| | `PaymentHelpers` | Payment処理ロジック | 127 |
+| | `CartHelpers` | Cart管理 | 89 |
+| | `A2AHelpers` | A2A通信ヘルパー | 78 |
+| merchant_agent | `ProductHelpers` | 商品検索・マッピング | 92 |
+
+**ヘルパーパターンの利点**:
+1. **コードの再利用性**: 同じロジックを複数エンドポイントで共有
+2. **テスタビリティ**: ヘルパークラスを独立してテスト可能
+3. **保守性**: ビジネスロジックの変更がヘルパークラスに集約
+4. **可読性**: メインサービスクラスがHTTPルーティングに集中
+
+**実装例**:
+```python
+# merchant_agent_mcp/main.py (メインサービス)
+from services.merchant_agent_mcp.utils import CartMandateHelpers
+
+cart_mandate_helpers = CartMandateHelpers(
+    merchant_id=MERCHANT_ID,
+    merchant_name=MERCHANT_NAME,
+    shipping_fee=SHIPPING_FEE,
+    tax_rate=TAX_RATE
+)
+
+@mcp.tool(name="build_cart_mandates", ...)
+async def build_cart_mandates(params: Dict[str, Any]) -> Dict[str, Any]:
+    # ビジネスロジックをヘルパーに委譲
+    display_items, raw_items, subtotal = cart_mandate_helpers.build_cart_items(cart_plan, products_map)
+    tax, tax_label = cart_mandate_helpers.calculate_tax(subtotal)
+    shipping_fee = cart_mandate_helpers.calculate_shipping_fee(subtotal)
+    cart_mandate = cart_mandate_helpers.build_cart_mandate_structure(display_items, raw_items, total, shipping_address, session_data)
+    return {"cart_mandate": cart_mandate}
+
+# merchant_agent_mcp/utils/cart_mandate_helpers.py (ヘルパークラス)
+class CartMandateHelpers:
+    def build_cart_items(self, cart_plan, products_map):
+        # 複雑な計算ロジック（147行）
+        ...
+    def calculate_tax(self, subtotal):
+        # 税金計算
+        ...
+```
+
+---
 
 ### コードとシーケンスの対応表
 

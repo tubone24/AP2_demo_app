@@ -36,6 +36,14 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from v2.common.logger import get_logger
 from v2.common.telemetry import get_tracer, create_http_span, is_telemetry_enabled
+from v2.services.merchant_agent.nodes import (
+    analyze_intent,
+    search_products,
+    check_inventory,
+    optimize_cart,
+    build_cart_mandates,
+    rank_and_select
+)
 
 logger = get_logger(__name__, service_name='langgraph_merchant')
 tracer = get_tracer(__name__)
@@ -191,13 +199,13 @@ class MerchantLangGraphAgent:
         """LangGraphのグラフを構築"""
         workflow = StateGraph(MerchantAgentState)
 
-        # ノード追加
-        workflow.add_node("analyze_intent", self._analyze_intent)
-        workflow.add_node("search_products", self._search_products)
-        workflow.add_node("check_inventory", self._check_inventory)
-        workflow.add_node("optimize_cart", self._optimize_cart)
-        workflow.add_node("build_cart_mandates", self._build_cart_mandates)
-        workflow.add_node("rank_and_select", self._rank_and_select)
+        # ノード追加（各ノード関数をラップしてagentインスタンスを渡す）
+        workflow.add_node("analyze_intent", lambda state: analyze_intent(self, state))
+        workflow.add_node("search_products", lambda state: search_products(self, state))
+        workflow.add_node("check_inventory", lambda state: check_inventory(self, state))
+        workflow.add_node("optimize_cart", lambda state: optimize_cart(self, state))
+        workflow.add_node("build_cart_mandates", lambda state: build_cart_mandates(self, state))
+        workflow.add_node("rank_and_select", lambda state: rank_and_select(self, state))
 
         # フロー定義
         workflow.set_entry_point("analyze_intent")
@@ -209,225 +217,6 @@ class MerchantLangGraphAgent:
         workflow.add_edge("rank_and_select", END)
 
         return workflow.compile()
-
-    async def _analyze_intent(self, state: MerchantAgentState) -> MerchantAgentState:
-        """IntentMandateを解析してユーザー嗜好を抽出（LLM直接実行）
-
-        AP2準拠のIntentMandate構造:
-        - natural_language_description: ユーザーの意図
-        - merchants: 許可されたMerchantリスト（オプション）
-        - skus: 特定のSKUリスト（オプション）
-        - requires_refundability: 返金可能性要件（オプション）
-        """
-        # MCP初期化（初回のみ、データアクセスツール用）
-        if not self.mcp_initialized:
-            try:
-                await self.mcp_client.initialize()
-                self.mcp_initialized = True
-                logger.info("[analyze_intent] MCP client initialized")
-            except Exception as e:
-                logger.error(f"[analyze_intent] MCP initialization failed: {e}")
-
-        intent_mandate = state["intent_mandate"]
-        natural_language_description = intent_mandate.get("natural_language_description", intent_mandate.get("intent", ""))
-
-        # LLMが無効な場合はフォールバック（AP2準拠）
-        if not self.llm:
-            # natural_language_descriptionからキーワード抽出
-            # 簡易的な形態素解析: カッコや助詞を除去し、名詞的な単語を抽出
-            keywords = self._extract_keywords_simple(natural_language_description)
-
-            # 汎用的なキーワード（「グッズ」「商品」「アイテム」等）を追加
-            # データベースの商品名に含まれる可能性が高い汎用語を補完
-            generic_keywords = []
-            desc_lower = natural_language_description.lower()
-
-            # カテゴリヒント
-            if any(word in desc_lower for word in ['グッズ', 'ぐっず', '商品', 'アイテム', '製品']):
-                generic_keywords.extend(['グッズ', '商品'])
-            if any(word in desc_lower for word in ['tシャツ', 'シャツ', '服', '衣類']):
-                generic_keywords.extend(['tシャツ', 'シャツ'])
-            if any(word in desc_lower for word in ['マグカップ', 'マグ', 'カップ']):
-                generic_keywords.append('マグ')
-
-            # 汎用キーワードがあれば優先、なければ空文字列で全商品検索
-            if generic_keywords:
-                keywords = generic_keywords
-            elif not keywords:
-                keywords = [""]  # 空文字列で全商品検索
-
-            state["user_preferences"] = {
-                "primary_need": natural_language_description,
-                "budget_strategy": "balanced",
-                "key_factors": ["品質", "価格"],
-                "search_keywords": keywords
-            }
-            state["llm_reasoning"] = f"LLM disabled, using fallback keywords: {keywords}"
-            logger.info(f"[analyze_intent] Fallback keywords extracted: {keywords} from '{natural_language_description}'")
-            return state
-
-        # LLMプロンプト構築（AP2準拠、日本語商品対応）
-        system_prompt = """あなたはMerchant Agentのインテント分析エキスパートです。
-ユーザーのIntentMandate（購入意図）を解析し、以下の情報を抽出してください:
-
-1. primary_need: ユーザーの主な要求（1文で簡潔に、日本語）
-2. budget_strategy: 予算戦略（"low"=最安値優先、"balanced"=バランス型、"premium"=高品質優先）
-3. key_factors: 重視する要素のリスト（例: ["品質", "価格", "ブランド", "デザイン"]）
-4. search_keywords: 商品検索用のキーワードリスト（日本語、3-5個、商品名に含まれそうな単語）
-
-**重要**:
-- search_keywordsは必ず日本語で返してください（例: ["かわいい", "グッズ", "Tシャツ"]）
-- 商品データベースは日本語の商品名（例: "むぎぼーTシャツ", "むぎぼーマグカップ"）なので、日本語キーワードが必須です
-
-必ずJSON形式で返答してください。"""
-
-        user_prompt = f"""以下のIntentMandateを分析してください:
-
-自然言語説明: {natural_language_description}
-制約条件: {json.dumps(intent_mandate.get('constraints', {}), ensure_ascii=False)}
-
-JSON形式で返答してください（search_keywordsは必ず日本語）:
-{{
-  "primary_need": "...",
-  "budget_strategy": "low/balanced/premium",
-  "key_factors": ["...", "..."],
-  "search_keywords": ["...", "...", "..."]
-}}"""
-
-        try:
-            # LLM呼び出し（コールバックはグラフレベルのconfigから自動的に伝播される）
-            messages = [
-                SystemMessage(content=system_prompt),
-                HumanMessage(content=user_prompt)
-            ]
-            response = await self.llm.ainvoke(messages)
-            response_text = response.content
-
-            # JSON抽出
-            preferences = self._parse_json_from_llm(response_text)
-
-            # 必須フィールドのバリデーション
-            if not preferences.get("search_keywords"):
-                preferences["search_keywords"] = [natural_language_description] if natural_language_description else []
-
-            state["user_preferences"] = preferences
-            state["llm_reasoning"] = f"Intent分析完了（LLM直接実行）: {preferences.get('primary_need', '')}"
-
-            logger.info(f"[analyze_intent] LLM result: {preferences}")
-
-        except Exception as e:
-            logger.error(f"[analyze_intent] LLM error: {e}", exc_info=True)
-            # フォールバック（AP2準拠）
-            state["user_preferences"] = {
-                "primary_need": natural_language_description,
-                "budget_strategy": "balanced",
-                "key_factors": ["品質", "価格"],
-                "search_keywords": [natural_language_description] if natural_language_description else []
-            }
-            state["llm_reasoning"] = f"LLM error, using fallback: {str(e)}"
-
-        return state
-
-    async def _search_products(self, state: MerchantAgentState) -> MerchantAgentState:
-        """データベースから商品検索（MCP経由）
-
-        AP2準拠のIntentMandate構造を使用:
-        - skus: 特定のSKUリスト（オプション）
-        - merchants: 許可されたMerchantリスト（オプション）
-        - natural_language_description: 検索に使用
-        """
-        preferences = state["user_preferences"]
-
-        # キーワード抽出（AP2準拠）
-        search_keywords = preferences.get("search_keywords", [])
-
-        # Langfuseトレーシング（MCPツール呼び出し）
-        trace_id = state.get("session_id", "unknown")
-        span = None  # スパン初期化
-
-        try:
-            # Langfuseスパン開始（可観測性向上）
-            if LANGFUSE_ENABLED and langfuse_client:
-                span = langfuse_client.start_span(
-                    name="mcp_search_products",
-                    input={"keywords": search_keywords, "limit": 20},
-                    metadata={"tool": "search_products", "mcp_server": "merchant_agent_mcp", "session_id": trace_id}
-                )
-
-            # MCP経由で商品検索
-            result = await self.mcp_client.call_tool("search_products", {
-                "keywords": search_keywords,
-                "limit": 20
-            })
-
-            products = result.get("products", [])
-            state["available_products"] = products
-            logger.info(f"[search_products] MCP returned {len(products)} products")
-
-            # Langfuseスパン終了（成功時）
-            if span:
-                span.update(output={"products_count": len(products), "products": products[:5]})  # 最初の5件のみ記録
-                span.end()
-
-        except Exception as e:
-            logger.error(f"[search_products] MCP error: {e}")
-            state["available_products"] = []
-
-            # Langfuseスパン終了（エラー時）
-            if span:
-                span.update(level="ERROR", status_message=str(e))
-                span.end()
-
-        return state
-
-    async def _check_inventory(self, state: MerchantAgentState) -> MerchantAgentState:
-        """在庫確認（MCP経由）"""
-        products = state["available_products"]
-
-        # 商品IDリスト抽出
-        product_ids = [p["id"] for p in products]
-
-        # Langfuseトレーシング（MCPツール呼び出し）
-        trace_id = state.get("session_id", "unknown")
-        span = None  # スパン初期化
-
-        try:
-            # Langfuseスパン開始（可観測性向上）
-            if LANGFUSE_ENABLED and langfuse_client:
-                span = langfuse_client.start_span(
-                    name="mcp_check_inventory",
-                    input={"product_ids": product_ids},
-                    metadata={"tool": "check_inventory", "mcp_server": "merchant_agent_mcp", "session_id": trace_id}
-                )
-
-            # MCP経由で在庫確認
-            result = await self.mcp_client.call_tool("check_inventory", {
-                "product_ids": product_ids
-            })
-
-            inventory_status = result.get("inventory", {})
-            state["inventory_status"] = inventory_status
-            logger.info(f"[check_inventory] MCP checked {len(inventory_status)} products")
-
-            # Langfuseスパン終了（成功時）
-            if span:
-                span.update(output={"inventory_status": inventory_status})
-                span.end()
-
-        except Exception as e:
-            logger.error(f"[check_inventory] MCP error: {e}")
-            # フォールバック: 商品データから在庫情報取得
-            inventory_status = {}
-            for product in products:
-                inventory_status[product["id"]] = product.get("stock", 0)
-            state["inventory_status"] = inventory_status
-
-            # Langfuseスパン終了（エラー時）
-            if span:
-                span.update(level="ERROR", status_message=str(e), output={"fallback_inventory": inventory_status})
-                span.end()
-
-        return state
 
     async def _optimize_cart(self, state: MerchantAgentState) -> MerchantAgentState:
         """LLMによるカート最適化（LLM直接実行） - 3プラン生成（AP2準拠）"""

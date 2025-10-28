@@ -490,6 +490,63 @@ async def execute_payment(params: Dict[str, Any]) -> Dict[str, Any]:
 
 ## 開発者向け情報
 
+### utils/ ヘルパーパターン
+
+Shopping Agent MCPは複雑なビジネスロジックを`utils/`ヘルパークラスに分離しています。
+
+| ヘルパークラス | ファイル | 責務 | 主要メソッド |
+|------------|------|------|------------|
+| `MandateBuilders` | `utils/mandate_builders.py` (87行) | IntentMandate/PaymentMandate構築 | `build_intent_mandate_structure()`, `build_payment_mandate_structure()` |
+| `A2AHelpers` | `utils/a2a_helpers.py` (59行) | A2Aメッセージペイロード作成、署名追加 | `build_cart_request_payload()`, `add_user_signature_to_cart()` |
+
+**実装例**:
+
+```python
+# main.py でヘルパークラスをインポート
+from services.shopping_agent_mcp.utils import MandateBuilders, A2AHelpers
+
+@mcp.tool(name="build_intent_mandate", ...)
+async def build_intent_mandate(params: Dict[str, Any]) -> Dict[str, Any]:
+    # ビジネスロジックをヘルパーに委譲
+    intent_mandate = MandateBuilders.build_intent_mandate_structure(
+        intent_data=params["intent_data"],
+        session_data=params["session_data"]
+    )
+    return {"intent_mandate": intent_mandate}
+
+@mcp.tool(name="request_cart_candidates", ...)
+async def request_cart_candidates(params: Dict[str, Any]) -> Dict[str, Any]:
+    # A2Aメッセージペイロード作成をヘルパーに委譲
+    payload = A2AHelpers.build_cart_request_payload(
+        intent_mandate=params["intent_mandate"],
+        shipping_address=params.get("shipping_address")
+    )
+
+    # A2Aメッセージ作成（署名付き）
+    message = a2a_handler.create_response_message(
+        recipient="did:ap2:agent:merchant_agent",
+        data_type="ap2.mandates.IntentMandate",
+        data_id=intent_mandate["id"],
+        payload=payload,
+        sign=True
+    )
+
+    # Merchant AgentにHTTP POST
+    response = await http_client.post(
+        f"{MERCHANT_AGENT_URL}/a2a/message",
+        json=message.model_dump()
+    )
+    return {"cart_candidates": response.json()["dataPart"]["payload"]["cart_candidates"]}
+```
+
+**ヘルパーパターンの利点**:
+- **責務分離**: MCPツールはHTTP通信に集中、ビジネスロジックはヘルパーに委譲
+- **再利用性**: MandateBuilders は複数ツールで共有
+- **テスタビリティ**: ヘルパークラスを独立してテスト可能
+- **保守性**: AP2仕様変更がヘルパークラスに集約
+
+---
+
 ### ローカル開発
 
 ```bash
