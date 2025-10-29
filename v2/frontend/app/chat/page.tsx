@@ -91,6 +91,9 @@ export default function ChatPage() {
       // レガシーのlocalStorageキーも設定（既存コンポーネントとの互換性）
       localStorage.setItem("ap2_user_id", user.id);
 
+      // sessionStorageにもuser_idを保存（支払い方法管理用）
+      sessionStorage.setItem("user_id", user.id);
+
       // AP2完全準拠: Credential Provider用Passkeyの登録チェック（Mandate署名用）
       // Shopping Agentはメール/パスワード認証、Credential ProviderはPasskey認証
       if (!isCredentialProviderPasskeyRegistered()) {

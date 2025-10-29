@@ -100,6 +100,9 @@ tracer = get_tracer(__name__)
 
 # HTTP Timeout設定（秒）
 HTTP_CLIENT_TIMEOUT = 600.0  # HTTPクライアント全体のタイムアウト（DMR LLM処理対応）
+HTTP_CONNECT_TIMEOUT = 30.0  # HTTP接続確立タイムアウト
+HTTP_WRITE_TIMEOUT = 30.0  # HTTPリクエスト書き込みタイムアウト
+HTTP_POOL_TIMEOUT = 10.0  # HTTPコネクションプール取得タイムアウト
 A2A_COMMUNICATION_TIMEOUT = 300.0  # A2A通信タイムアウト（エージェント間通信）
 SHORT_HTTP_TIMEOUT = 10.0  # 短い通信のタイムアウト
 
@@ -162,7 +165,15 @@ class ShoppingAgent(BaseAgent):
 
         # HTTPクライアント（他エージェントとの通信用）
         # タイムアウト600秒: DMR LLM処理が長時間かかる場合に対応
-        self.http_client = httpx.AsyncClient(timeout=HTTP_CLIENT_TIMEOUT)
+        # httpx.Timeoutで各段階のタイムアウトを明示的に設定
+        self.http_client = httpx.AsyncClient(
+            timeout=httpx.Timeout(
+                connect=HTTP_CONNECT_TIMEOUT,  # 接続確立タイムアウト
+                read=HTTP_CLIENT_TIMEOUT,  # レスポンス読み込みタイムアウト（600秒）
+                write=HTTP_WRITE_TIMEOUT,  # リクエスト書き込みタイムアウト
+                pool=HTTP_POOL_TIMEOUT  # コネクションプール取得タイムアウト
+            )
+        )
 
         # エージェントエンドポイント（Docker Compose環境想定）
         self.merchant_agent_url = "http://merchant_agent:8001"

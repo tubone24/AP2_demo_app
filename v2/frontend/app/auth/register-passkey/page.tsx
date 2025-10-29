@@ -24,6 +24,7 @@ import {
   isCredentialProviderPasskeyRegistered,
   registerCredentialProviderPasskey
 } from '@/lib/passkey';
+import { AddPaymentMethodForm } from '@/components/payment/AddPaymentMethodForm';
 
 export default function RegisterPasskeyPage() {
   const router = useRouter();
@@ -32,6 +33,7 @@ export default function RegisterPasskeyPage() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState(false);
   const [alreadyRegistered, setAlreadyRegistered] = useState(false);
+  const [showPaymentForm, setShowPaymentForm] = useState(false);
 
   useEffect(() => {
     // JWT認証チェック
@@ -69,10 +71,10 @@ export default function RegisterPasskeyPage() {
 
       setSuccess(true);
 
-      // 3秒後にチャット画面へリダイレクト
+      // 支払い方法登録画面を表示（AP2完全準拠）
       setTimeout(() => {
-        router.push('/chat');
-      }, 3000);
+        setShowPaymentForm(true);
+      }, 1500);
     } catch (err: any) {
       console.error('[Register Passkey] Error:', err);
       setError(err.message || 'Passkey登録に失敗しました。もう一度お試しください。');
@@ -214,6 +216,25 @@ export default function RegisterPasskeyPage() {
           </p>
         </div>
       </div>
+
+      {/* Passkey登録後の支払い方法登録ダイアログ（AP2完全準拠） */}
+      {showPaymentForm && (
+        <AddPaymentMethodForm
+          open={showPaymentForm}
+          userId={currentUser.id}
+          credentialProviderUrl={
+            process.env.NEXT_PUBLIC_CREDENTIAL_PROVIDER_URL || 'http://localhost:8003'
+          }
+          onAdded={() => {
+            // 支払い方法登録完了後、チャット画面へ
+            router.push('/chat');
+          }}
+          onSkip={() => {
+            // スキップしてチャット画面へ
+            router.push('/chat');
+          }}
+        />
+      )}
     </div>
   );
 }

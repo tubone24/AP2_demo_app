@@ -773,11 +773,18 @@ async def fetch_carts_node(state: ShoppingFlowState, agent_instance: Any) -> Sho
                 # Artifact構造からCartMandateを抽出（AP2/A2A仕様）
                 cart_mandate = cart_artifact["parts"][0]["data"]["ap2.mandates.CartMandate"]
 
+                # 商品画像URLを抽出（AP2準拠: CartItem.image_url）
+                product_images = []
+                for item in cart_mandate.get("items", []):
+                    if item.get("image_url"):
+                        product_images.append(item["image_url"])
+
                 # フロントエンド用のCartCandidate形式に変換
                 cart_candidate = {
                     "artifact_id": cart_artifact.get("artifactId", f"artifact_{i}"),
                     "artifact_name": cart_artifact.get("name", f"カート{i+1}"),
-                    "cart_mandate": cart_mandate
+                    "cart_mandate": cart_mandate,
+                    "product_images": product_images  # 商品サムネイル画像URLリスト
                 }
                 frontend_cart_candidates.append(cart_candidate)
             except (KeyError, IndexError) as e:
@@ -986,10 +993,42 @@ async def select_payment_method_node(state: ShoppingFlowState, agent_instance: A
         if not available_payment_methods:
             available_payment_methods = session.get("payment_methods", [])
 
+        # AP2完全準拠: 支払い方法がない場合はCPから再取得
+        if not available_payment_methods:
+            logger.info("[select_payment_method_node] Payment methods not found in session, retrieving from CP")
+
+            # Credential Providerを取得
+            credential_provider = session.get("selected_credential_provider")
+            if not credential_provider:
+                events.append({
+                    "type": "agent_text",
+                    "content": "申し訳ございません。Credential Providerが選択されていません。"
+                })
+                session["step"] = "error"
+                return {
+                    **state,
+                    "session": session,
+                    "events": events,
+                    "next_step": END
+                }
+
+            # CPから支払い方法を取得（AP2 Step 6-7）
+            user_id = session.get("user_id", "anonymous")
+            available_payment_methods = await agent_instance._get_payment_methods_from_cp(
+                user_id=user_id,
+                credential_provider_url=credential_provider["url"]
+            )
+
+            # セッションに保存
+            session["payment_methods"] = available_payment_methods
+            session["available_payment_methods"] = available_payment_methods
+
+            logger.info(f"[select_payment_method_node] Retrieved {len(available_payment_methods)} payment methods from CP")
+
         if not available_payment_methods:
             events.append({
                 "type": "agent_text",
-                "content": "申し訳ございません。支払い方法リストが見つかりません。"
+                "content": "申し訳ございません。利用可能な支払い方法が見つかりません。"
             })
             session["step"] = "error"
             return {

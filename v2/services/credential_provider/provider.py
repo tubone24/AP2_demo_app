@@ -251,8 +251,8 @@ class CredentialProviderService(BaseAgent):
                     "attestation": "none",  # AP2仕様：attestation検証は不要
                     "authenticatorSelection": {
                         "authenticatorAttachment": "platform",  # ハードウェアバックドキー
-                        "userVerification": "preferred",
-                        "residentKey": "preferred"
+                        "userVerification": "required",  # AP2完全準拠：生体認証必須
+                        "residentKey": "required"  # AP2完全準拠：Discoverable Credential必須
                     }
                 }
 
@@ -654,6 +654,37 @@ class CredentialProviderService(BaseAgent):
             except Exception as e:
                 logger.error(f"[add_payment_method] Error: {e}", exc_info=True)
                 raise HTTPException(status_code=400, detail=str(e))
+
+        @self.app.delete("/payment-methods/{payment_method_id}")
+        async def delete_payment_method(payment_method_id: str):
+            """
+            DELETE /payment-methods/{payment_method_id} - 支払い方法削除（AP2完全準拠）
+
+            データベースから永続的に削除
+            """
+            try:
+                # データベースから削除
+                async with self.db_manager.get_session() as session:
+                    deleted = await PaymentMethodCRUD.delete(session, payment_method_id)
+
+                if not deleted:
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"Payment method not found: {payment_method_id}"
+                    )
+
+                logger.info(f"[delete_payment_method] Deleted payment method: {payment_method_id}")
+
+                return {
+                    "message": "Payment method deleted successfully",
+                    "payment_method_id": payment_method_id
+                }
+
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"[delete_payment_method] Error: {e}", exc_info=True)
+                raise HTTPException(status_code=500, detail=str(e))
 
         @self.app.post("/payment-methods/tokenize")
         async def tokenize_payment_method(tokenize_request: Dict[str, Any]):
