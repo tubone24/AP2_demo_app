@@ -126,7 +126,8 @@ export function CartCard({
           {displayProductItems.map((item, index) => {
             // _metadata.raw_itemsから画像URLと数量を取得（あれば）
             const rawItem = _metadata?.raw_items?.[index];
-            const imageUrl = rawItem?.image_url || rawItem?.metadata?.image_url || "https://placehold.co/100x100/EEE/999?text=No+Image";
+            // AP2完全準拠: 商品画像は常に表示（デフォルトはむぎぼー画像）
+            const imageUrl = rawItem?.image_url || rawItem?.metadata?.image_url || "/assets/むぎぼーアクリルキーホルダー.png";
             const isLocalPath = imageUrl.startsWith("/");
 
             return (
@@ -134,18 +135,17 @@ export function CartCard({
                 key={index}
                 className="flex items-center gap-2 p-2 bg-muted/30 rounded-md"
               >
-                {rawItem?.image_url && (
-                  <div className="relative w-10 h-10 flex-shrink-0">
-                    <Image
-                      src={imageUrl}
-                      alt={item.label}
-                      fill
-                      className="object-cover rounded"
-                      sizes="40px"
-                      unoptimized={isLocalPath}
-                    />
-                  </div>
-                )}
+                {/* AP2完全準拠: 商品画像を常に表示（ユーザビリティ向上） */}
+                <div className="relative w-10 h-10 flex-shrink-0">
+                  <Image
+                    src={imageUrl}
+                    alt={item.label}
+                    fill
+                    className="object-cover rounded"
+                    sizes="40px"
+                    unoptimized={isLocalPath}
+                  />
+                </div>
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium truncate">{item.label}</p>
                   {rawItem && (

@@ -1185,18 +1185,100 @@ async def select_payment_method_node(state: ShoppingFlowState, agent_instance: A
 
 
 async def step_up_auth_node(state: ShoppingFlowState, agent_instance: Any) -> ShoppingFlowState:
-    """ノード10: 3D Secure 2.0 Step-up認証（AP2完全準拠）"""
+    """ノード10: 3D Secure 2.0 Step-up認証（AP2完全準拠）
+
+    AP2仕様準拠:
+    - Credential Providerの/payment-methods/step-up-challengeエンドポイントにリダイレクト
+    - return_urlで認証完了後にチャット画面に戻る
+    - step_up_session_idでセッションを追跡
+
+    LangGraphベストプラクティス: 外部API待機パターン
+    - `step-up-completed:xxx`トークンでStep-up完了を検知
+    - 完了後、webauthn_authノードに自動遷移
+    """
     session = state["session"]
+    user_input = state["user_input"]
     events = []
 
     # session_idはstateから取得（AP2完全準拠）
     session_id = state.get("session_id", "unknown")
 
-    # 3DS認証URLを表示（AP2完全準拠）
+    # `step-up-completed:xxx`トークンでStep-up完了を検知
+    if user_input.startswith("step-up-completed:"):
+        # Step-up認証完了、WebAuthn署名へ
+        step_up_session_id = user_input.split(":", 1)[1] if ":" in user_input else "unknown"
+
+        logger.info(
+            f"[step_up_auth_node] Step-up authentication completed\n"
+            f"  Step-up Session ID: {step_up_session_id}\n"
+            f"  Next: WebAuthn signature for Payment Mandate"
+        )
+
+        events.append({
+            "type": "agent_text",
+            "content": "✅ 3D Secure認証が完了しました！PaymentMandateに署名をお願いします..."
+        })
+
+        # AP2完全準拠: Step-up完了後はWebAuthn署名ステップへ
+        session["step"] = "webauthn_signature_requested"
+
+        return {
+            **state,
+            "session": session,
+            "events": events,
+            "next_step": "webauthn_auth"
+        }
+
+    # 初回アクセス: Step-Upリダイレクト送信
+    # 選択された支払い方法とCredential Providerを取得
+    selected_method = session.get("selected_payment_method")
+    selected_cp = session.get("selected_credential_provider")
+
+    if not selected_method or not selected_cp:
+        logger.error("[step_up_auth_node] Missing payment method or credential provider")
+        events.append({
+            "type": "agent_text",
+            "content": "❌ Step-up認証の準備中にエラーが発生しました。支払い方法を再選択してください。"
+        })
+        session["step"] = "error"
+        return {
+            **state,
+            "session": session,
+            "events": events,
+            "next_step": END
+        }
+
+    # Step-upセッションIDを生成（AP2完全準拠）
+    import uuid
+    step_up_session_id = f"stepup_{uuid.uuid4().hex[:16]}"
+    session["step_up_session_id"] = step_up_session_id
+
+    # Credential ProviderのStep-Up URLを生成（AP2完全準拠）
+    # Docker環境を考慮してlocalhostに変換
+    cp_url = selected_cp["url"].replace("http://credential_provider:8003", "http://localhost:8003")
+
+    # return_url: Step-up完了後にチャット画面に戻るURL
+    # URLパラメータでsession_idとstep_up_statusを含める
+    return_url = f"http://localhost:3000/chat?step_up_status=success&step_up_session_id={step_up_session_id}&session_id={session_id}"
+
+    # Step-Up Challenge URL（AP2完全準拠）
+    step_up_url = f"{cp_url}/payment-methods/step-up-challenge?payment_method_id={selected_method['id']}&return_url={return_url}"
+
+    logger.info(
+        f"[step_up_auth_node] Step-up authentication required\n"
+        f"  Payment Method: {selected_method.get('brand', 'unknown')} ****{selected_method.get('last4', '0000')}\n"
+        f"  Step-up URL: {step_up_url}\n"
+        f"  Session ID: {session_id}\n"
+        f"  Step-up Session ID: {step_up_session_id}"
+    )
+
+    # AP2完全準拠: step_up_redirectイベントを送信
+    # フロントエンドがこのイベントを受け取り、新しいウィンドウでStep-Up画面を開く
     events.append({
-        "type": "stepup_authentication_request",
-        "auth_url": "https://example.com/3ds-auth",  # 実際のACS URLを使用
-        "challenge": f"3ds_{session_id}"
+        "type": "step_up_redirect",
+        "step_up_url": step_up_url,
+        "session_id": step_up_session_id,
+        "reason": "3D Secure authentication required for this payment method"
     })
 
     session["step"] = "step_up_requested"
@@ -1205,7 +1287,7 @@ async def step_up_auth_node(state: ShoppingFlowState, agent_instance: Any) -> Sh
         **state,
         "session": session,
         "events": events,
-        "next_step": END  # 外部API（POST /payment/submit-step-up-result）を待つ
+        "next_step": END  # 外部API待機（フロントエンドからstep-up-completed:xxxメッセージを待つ）
     }
 
 

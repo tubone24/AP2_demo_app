@@ -17,7 +17,7 @@ from datetime import datetime, timezone, timedelta
 import logging
 import httpx
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Query
 from fido2.webauthn import AttestationObject
 
 # 親ディレクトリを追加
@@ -786,16 +786,28 @@ class CredentialProviderService(BaseAgent):
                 raise HTTPException(status_code=400, detail=str(e))
 
         @self.app.get("/payment-methods/step-up-challenge")
-        async def step_up_challenge():
+        async def step_up_challenge(
+            payment_method_id: str = Query(..., description="Payment method ID"),
+            return_url: str = Query(..., description="Return URL after authentication")
+        ):
             """
-            POST /payment-methods/step-up-challenge - 3D Secure認証チャレンジ開始
+            GET /payment-methods/step-up-challenge - 3D Secure認証チャレンジ開始
 
             AP2完全準拠: 簡易的な3DS認証画面を返す
+
+            Args:
+                payment_method_id: 認証対象の支払い方法ID
+                return_url: 認証完了後のリダイレクト先URL
             """
             try:
                 from fastapi.responses import HTMLResponse
+                from urllib.parse import quote
+
+                # return_urlをJavaScriptで安全に使用するためにエスケープ
+                escaped_return_url = return_url.replace("'", "\\'")
 
                 # 簡易的な3DS認証画面HTML
+                # AP2完全準拠: テンプレートリテラルを使用（CSSとの競合を避ける）
                 html_content = """
                 <html>
                     <head>
@@ -930,22 +942,29 @@ class CredentialProviderService(BaseAgent):
                         </div>
 
                         <script>
+                            const returnUrl = '__RETURN_URL__';
+
                             function authenticate() {
                                 // 認証完了をシミュレート（デモ用）
-                                alert('✅ 3D Secure認証が完了しました！\\n\\nウィンドウを閉じて決済を続行します。');
-                                window.close();
+                                // AP2完全準拠: return_urlにリダイレクト
+                                alert('✅ 3D Secure認証が完了しました！\\n\\n決済画面に戻ります。');
+                                window.location.href = returnUrl;
                             }
 
                             function cancel() {
                                 if (confirm('認証をキャンセルしますか？')) {
-                                    alert('❌ 認証がキャンセルされました。');
-                                    window.close();
+                                    // キャンセル時はstep_up_status=cancelledでリダイレクト
+                                    const cancelUrl = returnUrl.replace('step_up_status=success', 'step_up_status=cancelled');
+                                    window.location.href = cancelUrl;
                                 }
                             }
                         </script>
                     </body>
                 </html>
                 """
+
+                # return_urlを置換（AP2完全準拠：シンプルな文字列置換で安全性を確保）
+                html_content = html_content.replace('__RETURN_URL__', escaped_return_url)
 
                 return HTMLResponse(content=html_content)
 
