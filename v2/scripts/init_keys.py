@@ -67,7 +67,29 @@ AGENTS = [
         "agent_id": "credential_provider",
         "did": "did:ap2:cp:demo_cp",
         "name": "Credential Provider",
-        "env_var": "AP2_CREDENTIAL_PROVIDER_PASSPHRASE"
+        "env_var": "AP2_CREDENTIAL_PROVIDER_PASSPHRASE",
+        "service_endpoint": {
+            "type": "AP2CredentialProvider",
+            "url": "http://credential_provider:8003",
+            "name": "AP2 Demo Credential Provider",
+            "description": "デモ用CP（Passkey対応）",
+            "supported_methods": ["card", "passkey"],
+            "logo_url": ""
+        }
+    },
+    {
+        "agent_id": "credential_provider_2",
+        "did": "did:ap2:cp:demo_cp_2",
+        "name": "Credential Provider 2",
+        "env_var": "AP2_CREDENTIAL_PROVIDER_2_PASSPHRASE",
+        "service_endpoint": {
+            "type": "AP2CredentialProvider",
+            "url": "http://credential_provider_2:8003",
+            "name": "AP2 Demo Credential Provider 2",
+            "description": "デモ用CP2（Passkey対応）",
+            "supported_methods": ["card", "passkey"],
+            "logo_url": ""
+        }
     },
     {
         "agent_id": "payment_processor",
@@ -224,6 +246,21 @@ class KeyInitializer:
             "created": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
             "updated": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
         }
+
+        # AP2完全準拠: サービスエンドポイントを追加（存在する場合）
+        if "service_endpoint" in agent_info:
+            service_ep = agent_info["service_endpoint"]
+            did_doc["service"] = [
+                {
+                    "id": f"{did}#{service_ep['type'].lower().replace('ap2', '')}",
+                    "type": service_ep["type"],
+                    "serviceEndpoint": service_ep["url"],
+                    "name": service_ep["name"],
+                    "description": service_ep["description"],
+                    "supported_methods": service_ep["supported_methods"],
+                    "logo_url": service_ep["logo_url"]
+                }
+            ]
 
         return did_doc
 

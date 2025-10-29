@@ -60,7 +60,7 @@ async def create_cart_mandate(agent: 'MerchantAgent', cart_request: Dict[str, An
                     "value": str(total_price_cents / 100),
                     "currency": "JPY"
                 },
-                "image_url": metadata_dict.get("image_url"),
+                "image_url": product.image_url,  # AP2準拠: Productモデルから直接取得
                 "sku": product.sku,
                 "category": metadata_dict.get("category"),
                 "brand": metadata_dict.get("brand")

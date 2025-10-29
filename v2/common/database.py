@@ -45,6 +45,7 @@ class Product(Base):
     description = Column(Text, nullable=False)
     price = Column(Integer, nullable=False)  # cents
     inventory_count = Column(Integer, nullable=False, default=0)
+    image_url = Column(String, nullable=True)  # 内部用: フロントエンド表示用
     product_metadata = Column(Text, nullable=True)  # JSON as text (renamed from 'metadata' to avoid SQLAlchemy reserved word)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
@@ -57,6 +58,7 @@ class Product(Base):
             "description": self.description,
             "price": self.price,
             "inventory_count": self.inventory_count,
+            "image_url": self.image_url,
             "metadata": json.loads(self.product_metadata) if self.product_metadata else None,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
@@ -408,6 +410,9 @@ class ProductCRUD:
     @staticmethod
     async def create(session: AsyncSession, product_data: Dict[str, Any]) -> Product:
         """商品作成"""
+        metadata = product_data.get("metadata", {})
+        image_url = metadata.get("image_url") if metadata else None
+
         product = Product(
             id=product_data.get("id", str(uuid.uuid4())),
             sku=product_data["sku"],
@@ -415,7 +420,8 @@ class ProductCRUD:
             description=product_data["description"],
             price=product_data["price"],
             inventory_count=product_data.get("inventory_count", 0),
-            product_metadata=json.dumps(product_data.get("metadata")) if product_data.get("metadata") else None
+            image_url=image_url,
+            product_metadata=json.dumps(metadata) if metadata else None
         )
         session.add(product)
         await session.commit()

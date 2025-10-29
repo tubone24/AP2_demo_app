@@ -7,7 +7,7 @@ export default function Home() {
           Agent Payments Protocol - Microservices Architecture
         </p>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-8">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mt-8">
           <a
             href="/chat"
             className="group rounded-lg border border-gray-300 px-5 py-4 transition-colors hover:border-gray-400 hover:bg-gray-100 hover:dark:border-neutral-700 hover:dark:bg-neutral-800/30"
@@ -20,6 +20,21 @@ export default function Home() {
             </h2>
             <p className="m-0 max-w-[30ch] text-sm opacity-50">
               AIエージェントとチャットして商品を購入
+            </p>
+          </a>
+
+          <a
+            href="/payment-methods"
+            className="group rounded-lg border border-blue-300 px-5 py-4 transition-colors hover:border-blue-400 hover:bg-blue-50 hover:dark:border-blue-700 hover:dark:bg-blue-900/30"
+          >
+            <h2 className="mb-3 text-2xl font-semibold">
+              支払い方法管理{" "}
+              <span className="inline-block transition-transform group-hover:translate-x-1 motion-reduce:transform-none">
+                →
+              </span>
+            </h2>
+            <p className="m-0 max-w-[30ch] text-sm opacity-50">
+              クレジットカードの登録・削除
             </p>
           </a>
 

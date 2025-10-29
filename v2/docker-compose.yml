@@ -17,6 +17,25 @@ services:
     networks:
       - ap2_network
 
+  # Init Seeds - シードデータ投入（起動時に1回実行）
+  init-seeds:
+    build:
+      context: ..
+      dockerfile: v2/services/shopping_agent/Dockerfile
+    container_name: ap2_init_seeds
+    working_dir: /app
+    volumes:
+      - keys:/app/v2/keys
+      - data:/app/v2/data
+    env_file:
+      - .env
+    command: python v2/scripts/init_seeds.py
+    networks:
+      - ap2_network
+    depends_on:
+      init-keys:
+        condition: service_completed_successfully
+
   # Shopping Agent - ユーザー向けエージェント
   shopping_agent:
     build:
@@ -57,7 +76,7 @@ services:
     networks:
       - ap2_network
     depends_on:
-      init-keys:
+      init-seeds:
         condition: service_completed_successfully
       shopping_agent_mcp:
         condition: service_started
@@ -131,7 +150,7 @@ services:
     networks:
       - ap2_network
     depends_on:
-      init-keys:
+      init-seeds:
         condition: service_completed_successfully
       merchant_agent_mcp:
         condition: service_started
@@ -197,7 +216,7 @@ services:
     networks:
       - ap2_network
     depends_on:
-      init-keys:
+      init-seeds:
         condition: service_completed_successfully
     restart: unless-stopped
 
@@ -231,7 +250,7 @@ services:
     networks:
       - ap2_network
     depends_on:
-      init-keys:
+      init-seeds:
         condition: service_completed_successfully
       payment_network:
         condition: service_started
@@ -269,7 +288,7 @@ services:
     networks:
       - ap2_network
     depends_on:
-      init-keys:
+      init-seeds:
         condition: service_completed_successfully
       payment_network:
         condition: service_started
@@ -305,7 +324,7 @@ services:
     networks:
       - ap2_network
     depends_on:
-      init-keys:
+      init-seeds:
         condition: service_completed_successfully
     restart: unless-stopped
 

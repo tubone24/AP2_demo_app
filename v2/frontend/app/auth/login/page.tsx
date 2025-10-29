@@ -64,6 +64,11 @@ export default function LoginPage() {
       localStorage.setItem('ap2_access_token', result.access_token);
       localStorage.setItem('ap2_user', JSON.stringify(result.user));
 
+      // sessionStorageにもuser_idを保存（支払い方法管理用）
+      if (result.user && result.user.id) {
+        sessionStorage.setItem('user_id', result.user.id);
+      }
+
       // ログイン成功 → チャット画面へ
       router.push('/chat');
     } catch (err: any) {

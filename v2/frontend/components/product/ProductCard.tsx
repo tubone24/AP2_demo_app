@@ -15,8 +15,11 @@ export function ProductCard({ product, onAddToCart }: ProductCardProps) {
     currency: "JPY",
   });
 
-  // 画像URLを取得（metadata.image_urlまたはフォールバック）
-  const imageUrl = product.metadata?.image_url || "https://placehold.co/400x400/EEE/999?text=No+Image";
+  // 画像URLを取得（metadata.image_urlまたはproduct.image_url）
+  const imageUrl = product.metadata?.image_url || product.image_url || "https://placehold.co/400x400/EEE/999?text=No+Image";
+
+  // ローカルパス（/assets/...）の場合は最適化をスキップ
+  const isLocalPath = imageUrl.startsWith("/");
 
   return (
     <Card className="flex flex-col h-full">
@@ -28,7 +31,8 @@ export function ProductCard({ product, onAddToCart }: ProductCardProps) {
             fill
             className="object-contain"
             sizes="(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 33vw"
-            unoptimized={imageUrl.startsWith("/")}
+            unoptimized={isLocalPath}
+            priority={false}
           />
         </div>
         <h3 className="font-semibold text-sm mb-1 line-clamp-2">{product.name}</h3>

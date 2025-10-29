@@ -40,7 +40,7 @@ class ProductHelpers:
             "inventory_count": product.inventory_count,
             "category": metadata.get("category"),
             "brand": metadata.get("brand"),
-            "image_url": metadata.get("image_url"),
+            "image_url": product.image_url,  # 修正: DBカラムから直接取得
             "refund_period_days": metadata.get("refund_period_days", 30)
         }
 

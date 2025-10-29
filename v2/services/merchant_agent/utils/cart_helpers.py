@@ -53,7 +53,7 @@ class CartHelpers:
                     "value": total_price_cents / 100,  # AP2準拠: float型、円単位
                     "currency": "JPY"
                 },
-                "image_url": metadata_dict.get("image_url"),
+                "image_url": product.image_url,  # AP2準拠: Productモデルから直接取得
                 "sku": product.sku,
                 "category": metadata_dict.get("category"),
                 "brand": metadata_dict.get("brand")

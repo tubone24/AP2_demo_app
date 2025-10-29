@@ -192,7 +192,11 @@ export interface Product {
   description: string;
   price: number; // cents
   inventory_count: number;
-  metadata?: any;
+  image_url?: string;
+  metadata?: {
+    image_url?: string;
+    [key: string]: any;
+  };
 }
 
 // Amount（AP2仕様）

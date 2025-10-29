@@ -80,6 +80,11 @@ export default function RegisterPage() {
       localStorage.setItem('ap2_access_token', result.access_token);
       localStorage.setItem('ap2_user', JSON.stringify(result.user));
 
+      // sessionStorageにもuser_idを保存（支払い方法管理用）
+      if (result.user && result.user.id) {
+        sessionStorage.setItem('user_id', result.user.id);
+      }
+
       // 登録成功 → Passkey登録画面へ（AP2完全準拠）
       router.push('/auth/register-passkey');
     } catch (err: any) {

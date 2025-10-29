@@ -43,14 +43,22 @@ export async function signWithPasskey(
   // チャレンジをArrayBufferに変換
   const challengeBuffer = base64URLToBuffer(challenge);
 
+  // AP2完全準拠：ユーザー検証は"required"（生体認証必須）
+  // AP2仕様: Strong Authentication（WebAuthn Level 2準拠）
   const publicKeyCredentialRequestOptions: PublicKeyCredentialRequestOptions = {
     challenge: challengeBuffer,
     rpId,
     timeout: 60000,
-    userVerification: "required",
+    userVerification: "required", // AP2: 生体認証必須
   };
 
   try {
+    console.log("[WebAuthn] Starting Passkey authentication with options:", {
+      rpId,
+      challengeLength: challenge.length,
+      timeout: 60000,
+    });
+
     const credential = (await navigator.credentials.get({
       publicKey: publicKeyCredentialRequestOptions,
     })) as PublicKeyCredential | null;
@@ -58,6 +66,8 @@ export async function signWithPasskey(
     if (!credential) {
       throw new Error("No credential returned");
     }
+
+    console.log("[WebAuthn] Passkey authentication successful");
 
     const response = credential.response as AuthenticatorAssertionResponse;
 
@@ -80,8 +90,21 @@ export async function signWithPasskey(
 
     return attestation;
   } catch (error: any) {
-    console.error("WebAuthn error:", error);
-    throw new Error(`Passkey authentication failed: ${error.message}`);
+    console.error("[WebAuthn] Authentication error:", error);
+
+    // AP2完全準拠：エラーメッセージを日本語化
+    let errorMessage = "Passkey認証に失敗しました";
+    if (error.name === "NotAllowedError") {
+      errorMessage = "認証がキャンセルされました。もう一度お試しください。";
+    } else if (error.name === "InvalidStateError") {
+      errorMessage = "Passkeyが登録されていません。先にPasskeyを登録してください。";
+    } else if (error.name === "NotSupportedError") {
+      errorMessage = "このブラウザはPasskeyをサポートしていません。";
+    } else if (error.message) {
+      errorMessage = `Passkey認証エラー: ${error.message}`;
+    }
+
+    throw new Error(errorMessage);
   }
 }
 

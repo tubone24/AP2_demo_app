@@ -12,7 +12,7 @@ from pathlib import Path
 # 親ディレクトリを追加
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from common.database import DatabaseManager, ProductCRUD, User
+from common.database import DatabaseManager, ProductCRUD, PaymentMethodCRUD, User
 
 
 # ========================================
@@ -26,14 +26,13 @@ SAMPLE_PRODUCTS = [
         "description": "かわいいむぎぼーのアクリルキーホルダー。バッグやポーチに付けて持ち歩けます。",
         "price": 80000,
         "inventory_count": 100,
+        "image_url": "/assets/むぎぼーアクリルキーホルダー.png",
         "metadata": {
             "category": "Keychains",
             "brand": "Mugibow Official",
             "color": "Multicolor",
             "size": "約5cm",
-            "material": "アクリル",
-            "image_url": "/assets/むぎぼーアクリルキーホルダー.png"
-        }
+            "material": "アクリル"}
     },
     {
         "sku": "MUGI-CLOCK-001",
@@ -41,14 +40,13 @@ SAMPLE_PRODUCTS = [
         "description": "むぎぼーデザインのかわいい壁掛け時計。お部屋を明るく彩ります。",
         "price": 350000,
         "inventory_count": 30,
+        "image_url": "/assets/むぎぼー時計.png",
         "metadata": {
             "category": "Clocks",
             "brand": "Mugibow Official",
             "color": "White/Yellow",
             "size": "直径25cm",
-            "type": "壁掛け時計",
-            "image_url": "/assets/むぎぼー時計.png"
-        }
+            "type": "壁掛け時計"}
     },
     {
         "sku": "MUGI-CALENDAR-001",
@@ -56,14 +54,13 @@ SAMPLE_PRODUCTS = [
         "description": "むぎぼーの1年カレンダー。毎月違うむぎぼーのイラストが楽しめます。",
         "price": 150000,
         "inventory_count": 50,
+        "image_url": "/assets/むぎぼーカレンダー.png",
         "metadata": {
             "category": "Calendars",
             "brand": "Mugibow Official",
             "color": "Full Color",
             "size": "A4サイズ",
-            "year": "2025",
-            "image_url": "/assets/むぎぼーカレンダー.png"
-        }
+            "year": "2025"}
     },
     {
         "sku": "MUGI-MUG-001",
@@ -71,14 +68,13 @@ SAMPLE_PRODUCTS = [
         "description": "むぎぼーがプリントされたかわいいマグカップ。毎日のティータイムが楽しくなります。",
         "price": 120000,
         "inventory_count": 80,
+        "image_url": "/assets/むぎぼーマグカップ.png",
         "metadata": {
             "category": "Mug Cups",
             "brand": "Mugibow Official",
             "color": "White",
             "capacity": "350ml",
-            "material": "陶器",
-            "image_url": "/assets/むぎぼーマグカップ.png"
-        }
+            "material": "陶器"}
     },
     {
         "sku": "MUGI-STICKER-001",
@@ -86,15 +82,14 @@ SAMPLE_PRODUCTS = [
         "description": "むぎぼーのステッカーセット（5枚入り）。ノートやスマホケースに貼れます。",
         "price": 50000,
         "inventory_count": 200,
+        "image_url": "/assets/むぎぼーステッカー.png",
         "metadata": {
             "category": "Stickers",
             "brand": "Mugibow Official",
             "color": "Multicolor",
             "pack_size": 5,
             "size": "各約5cm",
-            "material": "耐水ステッカー",
-            "image_url": "/assets/むぎぼーステッカー.png"
-        }
+            "material": "耐水ステッカー"}
     },
     {
         "sku": "MUGI-TSHIRT-001",
@@ -102,14 +97,13 @@ SAMPLE_PRODUCTS = [
         "description": "むぎぼーがプリントされたコットンTシャツ。普段着にぴったり。",
         "price": 280000,
         "inventory_count": 60,
+        "image_url": "/assets/むぎぼーTシャツ.png",
         "metadata": {
             "category": "Mugibow Apparel",
             "brand": "Mugibow Official",
             "color": "White",
             "sizes": ["S", "M", "L", "XL"],
-            "material": "コットン100%",
-            "image_url": "/assets/むぎぼーTシャツ.png"
-        }
+            "material": "コットン100%"}
     },
     {
         "sku": "MUGI-TOTE-001",
@@ -117,14 +111,13 @@ SAMPLE_PRODUCTS = [
         "description": "むぎぼーがプリントされた大きめトートバッグ。お買い物やお出かけに便利。",
         "price": 180000,
         "inventory_count": 70,
+        "image_url": "/assets/むぎぼートート.png",
         "metadata": {
             "category": "Mugibow Bags",
             "brand": "Mugibow Official",
             "color": "Natural",
             "size": "縦40cm×横35cm",
-            "material": "キャンバス",
-            "image_url": "/assets/むぎぼートート.png"
-        }
+            "material": "キャンバス"}
     },
     {
         "sku": "MUGI-POUCH-001",
@@ -132,14 +125,13 @@ SAMPLE_PRODUCTS = [
         "description": "むぎぼー柄のかわいいポーチ。小物入れやペンケースとして使えます。",
         "price": 95000,
         "inventory_count": 120,
+        "image_url": "/assets/むぎぼーポーチ.png",
         "metadata": {
             "category": "Mugibow Pouches",
             "brand": "Mugibow Official",
             "color": "Yellow/White",
             "size": "幅20cm×高さ12cm",
-            "material": "ポリエステル",
-            "image_url": "/assets/むぎぼーポーチ.png"
-        }
+            "material": "ポリエステル"}
     },
     {
         "sku": "MUGI-PLUSH-001",
@@ -147,14 +139,13 @@ SAMPLE_PRODUCTS = [
         "description": "ふわふわのむぎぼーぬいぐるみ（Sサイズ）。デスクやベッドにぴったり。",
         "price": 220000,
         "inventory_count": 40,
+        "image_url": "/assets/むぎぼーぬいぐるみS.png",
         "metadata": {
             "category": "Plush Toys",
             "brand": "Mugibow Official",
             "color": "Brown/White",
             "size": "高さ15cm",
-            "material": "ポリエステル",
-            "image_url": "/assets/むぎぼーぬいぐるみS.png"
-        }
+            "material": "ポリエステル"}
     },
     {
         "sku": "MUGI-PLUSH-002",
@@ -162,14 +153,13 @@ SAMPLE_PRODUCTS = [
         "description": "抱きしめたくなる大きなむぎぼーぬいぐるみ。リビングに癒しを。",
         "price": 480000,
         "inventory_count": 25,
+        "image_url": "/assets/むぎぼーぬいぐるみL.png",
         "metadata": {
             "category": "Plush Toys",
             "brand": "Mugibow Official",
             "color": "Brown/White",
             "size": "高さ40cm",
-            "material": "ポリエステル",
-            "image_url": "/assets/むぎぼーぬいぐるみL.png"
-        }
+            "material": "ポリエステル"}
     },
     {
         "sku": "MUGI-HAT-001",
@@ -177,14 +167,13 @@ SAMPLE_PRODUCTS = [
         "description": "むぎぼーの刺繍が入ったシンプルなキャップ。カジュアルコーデに。",
         "price": 200000,
         "inventory_count": 90,
+        "image_url": "/assets/むぎぼーキャップ.png",
         "metadata": {
             "category": "Mugibow Apparel",
             "brand": "Mugibow Official",
             "color": "Beige",
             "size": "フリーサイズ",
-            "material": "コットン",
-            "image_url": "/assets/むぎぼーキャップ.png"
-        }
+            "material": "コットン"}
     },
     {
         "sku": "MUGI-CUSHION-001",
@@ -192,14 +181,13 @@ SAMPLE_PRODUCTS = [
         "description": "むぎぼーの顔が大きくプリントされたクッション。ソファのおともにどうぞ。",
         "price": 250000,
         "inventory_count": 45,
+        "image_url": "/assets/むぎぼークッション.png",
         "metadata": {
             "category": "Home Goods",
             "brand": "Mugibow Official",
             "color": "Yellow/White",
             "size": "40cm×40cm",
-            "material": "ポリエステル",
-            "image_url": "/assets/むぎぼークッション.png"
-        }
+            "material": "ポリエステル"}
     },
     {
         "sku": "MUGI-NOTEBOOK-001",
@@ -207,14 +195,13 @@ SAMPLE_PRODUCTS = [
         "description": "表紙にむぎぼーがデザインされたA5ノート。中は方眼タイプ。",
         "price": 70000,
         "inventory_count": 150,
+        "image_url": "/assets/むぎぼーノート.png",
         "metadata": {
             "category": "Stationery",
             "brand": "Mugibow Official",
             "color": "Full Color",
             "size": "A5",
-            "pages": 80,
-            "image_url": "/assets/むぎぼーノート.png"
-        }
+            "pages": 80}
     },
     {
         "sku": "MUGI-PEN-001",
@@ -222,13 +209,12 @@ SAMPLE_PRODUCTS = [
         "description": "書き心地なめらかなむぎぼーデザインのボールペン。",
         "price": 60000,
         "inventory_count": 200,
+        "image_url": "/assets/むぎぼーペン.png",
         "metadata": {
             "category": "Stationery",
             "brand": "Mugibow Official",
             "color": "Blue Ink",
-            "material": "プラスチック",
-            "image_url": "/assets/むぎぼーペン.png"
-        }
+            "material": "プラスチック"}
     },
     {
         "sku": "MUGI-BOTTLE-001",
@@ -236,14 +222,13 @@ SAMPLE_PRODUCTS = [
         "description": "むぎぼーのロゴ入りステンレスボトル。保温・保冷に優れています。",
         "price": 240000,
         "inventory_count": 55,
+        "image_url": "/assets/むぎぼーボトル.png",
         "metadata": {
             "category": "Drinkware",
             "brand": "Mugibow Official",
             "color": "Silver/Yellow",
             "capacity": "500ml",
-            "material": "ステンレス",
-            "image_url": "/assets/むぎぼーボトル.png"
-        }
+            "material": "ステンレス"}
     },
     {
         "sku": "MUGI-SOCKS-001",
@@ -251,14 +236,13 @@ SAMPLE_PRODUCTS = [
         "description": "むぎぼーがワンポイントで入ったかわいい靴下。やわらかい履き心地。",
         "price": 85000,
         "inventory_count": 100,
+        "image_url": "/assets/むぎぼー靴下.png",
         "metadata": {
             "category": "Mugibow Apparel",
             "brand": "Mugibow Official",
             "color": "Gray/White",
             "size": "22-25cm",
-            "material": "コットン/ポリエステル",
-            "image_url": "/assets/むぎぼー靴下.png"
-        }
+            "material": "コットン/ポリエステル"}
     },
     {
         "sku": "MUGI-MOUSEPAD-001",
@@ -266,14 +250,13 @@ SAMPLE_PRODUCTS = [
         "description": "デスクワークのお供にぴったりなむぎぼー柄のマウスパッド。",
         "price": 90000,
         "inventory_count": 85,
+        "image_url": "/assets/むぎぼーマウスパッド.png",
         "metadata": {
             "category": "Office Goods",
             "brand": "Mugibow Official",
             "color": "Blue/White",
             "size": "25cm×20cm",
-            "material": "ラバー",
-            "image_url": "/assets/むぎぼーマウスパッド.png"
-        }
+            "material": "ラバー"}
     },
     {
         "sku": "MUGI-PHONECASE-001",
@@ -281,14 +264,13 @@ SAMPLE_PRODUCTS = [
         "description": "むぎぼーのイラスト入りスマホケース。iPhone対応サイズ。",
         "price": 180000,
         "inventory_count": 75,
+        "image_url": "/assets/むぎぼースマホケース.png",
         "metadata": {
             "category": "Phone Accessories",
             "brand": "Mugibow Official",
             "color": "White/Yellow",
             "size": "iPhone 15対応",
-            "material": "TPU",
-            "image_url": "/assets/むぎぼースマホケース.png"
-        }
+            "material": "TPU"}
     },
     {
         "sku": "MUGI-UMBRELLA-001",
@@ -296,14 +278,13 @@ SAMPLE_PRODUCTS = [
         "description": "雨の日もむぎぼーと一緒。軽量で持ち運びやすい折りたたみ傘。",
         "price": 260000,
         "inventory_count": 50,
+        "image_url": "/assets/むぎぼー傘.png",
         "metadata": {
             "category": "Outdoor Goods",
             "brand": "Mugibow Official",
             "color": "Navy/Yellow",
             "size": "直径90cm",
-            "material": "ポリエステル",
-            "image_url": "/assets/むぎぼー傘.png"
-        }
+            "material": "ポリエステル"}
     },
     {
         "sku": "MUGI-ECOBAG-001",
@@ -311,14 +292,13 @@ SAMPLE_PRODUCTS = [
         "description": "小さくたためるむぎぼーのエコバッグ。毎日のお買い物に便利。",
         "price": 120000,
         "inventory_count": 110,
+        "image_url": "/assets/むぎぼーエコバッグ.png",
         "metadata": {
             "category": "Mugibow Bags",
             "brand": "Mugibow Official",
             "color": "Light Green",
             "size": "縦40cm×横35cm",
-            "material": "リサイクルナイロン",
-            "image_url": "/assets/むぎぼーエコバッグ.png"
-        }
+            "material": "リサイクルナイロン"}
     },
     {
         "sku": "MUGI-BLANKET-001",
@@ -326,14 +306,13 @@ SAMPLE_PRODUCTS = [
         "description": "ふんわりやわらかいむぎぼーブランケット。冬にぴったり。",
         "price": 320000,
         "inventory_count": 40,
+        "image_url": "/assets/むぎぼーブランケット.png",
         "metadata": {
             "category": "Home Goods",
             "brand": "Mugibow Official",
             "color": "Beige/Brown",
             "size": "100cm×150cm",
-            "material": "フリース",
-            "image_url": "/assets/むぎぼーブランケット.png"
-        }
+            "material": "フリース"}
     },
     {
         "sku": "MUGI-PLATE-001",
@@ -341,14 +320,13 @@ SAMPLE_PRODUCTS = [
         "description": "むぎぼーが中央に描かれた陶器プレート。食卓をかわいく演出。",
         "price": 190000,
         "inventory_count": 70,
+        "image_url": "/assets/むぎぼープレート.png",
         "metadata": {
             "category": "Tableware",
             "brand": "Mugibow Official",
             "color": "White/Yellow",
             "size": "直径20cm",
-            "material": "陶器",
-            "image_url": "/assets/むぎぼープレート.png"
-        }
+            "material": "陶器"}
     },
     {
         "sku": "MUGI-HOODIE-001",
@@ -356,14 +334,13 @@ SAMPLE_PRODUCTS = [
         "description": "むぎぼーの顔が大きくプリントされたあったかパーカー。",
         "price": 450000,
         "inventory_count": 35,
+        "image_url": "/assets/むぎぼーパーカー.png",
         "metadata": {
             "category": "Mugibow Apparel",
             "brand": "Mugibow Official",
             "color": "Gray",
             "sizes": ["M", "L", "XL"],
-            "material": "コットン/ポリエステル",
-            "image_url": "/assets/むぎぼーパーカー.png"
-        }
+            "material": "コットン/ポリエステル"}
     },
     {
         "sku": "MUGI-TOWEL-001",
@@ -371,14 +348,13 @@ SAMPLE_PRODUCTS = [
         "description": "むぎぼー柄のフェイスタオル。吸水性抜群でやわらかい肌触り。",
         "price": 130000,
         "inventory_count": 90,
+        "image_url": "/assets/むぎぼータオル.png",
         "metadata": {
             "category": "Bath Goods",
             "brand": "Mugibow Official",
             "color": "White/Yellow",
             "size": "80cm×34cm",
-            "material": "コットン",
-            "image_url": "/assets/むぎぼータオル.png"
-        }
+            "material": "コットン"}
     },
     {
         "sku": "MUGI-CANDLE-001",
@@ -386,15 +362,14 @@ SAMPLE_PRODUCTS = [
         "description": "むぎぼーをイメージしたやさしい香りのアロマキャンドル。",
         "price": 210000,
         "inventory_count": 60,
+        "image_url": "/assets/むぎぼーキャンドル.png",
         "metadata": {
             "category": "Home Fragrance",
             "brand": "Mugibow Official",
             "color": "White",
             "scent": "Vanilla",
             "burn_time": "約30時間",
-            "material": "ソイワックス",
-            "image_url": "/assets/むぎぼーキャンドル.png"
-        }
+            "material": "ソイワックス"}
     },
     {
         "sku": "MUGI-PILLOW-001",
@@ -402,14 +377,13 @@ SAMPLE_PRODUCTS = [
         "description": "むぎぼーの全身デザイン抱き枕。寝るときもむぎぼーと一緒！",
         "price": 550000,
         "inventory_count": 20,
+        "image_url": "/assets/むぎぼー抱き枕.png",
         "metadata": {
             "category": "Home Goods",
             "brand": "Mugibow Official",
             "color": "Brown/White",
             "size": "長さ100cm",
-            "material": "ポリエステル/綿",
-            "image_url": "/assets/むぎぼー抱き枕.png"
-        }
+            "material": "ポリエステル/綿"}
     },
     {
         "sku": "MUGI-POSTER-001",
@@ -417,14 +391,13 @@ SAMPLE_PRODUCTS = [
         "description": "お部屋を明るくするむぎぼーのアートポスター。",
         "price": 90000,
         "inventory_count": 100,
+        "image_url": "/assets/むぎぼーポスター.png",
         "metadata": {
             "category": "Posters",
             "brand": "Mugibow Official",
             "color": "Full Color",
             "size": "A3",
-            "material": "光沢紙",
-            "image_url": "/assets/むぎぼーポスター.png"
-        }
+            "material": "光沢紙"}
     },
     {
         "sku": "MUGI-CAP-002",
@@ -432,14 +405,13 @@ SAMPLE_PRODUCTS = [
         "description": "冬にぴったりなむぎぼーの刺繍入りニット帽。",
         "price": 180000,
         "inventory_count": 50,
+        "image_url": "/assets/むぎぼーニット帽.png",
         "metadata": {
             "category": "Mugibow Apparel",
             "brand": "Mugibow Official",
             "color": "Navy",
             "size": "フリーサイズ",
-            "material": "アクリル",
-            "image_url": "/assets/むぎぼーニット帽.png"
-        }
+            "material": "アクリル"}
     }
 ]
 
@@ -454,6 +426,57 @@ SAMPLE_USERS = [
         "id": "user_demo_002",
         "display_name": "佐藤花子",
         "email": "sato@example.com"
+    }
+]
+
+# サンプル支払い方法（AP2完全準拠）
+# CP1用: Visa, Amex
+# CP2用: JCB
+SAMPLE_PAYMENT_METHODS = [
+    {
+        "id": "pm_demo_visa_4242",
+        "user_id": "user_demo_001",
+        "payment_method": {
+            "type": "basic-card",
+            "display_name": "Visaカード (****4242)",
+            "card_last4": "4242",
+            "card_brand": "Visa",
+            "billing_address": {
+                "country": "JP",
+                "postal_code": "100-0001"
+            },
+            "requires_step_up": False  # 通常の支払い方法
+        }
+    },
+    {
+        "id": "pm_demo_amex_8005",
+        "user_id": "user_demo_001",
+        "payment_method": {
+            "type": "basic-card",
+            "display_name": "American Expressカード (****8005)",
+            "card_last4": "8005",
+            "card_brand": "Amex",
+            "billing_address": {
+                "country": "JP",
+                "postal_code": "150-0001"
+            },
+            "requires_step_up": True  # STEP_UP認証が必要
+        }
+    },
+    {
+        "id": "pm_demo_jcb_9999",
+        "user_id": "user_demo_001",
+        "payment_method": {
+            "type": "basic-card",
+            "display_name": "JCBカード (****9999)",
+            "card_last4": "9999",
+            "card_brand": "JCB",
+            "billing_address": {
+                "country": "JP",
+                "postal_code": "150-0002"
+            },
+            "requires_step_up": False  # 通常の支払い方法
+        }
     }
 ]
 
@@ -511,6 +534,29 @@ async def seed_users(db_manager: DatabaseManager):
     print(f"\n✅ ユーザーデータ投入完了 ({len(SAMPLE_USERS)}件)")
 
 
+async def seed_payment_methods(db_manager: DatabaseManager):
+    """支払い方法データを投入（AP2完全準拠）"""
+    print("\n" + "=" * 60)
+    print("支払い方法データ投入中...")
+    print("=" * 60)
+
+    async with db_manager.get_session() as session:
+        for pm_data in SAMPLE_PAYMENT_METHODS:
+            # 既存チェック
+            existing = await PaymentMethodCRUD.get_by_id(session, pm_data["id"])
+            if existing:
+                print(f"  ⏭️  スキップ: {pm_data['payment_method']['display_name']} (既存)")
+                continue
+
+            # 作成
+            payment_method = await PaymentMethodCRUD.create(session, pm_data)
+            pm_details = pm_data["payment_method"]
+            step_up_mark = " [STEP_UP]" if pm_details.get("requires_step_up") else ""
+            print(f"  ✅ 作成: {pm_details['display_name']}{step_up_mark}")
+
+    print(f"\n✅ 支払い方法データ投入完了 ({len(SAMPLE_PAYMENT_METHODS)}件)")
+
+
 async def main():
     """メイン処理"""
     print("\n" + "=" * 60)
@@ -528,6 +574,7 @@ async def main():
     # データ投入
     await seed_products(db_manager)
     await seed_users(db_manager)
+    await seed_payment_methods(db_manager)
 
     print("\n" + "=" * 60)
     print("🎉 すべてのサンプルデータ投入が完了しました！")
@@ -535,6 +582,7 @@ async def main():
     print(f"\nデータベース: {db_manager.database_url}")
     print(f"商品数: {len(SAMPLE_PRODUCTS)}")
     print(f"ユーザー数: {len(SAMPLE_USERS)}")
+    print(f"支払い方法数: {len(SAMPLE_PAYMENT_METHODS)}")
 
 
 if __name__ == "__main__":
