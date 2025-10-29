@@ -113,10 +113,20 @@ export default function ChatPage() {
 
   // Step-up認証完了のコールバックをチェック
   useEffect(() => {
+    // AP2完全準拠: Step-up認証完了後のコールバック処理
+    // Step-upから戻ってきたときは window.location.href でページが完全にリロードされるため、
+    // このuseEffectはマウント時（依存配列[]）のみ実行すればよい
     const urlParams = new URLSearchParams(window.location.search);
     const stepUpStatus = urlParams.get("step_up_status");
     const stepUpSessionId = urlParams.get("step_up_session_id");
     const sessionId = urlParams.get("session_id");
+
+    console.log("[Step-up Callback] Checking URL params:", {
+      stepUpStatus,
+      stepUpSessionId,
+      sessionId,
+      fullUrl: window.location.href
+    });
 
     if (stepUpStatus && stepUpSessionId && sessionId) {
       console.log("[Step-up Callback] Detected:", { stepUpStatus, stepUpSessionId, sessionId });
@@ -131,9 +141,11 @@ export default function ChatPage() {
 
       if (stepUpStatus === "success") {
         // Step-up成功 - Shopping Agentに完了を通知
+        // AP2準拠: 内部トリガーとして送信（ユーザーメッセージとして表示しない）
         console.log("[Step-up] Success - sending completion message to agent with session_id:", sessionId);
         setTimeout(() => {
-          sendMessage(`step-up-completed:${stepUpSessionId}`);
+          console.log("[Step-up] About to send message: _step-up-completed:" + stepUpSessionId);
+          sendMessage(`_step-up-completed:${stepUpSessionId}`);
         }, 500);
       } else if (stepUpStatus === "cancelled") {
         // キャンセル - ユーザーに通知
@@ -143,7 +155,8 @@ export default function ChatPage() {
         }, 500);
       }
     }
-  }, [sendMessage, setSessionId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // マウント時のみ実行（Step-upからのリダイレクトでページがリロードされる）
 
   // メッセージが追加されたら自動スクロール
   useEffect(() => {
