@@ -13,6 +13,7 @@ RUN pip install uv
 # プロジェクトファイルをコピー
 COPY v2/pyproject.toml /app/v2/
 COPY v2/README.md /app/v2/
+COPY v2/common /app/v2/common
 COPY v2/services/payment_network /app/v2/services/payment_network
 
 # 依存関係をインストール（uvを使用）

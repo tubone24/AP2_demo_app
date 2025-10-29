@@ -13,21 +13,16 @@ AP2仕様準拠：
 - Agent Tokenを発行してCPに返却
 """
 
-import sys
-import uuid
+import os
 import logging
-from pathlib import Path
 from typing import Dict, Any, Optional
-from datetime import datetime, timezone, timedelta
-import secrets
+from datetime import datetime, timezone
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-# 親ディレクトリを追加
-sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
-
 from services.payment_network.utils import TokenHelpers
+from common.redis_client import RedisClient, TokenStore
 
 logger = logging.getLogger(__name__)
 
@@ -98,11 +93,19 @@ class PaymentNetworkService:
             version="1.0.0"
         )
 
-        # トークンストア（Agent Token → トークン情報のマッピング）
-        # 本番環境ではRedis等のKVストアやデータベースを使用
-        self.agent_token_store: Dict[str, Dict[str, Any]] = {}
+        # Redis接続（専用データベース: DB 2を使用）
+        # DB 0: Shopping Agent等、DB 1: Credential Provider 2、DB 2: Payment Network
+        redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/2")  # DB 2
+        self.redis_client = RedisClient(redis_url=redis_url)
 
-        # Helperクラス初期化
+        # トークンストア（Redis KV）
+        # Agent Token → トークン情報のマッピング（TTL管理）
+        self.agent_token_store = TokenStore(
+            redis_client=self.redis_client,
+            prefix="agent_token"  # Key prefix: agent_token:xxx
+        )
+
+        # Helperクラス初期化（RedisベースのTokenStore）
         self.token_helpers = TokenHelpers(
             network_name=self.network_name,
             token_store=self.agent_token_store
@@ -111,7 +114,11 @@ class PaymentNetworkService:
         # エンドポイント登録
         self.register_endpoints()
 
-        logger.info(f"[{self.network_name}] Payment Network Service initialized")
+        logger.info(
+            f"[{self.network_name}] Payment Network Service initialized\n"
+            f"  Redis URL: {redis_url}\n"
+            f"  Token Store: RedisベースのKVストア（TTL管理対応）"
+        )
 
     def register_endpoints(self):
         """エンドポイントの登録"""
@@ -180,8 +187,8 @@ class PaymentNetworkService:
                         detail="Invalid payment_method_token format"
                     )
 
-                # Agent Token生成（ヘルパーメソッドに委譲）
-                agent_token, expires_at_iso = self.token_helpers.generate_agent_token(
+                # Agent Token生成（ヘルパーメソッドに委譲、Redis保存）
+                agent_token, expires_at_iso = await self.token_helpers.generate_agent_token(
                     payment_mandate=payment_mandate,
                     payment_method_token=payment_method_token,
                     attestation_verified=request.attestation is not None,
@@ -230,8 +237,8 @@ class PaymentNetworkService:
             try:
                 agent_token = request.agent_token
 
-                # Agent Token検証（ヘルパーメソッドに委譲）
-                valid, token_info, error = self.token_helpers.verify_agent_token(agent_token)
+                # Agent Token検証（ヘルパーメソッドに委譲、Redis取得）
+                valid, token_info, error = await self.token_helpers.verify_agent_token(agent_token)
 
                 return VerifyTokenResponse(
                     valid=valid,

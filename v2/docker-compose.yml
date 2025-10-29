@@ -341,8 +341,12 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - NETWORK_NAME=DemoPaymentNetwork
+      - REDIS_URL=redis://redis:6379/2  # Payment Network専用DB (DB 2)
     networks:
       - ap2_network
+    depends_on:
+      redis:
+        condition: service_healthy
     restart: unless-stopped
 
   # Frontend - Next.js
