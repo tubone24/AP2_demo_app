@@ -228,7 +228,7 @@ class CredentialProviderService(BaseAgent):
 
                 logger.info(f"[register_passkey_challenge] Saved challenge to Redis KV (TTL: {WEBAUTHN_CHALLENGE_TTL}s)")
 
-                # 注意: 現在は"none" attestationを使用（デモ環境）
+                # 注意: 現在は"none" attestationを使用
                 # 本番環境では"direct"または"indirect"を使用し、challengeを厳密に検証すべき
 
                 # WebAuthn Registration Optionsを返す

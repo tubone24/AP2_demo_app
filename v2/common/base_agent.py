@@ -131,11 +131,9 @@ class BaseAgent(ABC):
         """
         鍵の初期化（永続化ストレージから読み込み）
 
-        セキュリティ要件（専門家の指摘対応）：
         - キーペアはv2/scripts/init_keys.pyで事前に生成・暗号化されている
         - 各エージェントは永続化ストレージ（Docker Volume）から既存の鍵を読み込む
         - DIDドキュメントも永続化されているため、DIDは再起動後も一貫している
-        - 開発時の利便性のため、鍵が存在しない場合は自動生成（本番環境では非推奨）
         """
         # agent_idから鍵IDを抽出（例: did:ap2:agent:shopping_agent -> shopping_agent）
         key_id = self.agent_id.split(":")[-1]
