@@ -44,13 +44,14 @@ Merchant Agentは、商店に代わって商品検索、Cart Mandate作成、在
 
 **AP2仕様の要件**: Merchant AgentとMerchantは**別エンティティ**である必要があります。
 
-```
-┌─────────────────┐      ┌──────────────┐      ┌──────────┐
-│ Shopping Agent  │ A2A  │ Merchant     │ A2A  │ Merchant │
-│                 │─────>│ Agent        │─────>│          │
-│                 │      │              │      │ (署名)   │
-│ (消費者側)      │      │ (仲介)       │      │ (店舗側) │
-└─────────────────┘      └──────────────┘      └──────────┘
+```mermaid
+graph LR
+    SA[Shopping Agent<br/>消費者側] -->|A2A通信| MA[Merchant Agent<br/>仲介・商品検索<br/>Cart候補生成]
+    MA -->|A2A通信<br/>署名依頼| M[Merchant<br/>署名承認<br/>店舗側]
+
+    style SA fill:#e1f5ff,stroke:#333,stroke-width:2px
+    style MA fill:#fff4e1,stroke:#333,stroke-width:2px
+    style M fill:#ffe1e1,stroke:#333,stroke-width:2px
 ```
 
 **理由**:
@@ -74,6 +75,84 @@ Merchant Agentは、商店に代わって商品検索、Cart Mandate作成、在
 
 ---
 
+## アーキテクチャ
+
+### 内部モジュール構造
+
+Merchant Agentは、責務ごとにモジュール化された構造になっています（2025-10-29リファクタリング済み）:
+
+```mermaid
+graph TB
+    subgraph "Merchant Agent Service"
+        Main[main.py<br/>28行<br/>FastAPIエントリーポイント]
+        Agent[agent.py<br/>379行<br/>MerchantAgentクラス<br/>エンドポイント定義]
+        LG[langgraph_merchant.py<br/>354行<br/>LangGraphエンジン<br/>AIワークフロー]
+
+        subgraph "handlers/<br/>A2Aメッセージ処理"
+            IH[intent_handler.py<br/>122行<br/>IntentMandate処理]
+            PH[product_handler.py<br/>83行<br/>商品検索リクエスト]
+            CH[cart_handler.py<br/>187行<br/>Cart選択・リクエスト]
+            PayH[payment_handler.py<br/>143行<br/>決済処理転送]
+        end
+
+        subgraph "services/<br/>ビジネスロジック"
+            CS[cart_service.py<br/>524行<br/>CartMandate作成<br/>署名待機・複数候補生成]
+        end
+
+        subgraph "nodes/<br/>LangGraphノード"
+            IN[intent_node.py<br/>137行<br/>Intent解析]
+            SN[search_node.py<br/>85行<br/>商品検索MCP]
+            INV[inventory_node.py<br/>82行<br/>在庫確認MCP]
+            ON[optimization_node.py<br/>174行<br/>カート最適化LLM]
+            CMN[cart_mandate_node.py<br/>378行<br/>CartMandate構築]
+            RN[ranking_node.py<br/>33行<br/>ランキング選択]
+        end
+
+        subgraph "utils/<br/>ヘルパー"
+            CH_U[cart_helpers.py<br/>90行<br/>Cart計算]
+            PH_U[product_helpers.py<br/>76行<br/>商品同期]
+            LU[llm_utils.py<br/>81行<br/>LLM解析]
+        end
+
+        Main --> Agent
+        Agent --> IH
+        Agent --> PH
+        Agent --> CH
+        Agent --> PayH
+
+        IH --> CS
+        CH --> CS
+        Agent --> CS
+        Agent --> LG
+
+        LG --> IN
+        LG --> SN
+        LG --> INV
+        LG --> ON
+        LG --> CMN
+        LG --> RN
+
+        Agent --> CH_U
+        Agent --> PH_U
+        IN --> LU
+        ON --> LU
+    end
+
+    style Main fill:#e1f5ff,stroke:#333,stroke-width:2px
+    style Agent fill:#fff4e1,stroke:#333,stroke-width:2px
+    style LG fill:#e1ffe1,stroke:#333,stroke-width:2px
+    style CS fill:#ffe1f5,stroke:#333,stroke-width:2px
+```
+
+**主要な改善点**:
+- **agent.py**: 1284行 → 379行（70%削減）
+- **langgraph_merchant.py**: 1318行 → 354行（73%削減）
+- **モジュール化**: handlers/, services/, nodes/, utils/ディレクトリに分割
+- **責務の明確化**: A2A処理、ビジネスロジック、AI処理、ヘルパーを分離
+- **保守性向上**: 各ファイルが100-500行の適切なサイズに
+
+---
+
 ## 主要機能
 
 ### 1. 商品検索
@@ -85,10 +164,10 @@ Merchant Agentは、商店に代わって商品検索、Cart Mandate作成、在
 - `category`: カテゴリーフィルター（オプション）
 - `limit`: 結果数上限（デフォルト: 10）
 
-**実装**: `agent.py:161-192`
+**実装**: `agent.py:194-225`
 
 ```python
-# v2/services/merchant_agent/agent.py:161-192
+# v2/services/merchant_agent/agent.py:194-225
 @self.app.get("/search")
 async def search_products(
     query: str = "",
@@ -232,8 +311,8 @@ curl -X POST http://localhost:8001/inventory/update \
 ```
 
 **実装**:
-- 在庫取得: `agent.py:227-250`
-- 在庫更新: `agent.py:252-280`
+- 在庫取得: `agent.py:260-283`
+- 在庫更新: `agent.py:285-313`
 
 ---
 
@@ -243,10 +322,10 @@ curl -X POST http://localhost:8001/inventory/update \
 
 | エンドポイント | メソッド | 説明 | 実装 |
 |--------------|---------|------|------|
-| `/search` | GET | 商品検索 | `agent.py:161` |
-| `/inventory` | GET | 在庫一覧 | `agent.py:227` |
-| `/inventory/update` | POST | 在庫更新 | `agent.py:252` |
-| `/create-cart` | POST | Cart Mandate作成 | `agent.py:194` |
+| `/search` | GET | 商品検索 | `agent.py:194` |
+| `/inventory` | GET | 在庫一覧 | `agent.py:260` |
+| `/inventory/update` | POST | 在庫更新 | `agent.py:285` |
+| `/create-cart` | POST | Cart Mandate作成 | `agent.py:227` |
 
 ### A2A通信
 
@@ -269,7 +348,7 @@ curl -X POST http://localhost:8001/inventory/update \
 ### クラス構造
 
 ```python
-# agent.py:36-126
+# agent.py:57-159
 class MerchantAgent(BaseAgent):
     """
     Merchant Agent実装
@@ -311,10 +390,12 @@ class MerchantAgent(BaseAgent):
 ### A2Aメッセージハンドラー
 
 ```python
-# agent.py:136-154
+# agent.py:169-187
 def register_a2a_handlers(self):
     """
     Merchant Agentが受信するA2Aメッセージ
+
+    注: 各ハンドラーの実装は handlers/ ディレクトリに分割されています
     """
     self.a2a_handler.register_handler(
         "ap2.mandates.IntentMandate",
@@ -341,8 +422,8 @@ def register_a2a_handlers(self):
 ### Intent Mandate処理
 
 ```python
-# agent.py:286-299
-async def handle_intent_mandate(self, message: A2AMessage) -> Dict[str, Any]:
+# handlers/intent_handler.py:17-122
+async def handle_intent_mandate(agent, message: A2AMessage) -> Dict[str, Any]:
     """
     IntentMandateを受信（Shopping Agentから）
 
@@ -466,7 +547,7 @@ Merchant AgentはLangGraphを統合し、AI駆動でCart候補を生成します
 ### LangGraphエージェント
 
 ```python
-# langgraph_merchant.py:30-120
+# langgraph_merchant.py:121-196
 class MerchantLangGraphAgent:
     """
     LangGraph統合エージェント
@@ -573,25 +654,27 @@ class MerchantLangGraphAgent:
 - パフォーマンス分析
 
 ```python
-# langgraph_merchant.py:15-25
-from langfuse.decorators import observe, langfuse_context
-
-# Langfuse初期化
-langfuse_client = None
+# langgraph_merchant.py:67-86
+# Langfuseトレーシング設定
 LANGFUSE_ENABLED = os.getenv("LANGFUSE_ENABLED", "false").lower() == "true"
+CallbackHandler = None
+langfuse_client = None
 
 if LANGFUSE_ENABLED:
-    from langfuse import Langfuse
-    langfuse_client = Langfuse(
-        public_key=os.getenv("LANGFUSE_PUBLIC_KEY"),
-        secret_key=os.getenv("LANGFUSE_SECRET_KEY"),
-        host=os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
-    )
+    try:
+        from langfuse.langchain import CallbackHandler as LangfuseCallbackHandler
+        from langfuse import Langfuse
 
-@observe()
-async def generate_cart_candidates(...):
-    # Langfuseが自動でトレース
-    ...
+        langfuse_client = Langfuse(
+            public_key=os.getenv("LANGFUSE_PUBLIC_KEY"),
+            secret_key=os.getenv("LANGFUSE_SECRET_KEY"),
+            host=os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
+        )
+        CallbackHandler = LangfuseCallbackHandler
+        logger.info("[Langfuse] Tracing enabled")
+    except Exception as e:
+        logger.warning(f"[Langfuse] Failed to initialize: {e}")
+        LANGFUSE_ENABLED = False
 ```
 
 ---
@@ -666,12 +749,39 @@ curl -X POST http://localhost:8001/a2a/message \
 
 ### 主要ファイル
 
+#### コアファイル
+
 | ファイル | 行数 | 説明 |
 |---------|------|------|
-| `agent.py` | ~800 | MerchantAgentクラス実装 |
-| `main.py` | ~30 | FastAPIエントリーポイント |
-| `langgraph_merchant.py` | ~500 | LangGraph統合（AI化） |
+| `agent.py` | 379 | MerchantAgentクラス実装、エンドポイント定義 |
+| `main.py` | 28 | FastAPIエントリーポイント |
+| `langgraph_merchant.py` | 354 | LangGraphエンジン（AIワークフロー） |
 | `Dockerfile` | ~40 | Dockerイメージ定義 |
+
+#### モジュール構成
+
+| ディレクトリ/ファイル | 行数 | 説明 |
+|---------|------|------|
+| **handlers/** | 593 | **A2Aメッセージハンドラー** |
+| `├─ intent_handler.py` | 122 | IntentMandate処理 |
+| `├─ product_handler.py` | 83 | 商品検索リクエスト |
+| `├─ cart_handler.py` | 187 | Cart選択・リクエスト |
+| `└─ payment_handler.py` | 143 | 決済処理転送 |
+| **services/** | 524 | **ビジネスロジック** |
+| `└─ cart_service.py` | 524 | CartMandate作成・署名待機・候補生成 |
+| **nodes/** | 928 | **LangGraphノード** |
+| `├─ intent_node.py` | 137 | Intent解析（LLM/フォールバック） |
+| `├─ search_node.py` | 85 | 商品検索（MCPツール） |
+| `├─ inventory_node.py` | 82 | 在庫確認（MCPツール） |
+| `├─ optimization_node.py` | 174 | カート最適化（LLM/ルールベース） |
+| `├─ cart_mandate_node.py` | 378 | CartMandate構築（MCP署名） |
+| `└─ ranking_node.py` | 33 | ランキング選択 |
+| **utils/** | 247 | **ヘルパー関数** |
+| `├─ cart_helpers.py` | 90 | Cart計算ヘルパー |
+| `├─ product_helpers.py` | 76 | 商品同期ヘルパー |
+| `└─ llm_utils.py` | 81 | LLM解析ヘルパー |
+
+**合計**: 約3,000行（リファクタリング前: 約2,600行、モジュール化により可読性・保守性が大幅向上）
 
 ---
 

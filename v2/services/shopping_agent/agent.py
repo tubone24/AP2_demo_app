@@ -988,6 +988,15 @@ class ShoppingAgent(BaseAgent):
             session_id = request.session_id or str(uuid.uuid4())
             user_id = current_user.id  # AP2準拠: JWT認証済みユーザーID
 
+            # デバッグログ: Step-up完了メッセージを検出
+            logger.info(
+                f"[chat_stream] Received request\n"
+                f"  session_id: {session_id}\n"
+                f"  user_id: {user_id}\n"
+                f"  user_input: {request.user_input}\n"
+                f"  is_step_up_completion: {request.user_input.startswith('_step-up-completed:')}"
+            )
+
             async def event_generator() -> AsyncGenerator[str, None]:
                 try:
                     # データベースからセッション取得または作成（AP2準拠: user_id必須）

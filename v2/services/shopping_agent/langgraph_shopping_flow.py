@@ -92,6 +92,14 @@ def route_by_step(state: ShoppingFlowState) -> str:
     current_step = session.get("step", "initial")
     user_input = state["user_input"].lower()
 
+    # デバッグログ: ルーティング情報を出力
+    logger.info(
+        f"[route_by_step] Routing decision\n"
+        f"  current_step: {current_step}\n"
+        f"  user_input: {state['user_input']}\n"
+        f"  is_step_up_completion: {state['user_input'].startswith('_step-up-completed:')}"
+    )
+
     # リセットキーワード検知
     reset_keywords = ["こんにちは", "hello", "hi", "はじめから", "やり直", "リセット", "reset"]
     should_reset = any(word in user_input for word in reset_keywords)
@@ -1203,31 +1211,95 @@ async def step_up_auth_node(state: ShoppingFlowState, agent_instance: Any) -> Sh
     # session_idはstateから取得（AP2完全準拠）
     session_id = state.get("session_id", "unknown")
 
-    # `step-up-completed:xxx`トークンでStep-up完了を検知
-    if user_input.startswith("step-up-completed:"):
-        # Step-up認証完了、WebAuthn署名へ
+    # デバッグログ: step_up_auth_nodeが呼び出されたことを確認
+    logger.info(
+        f"[step_up_auth_node] Node called\n"
+        f"  session_id: {session_id}\n"
+        f"  user_input: {user_input}\n"
+        f"  current_step: {session.get('step', 'unknown')}\n"
+        f"  is_step_up_completion: {user_input.startswith('_step-up-completed:')}"
+    )
+
+    # `_step-up-completed:xxx`トークンでStep-up完了を検知（内部トリガー）
+    if user_input.startswith("_step-up-completed:"):
+        # Step-up認証完了、トークン化とPayment Mandate作成へ
         step_up_session_id = user_input.split(":", 1)[1] if ":" in user_input else "unknown"
 
         logger.info(
-            f"[step_up_auth_node] Step-up authentication completed\n"
+            f"[step_up_auth_node] Step-up authentication completed (message: {user_input})\n"
             f"  Step-up Session ID: {step_up_session_id}\n"
-            f"  Next: WebAuthn signature for Payment Mandate"
+            f"  Session ID: {session_id}\n"
+            f"  Next: Tokenization and Payment Mandate creation"
         )
 
         events.append({
             "type": "agent_text",
-            "content": "✅ 3D Secure認証が完了しました！PaymentMandateに署名をお願いします..."
+            "content": "✅ 3D Secure認証が完了しました！支払い方法をトークン化します..."
         })
 
-        # AP2完全準拠: Step-up完了後はWebAuthn署名ステップへ
-        session["step"] = "webauthn_signature_requested"
+        # AP2完全準拠: Step-up完了後、トークン化とPayment Mandate作成を実施
+        try:
+            # ステップ15-18: トークン化（AP2完全準拠）
+            selected_method = session.get("selected_payment_method")
+            selected_cp = session.get("selected_credential_provider")
+            user_id = session.get("user_id", "anonymous")
 
-        return {
-            **state,
-            "session": session,
-            "events": events,
-            "next_step": "webauthn_auth"
-        }
+            if not selected_method or not selected_cp:
+                raise ValueError("Missing payment method or credential provider")
+
+            logger.info(
+                f"[step_up_auth_node] AP2 Step 15-18: Tokenizing payment method after step-up\n"
+                f"  User ID: {user_id}\n"
+                f"  Payment Method ID: {selected_method['id']}\n"
+                f"  CP URL: {selected_cp['url']}"
+            )
+
+            # ステップ15-16: SAがCPに支払い方法トークンを要求
+            tokenized_method = await agent_instance._tokenize_payment_method(
+                user_id=user_id,
+                payment_method_id=selected_method["id"],
+                credential_provider_url=selected_cp["url"]
+            )
+            session["tokenized_payment_method"] = tokenized_method
+
+            # ステップ17-18: CPが支払い方法トークンを返却
+            logger.info(
+                f"[step_up_auth_node] AP2 Step 17-18: Received tokenized payment method\n"
+                f"  Token: {tokenized_method.get('token', 'N/A')[:20]}..."
+            )
+
+            # PaymentMandate作成（AP2完全準拠、リスク評価含む）
+            payment_mandate = agent_instance._create_payment_mandate(session=session)
+            session["payment_mandate"] = payment_mandate
+
+            logger.info(
+                f"[step_up_auth_node] Payment Mandate created after step-up\n"
+                f"  Mandate ID: {payment_mandate.get('id', 'N/A')}"
+            )
+
+            # AP2完全準拠: Payment Mandate作成後はWebAuthn署名ステップへ
+            session["step"] = "webauthn_signature_requested"
+
+            return {
+                **state,
+                "session": session,
+                "events": events,
+                "next_step": "webauthn_auth"
+            }
+
+        except Exception as e:
+            logger.error(f"[step_up_auth_node] Error after step-up completion: {e}", exc_info=True)
+            session["step"] = "error"
+            events.append({
+                "type": "agent_text",
+                "content": f"Step-up認証後の処理中にエラーが発生しました: {str(e)}"
+            })
+            return {
+                **state,
+                "session": session,
+                "events": events,
+                "next_step": END
+            }
 
     # 初回アクセス: Step-Upリダイレクト送信
     # 選択された支払い方法とCredential Providerを取得
@@ -1250,6 +1322,7 @@ async def step_up_auth_node(state: ShoppingFlowState, agent_instance: Any) -> Sh
 
     # Step-upセッションIDを生成（AP2完全準拠）
     import uuid
+    from urllib.parse import quote
     step_up_session_id = f"stepup_{uuid.uuid4().hex[:16]}"
     session["step_up_session_id"] = step_up_session_id
 
@@ -1262,7 +1335,8 @@ async def step_up_auth_node(state: ShoppingFlowState, agent_instance: Any) -> Sh
     return_url = f"http://localhost:3000/chat?step_up_status=success&step_up_session_id={step_up_session_id}&session_id={session_id}"
 
     # Step-Up Challenge URL（AP2完全準拠）
-    step_up_url = f"{cp_url}/payment-methods/step-up-challenge?payment_method_id={selected_method['id']}&return_url={return_url}"
+    # return_urlをURLエンコードして、クエリパラメータとして正しく渡す
+    step_up_url = f"{cp_url}/payment-methods/step-up-challenge?payment_method_id={selected_method['id']}&return_url={quote(return_url, safe='')}"
 
     logger.info(
         f"[step_up_auth_node] Step-up authentication required\n"

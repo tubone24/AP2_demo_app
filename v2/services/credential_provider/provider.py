@@ -797,13 +797,14 @@ class CredentialProviderService(BaseAgent):
 
             Args:
                 payment_method_id: 認証対象の支払い方法ID
-                return_url: 認証完了後のリダイレクト先URL
+                return_url: 認証完了後のリダイレクト先URL（URLエンコード済み）
             """
             try:
                 from fastapi.responses import HTMLResponse
-                from urllib.parse import quote
+                from urllib.parse import unquote
 
-                # return_urlをJavaScriptで安全に使用するためにエスケープ
+                # return_urlはURLエンコード済みなので、FastAPIが自動的にデコードしている
+                # JavaScriptで安全に使用するためにシングルクォートをエスケープ
                 escaped_return_url = return_url.replace("'", "\\'")
 
                 # 簡易的な3DS認証画面HTML
