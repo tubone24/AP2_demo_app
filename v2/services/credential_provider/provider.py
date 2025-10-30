@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 from v2.common.base_agent import BaseAgent, AgentPassphraseManager
 from v2.common.models import A2AMessage, AttestationVerifyRequest, AttestationVerifyResponse
-from v2.common.database import DatabaseManager, Attestation, PasskeyCredentialCRUD, PaymentMethodCRUD, ReceiptCRUD
+from v2.common.database import DatabaseManager, Attestation, PasskeyCredentialCRUD, PaymentMethodCRUD, ReceiptCRUD, UserCRUD
 from v2.common.crypto import DeviceAttestationManager, KeyManager
 from v2.common.logger import get_logger, log_a2a_message, log_database_operation, LoggingAsyncClient
 from v2.common.redis_client import RedisClient, TokenStore, SessionStore
@@ -414,6 +414,18 @@ class CredentialProviderService(BaseAgent):
                         "counter": 0,  # 初期値
                         "transports": transports
                     })
+
+                    # AP2完全準拠: Userテーブルにもユーザーを作成（レシート生成などで使用）
+                    user_exists = await UserCRUD.get_by_id(session, user_id)
+                    if not user_exists:
+                        await UserCRUD.create(session, {
+                            "user_id": user_id,
+                            "display_name": f"User {user_id[:8]}",
+                            "email": None
+                        })
+                        logger.info(f"[register_passkey] User created: {user_id}")
+                    else:
+                        logger.info(f"[register_passkey] User already exists: {user_id}")
 
                 logger.info(f"[register_passkey] Passkey registered: {credential_id[:16]}...")
 

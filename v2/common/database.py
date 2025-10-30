@@ -67,23 +67,25 @@ class Product(Base):
 
 class User(Base):
     """
-    usersテーブル（メール/パスワード認証）
+    usersテーブル（メール/パスワード認証 または Passkey認証）
 
     AP2仕様準拠:
-    - email: PaymentMandate.payer_emailとして使用
+    - email: PaymentMandate.payer_emailとして使用（Passkey認証時はオプショナル）
     - id: 内部識別子（UUID）
     - is_active: アカウント有効フラグ
-    - hashed_password: bcryptハッシュ化パスワード
+    - hashed_password: bcryptハッシュ化パスワード（Passkey認証時は不要）
 
     AP2仕様: HTTPセッション認証方式は仕様外（実装の自由度あり）
     Mandate署名認証はCredential ProviderのPasskeyで実施（AP2準拠）
+
+    AP2完全準拠: Passkeyはパスワードレス認証のため、emailとhashed_passwordはオプショナル
     """
     __tablename__ = "users"
 
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     display_name = Column(String, nullable=False)  # username
-    email = Column(String, unique=True, nullable=False, index=True)  # AP2 payer_email
-    hashed_password = Column(String, nullable=False)  # bcryptハッシュ
+    email = Column(String, unique=True, nullable=True, index=True)  # AP2 payer_email（Passkey時はNone可）
+    hashed_password = Column(String, nullable=True)  # bcryptハッシュ（Passkey時はNone）
     is_active = Column(Integer, nullable=False, default=1)  # SQLiteはBooleanがないためIntegerを使用
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
@@ -682,12 +684,22 @@ class UserCRUD:
 
     @staticmethod
     async def create(session: AsyncSession, user_data: Dict[str, Any]) -> User:
-        """ユーザー作成（AP2完全準拠）"""
+        """
+        ユーザー作成（AP2完全準拠）
+
+        Args:
+            user_data: ユーザーデータ
+                - display_name: 表示名（必須）
+                - email: メールアドレス（オプショナル、Passkey認証時はNone可）
+                - hashed_password: ハッシュ化パスワード（オプショナル、Passkey認証時はNone）
+                - id: ユーザーID（オプショナル、未指定時はUUID生成）
+                - is_active: アクティブフラグ（オプショナル、デフォルト1）
+        """
         user = User(
-            id=user_data.get("id", str(uuid.uuid4())),
+            id=user_data.get("id", user_data.get("user_id", str(uuid.uuid4()))),
             display_name=user_data["display_name"],
-            email=user_data["email"],
-            hashed_password=user_data["hashed_password"],  # AP2準拠: Argon2idハッシュ化
+            email=user_data.get("email"),  # AP2準拠: Passkey認証時はNone可
+            hashed_password=user_data.get("hashed_password"),  # AP2準拠: Passkey認証時はNone
             is_active=user_data.get("is_active", 1)
         )
         session.add(user)
