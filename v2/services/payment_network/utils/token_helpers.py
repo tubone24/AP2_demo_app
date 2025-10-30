@@ -10,22 +10,24 @@ import secrets
 from typing import Dict, Any, Optional, Tuple
 from datetime import datetime, timezone, timedelta
 
+from common.redis_client import TokenStore
+
 logger = logging.getLogger(__name__)
 
 
 class TokenHelpers:
-    """Agent Token生成・検証に関連するヘルパーメソッドを提供するクラス"""
+    """Agent Token生成・検証に関連するヘルパーメソッドを提供するクラス（Redis対応）"""
 
-    def __init__(self, network_name: str, token_store: Dict[str, Dict[str, Any]]):
+    def __init__(self, network_name: str, token_store: TokenStore):
         """
         Args:
             network_name: ネットワーク名
-            token_store: トークンストア（参照渡し）
+            token_store: RedisベースのTokenStore
         """
         self.network_name = network_name
         self.token_store = token_store
 
-    def generate_agent_token(
+    async def generate_agent_token(
         self,
         payment_mandate: Dict[str, Any],
         payment_method_token: str,
@@ -33,7 +35,7 @@ class TokenHelpers:
         expiry_hours: int = 1
     ) -> Tuple[str, str]:
         """
-        Agent Token生成
+        Agent Token生成（Redis対応）
 
         Args:
             payment_mandate: PaymentMandate
@@ -51,8 +53,8 @@ class TokenHelpers:
         random_bytes = secrets.token_urlsafe(32)  # 32バイト = 256ビット
         agent_token = f"agent_tok_{self.network_name.lower()}_{uuid.uuid4().hex[:8]}_{random_bytes[:24]}"
 
-        # トークンストアに保存
-        self.token_store[agent_token] = {
+        # トークンデータ
+        token_data = {
             "payment_mandate_id": payment_mandate.get("id"),
             "payment_method_token": payment_method_token,
             "payer_id": payment_mandate.get("payer_id"),
@@ -63,16 +65,20 @@ class TokenHelpers:
             "attestation_verified": attestation_verified
         }
 
+        # RedisベースのTokenStoreに保存（TTL: expiry_hours）
+        ttl_seconds = expiry_hours * 3600
+        await self.token_store.save_token(agent_token, token_data, ttl_seconds=ttl_seconds)
+
         logger.info(
-            f"[{self.network_name}] Issued Agent Token: {agent_token[:32]}..., "
-            f"expires_at={expires_at.isoformat()}"
+            f"[{self.network_name}] Issued Agent Token (Redis): {agent_token[:32]}..., "
+            f"expires_at={expires_at.isoformat()}, ttl={ttl_seconds}s"
         )
 
         return agent_token, expires_at.isoformat()
 
-    def verify_agent_token(self, agent_token: str) -> Tuple[bool, Optional[Dict[str, Any]], Optional[str]]:
+    async def verify_agent_token(self, agent_token: str) -> Tuple[bool, Optional[Dict[str, Any]], Optional[str]]:
         """
-        Agent Token検証
+        Agent Token検証（Redis対応）
 
         Args:
             agent_token: Agent Token
@@ -80,20 +86,20 @@ class TokenHelpers:
         Returns:
             Tuple[bool, Optional[Dict[str, Any]], Optional[str]]: (valid, token_info, error)
         """
-        logger.info(f"[{self.network_name}] Verifying Agent Token: {agent_token[:32]}...")
+        logger.info(f"[{self.network_name}] Verifying Agent Token (Redis): {agent_token[:32]}...")
 
-        # トークンストアから取得
-        token_data = self.token_store.get(agent_token)
+        # RedisベースのTokenStoreから取得
+        token_data = await self.token_store.get_token(agent_token)
         if not token_data:
-            logger.warning(f"[{self.network_name}] Agent Token not found: {agent_token[:32]}...")
+            logger.warning(f"[{self.network_name}] Agent Token not found in Redis: {agent_token[:32]}...")
             return False, None, "Agent Token not found"
 
-        # 有効期限確認
+        # 有効期限確認（Redis TTLで自動削除されるが、念のため確認）
         expires_at = datetime.fromisoformat(token_data["expires_at"])
         if datetime.now(timezone.utc) > expires_at:
             logger.warning(f"[{self.network_name}] Agent Token expired: {agent_token[:32]}...")
             # 期限切れトークンを削除
-            del self.token_store[agent_token]
+            await self.token_store.delete_token(agent_token)
             return False, None, "Agent Token expired"
 
         logger.info(

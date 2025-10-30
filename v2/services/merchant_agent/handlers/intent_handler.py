@@ -49,22 +49,21 @@ async def handle_intent_mandate(agent: 'MerchantAgent', message: A2AMessage) -> 
     logger.info(f"[MerchantAgent] Searching products with intent: '{intent_text}'")
 
     try:
-        # 配送先住所の決定（AP2仕様準拠）
-        if shipping_address:
-            # Shopping Agentから提供された配送先を使用
-            logger.info(f"[MerchantAgent] Using provided shipping address: {shipping_address.get('recipient', 'N/A')}")
-        else:
-            # デフォルト配送先住所（デモ用・後方互換性）
-            shipping_address = {
-                "recipient": "デモユーザー",
-                "address_line1": "東京都渋谷区渋谷1-1-1",
-                "address_line2": "",
-                "city": "渋谷区",
-                "state": "東京都",
-                "postal_code": "150-0001",
-                "country": "JP"
+        # 配送先住所の検証（AP2仕様準拠）
+        if not shipping_address:
+            # AP2完全準拠: 配送先住所は必須
+            logger.error("[MerchantAgent] Shipping address is required but not provided")
+            return {
+                "type": "ap2.errors.Error",
+                "id": str(uuid.uuid4()),
+                "payload": {
+                    "error_code": "missing_shipping_address",
+                    "error_message": "Shipping address is required to create cart candidates"
+                }
             }
-            logger.info("[MerchantAgent] Using default shipping address")
+
+        # Shopping Agentから提供された配送先を使用（AP2完全準拠）
+        logger.info(f"[MerchantAgent] Using provided shipping address: {shipping_address.get('recipient', 'N/A')}")
 
         # 複数のカート候補を生成
         # AI Mode: LangGraphエンジンを使用

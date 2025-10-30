@@ -130,26 +130,14 @@ class DIDResolver:
                     self._did_registry[did] = did_doc
                     logger.info(f"[DIDResolver] ✓ 永続化DIDドキュメントを登録: {did}")
 
-                # 2. DIDドキュメントが存在しない場合は、KeyManagerから生成（開発時）
+                # 2. DIDドキュメントが存在しない場合はエラー
                 else:
-                    logger.warning(
-                        f"[DIDResolver] ⚠️  永続化されたDIDドキュメントが見つかりません: {did_doc_file}\n"
-                        f"   KeyManagerから公開鍵を取得してDIDドキュメントを生成します。\n"
-                        f"   本番環境では v2/scripts/init_keys.py を実行してください。"
+                    error_msg = (
+                        f"[DIDResolver] ❌ 永続化されたDIDドキュメントが見つかりません: {did_doc_file}\n"
+                        f"   v2/scripts/init_keys.py を実行してDIDドキュメントを生成してください。"
                     )
-
-                    # KeyManagerから公開鍵を読み込み（ECPublicKeyオブジェクト）
-                    public_key_obj = self.key_manager.load_public_key(agent_key)
-
-                    # PEM文字列に変換
-                    public_key_pem = self.key_manager.public_key_to_pem(public_key_obj)
-
-                    # DIDドキュメントを生成
-                    did_doc = self._create_did_document(did, agent_key, public_key_pem)
-
-                    # レジストリに登録
-                    self._did_registry[did] = did_doc
-                    logger.info(f"[DIDResolver] ✓ KeyManagerからDIDドキュメントを生成・登録: {did}")
+                    logger.error(error_msg)
+                    raise FileNotFoundError(error_msg)
 
             except Exception as e:
                 logger.warning(

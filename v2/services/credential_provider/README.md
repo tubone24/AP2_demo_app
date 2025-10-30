@@ -45,45 +45,35 @@ DID: did:ap2:agent:credential_provider
 
 ## アーキテクチャ
 
-```
-┌─────────────────────────────────────────────────────────┐
-│         Credential Provider Service                      │
-│  (did:ap2:agent:credential_provider)                    │
-├─────────────────────────────────────────────────────────┤
-│                                                          │
-│  ┌──────────────────────────────────────────────────┐  │
-│  │  WebAuthn Verification Engine                     │  │
-│  │  - Passkey署名検証 (FIDO2)                         │  │
-│  │  - Challenge管理 (Redis KV, TTL: 60秒)             │  │
-│  │  - Counter-based replay attack prevention         │  │
-│  │  - RFC 8785 Canonicalization                      │  │
-│  └──────────────────────────────────────────────────┘  │
-│                                                          │
-│  ┌──────────────────────────────────────────────────┐  │
-│  │  Payment Method Management                        │  │
-│  │  - カード情報管理 (DB永続化)                        │  │
-│  │  - トークン化 (Redis KV, TTL: 15分)                │  │
-│  │  - Step-up認証フロー (Redis KV, TTL: 10分)         │  │
-│  └──────────────────────────────────────────────────┘  │
-│                                                          │
-│  ┌──────────────────────────────────────────────────┐  │
-│  │  Payment Network Integration                      │  │
-│  │  - Agent Token取得 (AP2 Step 23)                   │  │
-│  │  - Attestation送信                                 │  │
-│  └──────────────────────────────────────────────────┘  │
-│                                                          │
-│  ┌──────────────────────────────────────────────────┐  │
-│  │  Receipt Management                               │  │
-│  │  - 領収書受信 (AP2 Step 29)                        │  │
-│  │  - ユーザー別領収書保管 (DB永続化)                 │  │
-│  └──────────────────────────────────────────────────┘  │
-│                                                          │
-└─────────────────────────────────────────────────────────┘
-           ↓          ↓          ↓              ↓
-    ┌──────────┐ ┌────────┐ ┌──────────┐  ┌────────────┐
-    │ Database │ │ Redis  │ │ Payment  │  │ Shopping   │
-    │ (SQLite) │ │ (KV)   │ │ Network  │  │ Agent      │
-    └──────────┘ └────────┘ └──────────┘  └────────────┘
+```mermaid
+graph TB
+    subgraph CP["Credential Provider Service<br/>(did:ap2:agent:credential_provider)"]
+        WAV[WebAuthn Verification Engine<br/>・Passkey署名検証 FIDO2<br/>・Challenge管理 Redis KV, TTL: 60秒<br/>・Counter-based replay attack prevention<br/>・RFC 8785 Canonicalization]
+
+        PMM[Payment Method Management<br/>・カード情報管理 DB永続化<br/>・トークン化 Redis KV, TTL: 15分<br/>・Step-up認証フロー Redis KV, TTL: 10分]
+
+        PNI[Payment Network Integration<br/>・Agent Token取得 AP2 Step 23<br/>・Attestation送信]
+
+        RM[Receipt Management<br/>・領収書受信 AP2 Step 29<br/>・ユーザー別領収書保管 DB永続化]
+
+        WAV --> PMM
+        PMM --> PNI
+        PNI --> RM
+    end
+
+    CP --> DB[(Database<br/>SQLite)]
+    CP --> RD[(Redis<br/>KV)]
+    CP --> PN[Payment Network]
+    CP --> SA[Shopping Agent]
+
+    style WAV fill:#e1f5ff,stroke:#333,stroke-width:2px
+    style PMM fill:#ffe1f5,stroke:#333,stroke-width:2px
+    style PNI fill:#f5ffe1,stroke:#333,stroke-width:2px
+    style RM fill:#fff4e1,stroke:#333,stroke-width:2px
+    style DB fill:#e8e8e8,stroke:#333,stroke-width:2px
+    style RD fill:#e8e8e8,stroke:#333,stroke-width:2px
+    style PN fill:#e8e8e8,stroke:#333,stroke-width:2px
+    style SA fill:#e8e8e8,stroke:#333,stroke-width:2px
 ```
 
 ---
