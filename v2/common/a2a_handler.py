@@ -20,8 +20,9 @@ from common.models import (
 )
 from common.did_resolver import DIDResolver
 from common.nonce_manager import NonceManager
+from common.logger import get_logger, log_a2a_message
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class A2AMessageHandler:
@@ -283,17 +284,21 @@ class A2AMessageHandler:
         """
         import json
 
-        # 受信メッセージの詳細ログ
-        logger.info(
-            f"\n{'='*80}\n"
-            f"[A2A受信] メッセージID: {message.header.message_id}\n"
-            f"  送信元: {message.header.sender}\n"
-            f"  送信先: {message.header.recipient}\n"
-            f"  タイプ: {message.dataPart.type}\n"
-            f"  データID: {message.dataPart.id}\n"
-            f"  タイムスタンプ: {message.header.timestamp}\n"
-            f"  ペイロード: {json.dumps(message.dataPart.payload, ensure_ascii=False, indent=2)}\n"
-            f"{'='*80}"
+        # 受信メッセージの詳細ログ（AP2完全準拠: ペイロードとヘッダーをJSON形式で出力）
+        log_a2a_message(
+            logger=logger,
+            direction="received",
+            message_type=message.dataPart.type,
+            payload=message.dataPart.payload,
+            peer=message.header.sender,
+            headers={
+                "message_id": message.header.message_id,
+                "sender": message.header.sender,
+                "recipient": message.header.recipient,
+                "timestamp": message.header.timestamp,
+                "nonce": message.header.nonce,
+                "schema_version": message.header.schema_version
+            }
         )
 
         # 1. 署名検証
@@ -413,19 +418,22 @@ class A2AMessageHandler:
                 proofPurpose="authentication"
             )
 
-        import json as json_lib
-
-        logger.info(
-            f"\n{'='*80}\n"
-            f"[A2A送信] レスポンス作成\n"
-            f"  送信元: {self.agent_id}\n"
-            f"  送信先: {recipient}\n"
-            f"  タイプ: {data_type}\n"
-            f"  データID: {data_id}\n"
-            f"  署名: {'あり' if sign else 'なし'}\n"
-            f"  タイムスタンプ: {timestamp}\n"
-            f"  ペイロード: {json_lib.dumps(payload, ensure_ascii=False, indent=2)}\n"
-            f"{'='*80}"
+        # 送信メッセージの詳細ログ（AP2完全準拠: ペイロードとヘッダーをJSON形式で出力）
+        log_a2a_message(
+            logger=logger,
+            direction="sent",
+            message_type=data_type,
+            payload=payload,
+            peer=recipient,
+            headers={
+                "message_id": message.header.message_id,
+                "sender": self.agent_id,
+                "recipient": recipient,
+                "timestamp": timestamp,
+                "nonce": message.header.nonce,
+                "schema_version": message.header.schema_version,
+                "signed": sign
+            }
         )
 
         return message
@@ -517,19 +525,24 @@ class A2AMessageHandler:
                 proofPurpose="authentication"
             )
 
-        import json as json_lib
-
-        logger.info(
-            f"\n{'='*80}\n"
-            f"[A2A送信] Artifactレスポンス作成\n"
-            f"  送信元: {self.agent_id}\n"
-            f"  送信先: {recipient}\n"
-            f"  Artifact名: {artifact_name}\n"
-            f"  Artifact ID: {artifact_id}\n"
-            f"  署名: {'あり' if sign else 'なし'}\n"
-            f"  タイムスタンプ: {timestamp}\n"
-            f"  データ: {json_lib.dumps(artifact_data, ensure_ascii=False, indent=2)[:500]}...\n"
-            f"{'='*80}"
+        # 送信メッセージの詳細ログ（AP2完全準拠: ペイロードとヘッダーをJSON形式で出力）
+        log_a2a_message(
+            logger=logger,
+            direction="sent",
+            message_type=f"artifact:{artifact_name}",
+            payload=artifact_data,
+            peer=recipient,
+            headers={
+                "message_id": message.header.message_id,
+                "sender": self.agent_id,
+                "recipient": recipient,
+                "timestamp": timestamp,
+                "nonce": message.header.nonce,
+                "schema_version": message.header.schema_version,
+                "artifact_id": artifact_id,
+                "artifact_name": artifact_name,
+                "signed": sign
+            }
         )
 
         return message

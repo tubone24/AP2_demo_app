@@ -70,7 +70,7 @@ from v2.common.auth import (
     verify_password,
     validate_password_strength,
 )
-from v2.common.logger import get_logger
+from v2.common.logger import get_logger, LoggingAsyncClient
 
 # OpenTelemetry 手動トレーシング
 from v2.common.telemetry import get_tracer, create_http_span
@@ -166,7 +166,9 @@ class ShoppingAgent(BaseAgent):
         # HTTPクライアント（他エージェントとの通信用）
         # タイムアウト600秒: DMR LLM処理が長時間かかる場合に対応
         # httpx.Timeoutで各段階のタイムアウトを明示的に設定
-        self.http_client = httpx.AsyncClient(
+        # AP2完全準拠: LoggingAsyncClientで全HTTP通信をログ記録
+        self.http_client = LoggingAsyncClient(
+            logger=logger,
             timeout=httpx.Timeout(
                 connect=HTTP_CONNECT_TIMEOUT,  # 接続確立タイムアウト
                 read=HTTP_CLIENT_TIMEOUT,  # レスポンス読み込みタイムアウト（600秒）

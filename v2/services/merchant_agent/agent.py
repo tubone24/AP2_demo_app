@@ -26,7 +26,7 @@ from v2.common.models import A2AMessage
 from v2.common.database import DatabaseManager, ProductCRUD
 from v2.common.seed_data import seed_products, seed_users
 from v2.common.search_engine import MeilisearchClient
-from v2.common.logger import get_logger, log_http_request, log_http_response, log_a2a_message
+from v2.common.logger import get_logger, log_http_request, log_http_response, log_a2a_message, LoggingAsyncClient
 
 # LangGraphエンジンのインポート
 from langgraph_merchant import MerchantLangGraphAgent
@@ -78,7 +78,11 @@ class MerchantAgent(BaseAgent):
         self.db_manager = DatabaseManager(database_url=database_url)
 
         # HTTPクライアント（Merchantとの通信用）
-        self.http_client = httpx.AsyncClient(timeout=30.0)
+        # AP2完全準拠: LoggingAsyncClientで全HTTP通信をログ記録
+        self.http_client = LoggingAsyncClient(
+            logger=logger,
+            timeout=30.0
+        )
 
         # Merchantエンドポイント（Docker Compose環境想定）
         self.merchant_url = "http://merchant:8002"

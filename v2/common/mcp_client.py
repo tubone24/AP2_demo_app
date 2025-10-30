@@ -11,10 +11,11 @@ Streamable HTTP Transport準拠のMCPクライアント実装。
 """
 
 import json
+import time
 from typing import Dict, Any, Optional
 import httpx
 
-from common.logger import get_logger
+from common.logger import get_logger, log_mcp_request, log_mcp_response, LoggingAsyncClient
 from common.telemetry import get_tracer, create_http_span, is_telemetry_enabled
 
 logger = get_logger(__name__, service_name='mcp_client')
@@ -50,7 +51,12 @@ class MCPClient:
         """
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
-        self.http_client = http_client or httpx.AsyncClient(timeout=timeout)
+        # AP2完全準拠: LoggingAsyncClientで全HTTP通信をログ記録
+        # 外部から渡された場合はそれを使用、そうでない場合はLoggingAsyncClientを作成
+        if http_client:
+            self.http_client = http_client
+        else:
+            self.http_client = LoggingAsyncClient(logger=logger, timeout=timeout)
 
         # セッション管理
         self.session_id: Optional[str] = None
@@ -180,8 +186,18 @@ class MCPClient:
         if self.session_id:
             headers["Mcp-Session-Id"] = self.session_id
 
+        # MCPリクエストログ（AP2完全準拠: ペイロードとヘッダーをJSON形式で出力）
+        log_mcp_request(
+            logger=logger,
+            tool_name=method,
+            arguments=params,
+            url=f"{self.base_url}/",
+            headers=headers
+        )
+
         # HTTP POST送信
         # OpenTelemetry 手動トレーシング: MCP通信
+        start_time = time.time()
         try:
             with create_http_span(
                 tracer,
@@ -212,9 +228,32 @@ class MCPClient:
             # エラーチェック
             if "error" in response_data:
                 error = response_data["error"]
+                duration_ms = (time.time() - start_time) * 1000
+
+                # MCPレスポンスログ（エラー）
+                log_mcp_response(
+                    logger=logger,
+                    tool_name=method,
+                    result=None,
+                    duration_ms=duration_ms,
+                    error=f"JSON-RPC error {error['code']}: {error['message']}"
+                )
+
                 raise ValueError(f"JSON-RPC error {error['code']}: {error['message']}")
 
-            return response_data.get("result", {})
+            result = response_data.get("result", {})
+            duration_ms = (time.time() - start_time) * 1000
+
+            # MCPレスポンスログ（成功）
+            log_mcp_response(
+                logger=logger,
+                tool_name=method,
+                result=result,
+                duration_ms=duration_ms,
+                error=None
+            )
+
+            return result
 
         except httpx.HTTPError as e:
             logger.error(f"[MCPClient] HTTP error calling {method}: {e}", exc_info=True)
