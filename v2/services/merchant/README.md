@@ -43,14 +43,12 @@ Merchantは、実際の商店（むぎぼーショップ）を表すエンティ
 
 **AP2仕様の要件**: MerchantとMerchant Agentは**別エンティティ**である必要があります。
 
-```
-┌──────────────┐      ┌──────────┐
-│ Merchant     │ A2A  │ Merchant │
-│ Agent        │─────>│          │
-│              │      │ (署名)   │
-│ (仲介)       │      │ (店舗側) │
-│ 署名権限なし  │      │ 署名権限あり │
-└──────────────┘      └──────────┘
+```mermaid
+graph LR
+    MA[Merchant Agent<br/>仲介<br/>署名権限なし] -->|A2A通信<br/>署名依頼| M[Merchant<br/>署名<br/>店舗側<br/>署名権限あり]
+
+    style MA fill:#fff4e1,stroke:#333,stroke-width:2px
+    style M fill:#ffe1e1,stroke:#333,stroke-width:2px
 ```
 
 **理由**:

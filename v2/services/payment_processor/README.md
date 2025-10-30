@@ -47,54 +47,37 @@ DID: did:ap2:agent:payment_processor
 
 ## アーキテクチャ
 
-```
-┌───────────────────────────────────────────────────────────┐
-│         Payment Processor Service                          │
-│  (did:ap2:agent:payment_processor)                        │
-├───────────────────────────────────────────────────────────┤
-│                                                            │
-│  ┌────────────────────────────────────────────────────┐  │
-│  │  Mandate Chain Validation Engine                   │  │
-│  │  - IntentMandate → CartMandate → PaymentMandate   │  │
-│  │  - ID連鎖確認                                       │  │
-│  │  - ハッシュ整合性確認 (RFC 8785)                   │  │
-│  └────────────────────────────────────────────────────┘  │
-│                                                            │
-│  ┌────────────────────────────────────────────────────┐  │
-│  │  3-Layer Signature Verification                    │  │
-│  │  - User Authorization: SD-JWT-VC (WebAuthn)        │  │
-│  │  - Merchant Authorization: JWT (ES256/ECDSA)       │  │
-│  │  - Shopping Agent Signature: ECDSA                 │  │
-│  │  - DID Resolution (公開鍵取得)                      │  │
-│  └────────────────────────────────────────────────────┘  │
-│                                                            │
-│  ┌────────────────────────────────────────────────────┐  │
-│  │  Credential Provider Integration                   │  │
-│  │  - Token検証 (AP2 Step 26-27)                       │  │
-│  │  - 支払い方法情報取得                               │  │
-│  │  - 領収書通知 (AP2 Step 29)                         │  │
-│  └────────────────────────────────────────────────────┘  │
-│                                                            │
-│  ┌────────────────────────────────────────────────────┐  │
-│  │  Payment Processing Engine                         │  │
-│  │  - リスクベース承認/拒否判定                        │  │
-│  │  - Authorize & Capture (モック)                     │  │
-│  │  - 決済ゲートウェイ統合準備                         │  │
-│  └────────────────────────────────────────────────────┘  │
-│                                                            │
-│  ┌────────────────────────────────────────────────────┐  │
-│  │  Receipt Generator                                  │  │
-│  │  - PDF形式領収書生成                                │  │
-│  │  - VDC交換原則 (CartMandate必須)                   │  │
-│  │  - Credential Providerへの通知                      │  │
-│  └────────────────────────────────────────────────────┘  │
-│                                                            │
-└───────────────────────────────────────────────────────────┘
-           ↓                    ↓                  ↓
-    ┌──────────┐    ┌──────────────────┐   ┌──────────────┐
-    │ Database │    │ Credential       │   │ Shopping     │
-    │ (SQLite) │    │ Provider         │   │ Agent        │
-    └──────────┘    └──────────────────┘   └──────────────┘
+```mermaid
+graph TB
+    subgraph PP["Payment Processor Service<br/>(did:ap2:agent:payment_processor)"]
+        MCV[Mandate Chain Validation Engine<br/>・IntentMandate → CartMandate → PaymentMandate<br/>・ID連鎖確認<br/>・ハッシュ整合性確認 RFC 8785]
+
+        SIG[3-Layer Signature Verification<br/>・User Authorization: SD-JWT-VC WebAuthn<br/>・Merchant Authorization: JWT ES256/ECDSA<br/>・Shopping Agent Signature: ECDSA<br/>・DID Resolution 公開鍵取得]
+
+        CPI[Credential Provider Integration<br/>・Token検証 AP2 Step 26-27<br/>・支払い方法情報取得<br/>・領収書通知 AP2 Step 29]
+
+        PPE[Payment Processing Engine<br/>・リスクベース承認/拒否判定<br/>・Authorize & Capture モック<br/>・決済ゲートウェイ統合準備]
+
+        RG[Receipt Generator<br/>・PDF形式領収書生成<br/>・VDC交換原則 CartMandate必須<br/>・Credential Providerへの通知]
+
+        MCV --> SIG
+        SIG --> CPI
+        CPI --> PPE
+        PPE --> RG
+    end
+
+    PP --> DB[(Database<br/>SQLite)]
+    PP --> CP[Credential Provider]
+    PP --> SA[Shopping Agent]
+
+    style MCV fill:#e1f5ff,stroke:#333,stroke-width:2px
+    style SIG fill:#ffe1f5,stroke:#333,stroke-width:2px
+    style CPI fill:#f5ffe1,stroke:#333,stroke-width:2px
+    style PPE fill:#fff4e1,stroke:#333,stroke-width:2px
+    style RG fill:#f5e1ff,stroke:#333,stroke-width:2px
+    style DB fill:#e8e8e8,stroke:#333,stroke-width:2px
+    style CP fill:#e8e8e8,stroke:#333,stroke-width:2px
+    style SA fill:#e8e8e8,stroke:#333,stroke-width:2px
 ```
 
 ---

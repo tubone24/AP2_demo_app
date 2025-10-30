@@ -38,15 +38,12 @@ Payment Networkは、実際の決済ネットワーク（Visa、Mastercard等）
 
 **AP2 Step 23**: Credential Provider → Payment Network のトークン化呼び出し
 
-```
-┌───────────────────┐      ┌─────────────────┐
-│ Credential        │      │ Payment         │
-│ Provider          │ Step │ Network         │
-│                   │  23  │                 │
-│ - WebAuthn検証    │─────>│ - Agent Token   │
-│ - Payment Method  │      │   発行          │
-│   トークン管理     │      │ - トークン検証   │
-└───────────────────┘      └─────────────────┘
+```mermaid
+graph LR
+    CP[Credential Provider<br/>・WebAuthn検証<br/>・Payment Methodトークン管理] -->|Step 23<br/>Agent Token要求| PN[Payment Network<br/>・Agent Token発行<br/>・トークン検証]
+
+    style CP fill:#e1f5ff,stroke:#333,stroke-width:2px
+    style PN fill:#ffe1f5,stroke:#333,stroke-width:2px
 ```
 
 **Agent Token vs Payment Method Token**:
