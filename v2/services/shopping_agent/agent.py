@@ -58,6 +58,7 @@ from v2.common.database import (
     UserCRUD,
     PasskeyCredentialCRUD,
 )
+from v2.common.mandate_types import IntentMandate
 from v2.common.risk_assessment import RiskAssessmentEngine
 from v2.common.crypto import WebAuthnChallengeManager, DeviceAttestationManager
 from v2.common.user_authorization import create_user_authorization_vp
@@ -1683,19 +1684,20 @@ class ShoppingAgent(BaseAgent):
 
     async def _create_intent_mandate(self, intent: str, session: Dict[str, Any]) -> Dict[str, Any]:
         """
-        IntentMandateを作成（LangGraph AI統合版）
+        IntentMandateを作成（AP2完全準拠版）
 
         AP2仕様準拠：
+        - AP2公式Pydanticモデル（IntentMandate）を使用
         - LangGraphでユーザーの自然言語入力からインテント抽出
-        - 既存のIntentMandate型（mandate_types.py）を使用
-        - サーバー署名は使用しない（Passkey署名はフロントエンドで追加）
+        - AP2仕様のフィールドのみを含む
+        - メタデータ（id, user_id等）は呼び出し側で管理
 
         Args:
             intent: ユーザーの自然言語入力
             session: セッションデータ
 
         Returns:
-            IntentMandate（署名前、AP2仕様準拠の構造）
+            IntentMandate（辞書形式、AP2仕様準拠の構造）
         """
         now = datetime.now(timezone.utc)
         # AP2準拠：user_idはセッションから動的に取得（フロントエンドから提供）
@@ -1730,19 +1732,39 @@ class ShoppingAgent(BaseAgent):
 
         logger.info(f"[_create_intent_mandate] Reconstructed intent: {intent_full}")
 
-        # IntentMandate作成（AP2完全準拠）
-        # LangGraph StateGraph版では、インテント情報はセッションから取得
-        intent_mandate_unsigned = self._build_intent_mandate_from_session(intent, session, user_id, now)
+        # IntentMandate作成（AP2公式Pydanticモデル使用）
+        intent_mandate_model = self._build_intent_mandate_from_session(intent, session, user_id, now)
 
-        # User公開鍵を取得（WebAuthn Passkey公開鍵）
-        try:
-            user_public_key_pem = self.key_manager.get_public_key_pem(user_id)
-            intent_mandate_unsigned["user_public_key"] = user_public_key_pem
-        except Exception as e:
-            logger.info(f"[ShoppingAgent] User public key not available yet (will be provided by frontend): {e}")
-            intent_mandate_unsigned["user_public_key"] = None
+        # Pydanticモデルを辞書化（AP2仕様準拠フィールドのみ）
+        intent_mandate_dict = intent_mandate_model.model_dump(exclude_none=True)
 
-        return intent_mandate_unsigned
+        # AP2仕様外のメタデータを追加（A2A通信やセッション管理用）
+        #
+        # 注意: AP2仕様では、IntentMandateは以下のフィールドのみを含む：
+        #   - user_cart_confirmation_required
+        #   - natural_language_description
+        #   - merchants (Optional)
+        #   - skus (Optional)
+        #   - requires_refundability (Optional)
+        #   - intent_expiry
+        #
+        # 以下のメタデータはAP2仕様外だが、実装上の理由で含めています：
+        #   - id: データベースおよびA2Aメッセージ識別用
+        #   - type: メッセージタイプ識別用
+        #   - user_id: セッション管理およびMerchant Agent処理用
+        #   - created_at: 監査ログ用
+        #
+        # 将来的には、これらのメタデータをA2Aメッセージエンベロープや
+        # 別のデータ構造で管理することが望ましいです。
+        intent_mandate_with_metadata = {
+            "id": f"intent_{uuid.uuid4().hex[:8]}",
+            "type": "IntentMandate",
+            "user_id": user_id,
+            **intent_mandate_dict,  # AP2準拠フィールド（Pydanticモデルから生成）
+            "created_at": now.isoformat().replace('+00:00', 'Z')
+        }
+
+        return intent_mandate_with_metadata
 
     def _build_intent_mandate_from_session(
         self,
@@ -1750,10 +1772,11 @@ class ShoppingAgent(BaseAgent):
         session: Dict[str, Any],
         user_id: str,
         now: datetime
-    ) -> Dict[str, Any]:
-        """セッションデータからIntentMandateを構築
+    ) -> IntentMandate:
+        """セッションデータからIntentMandateを構築（AP2完全準拠）
 
-        LangGraph StateGraphで収集した情報からIntentMandateを生成（AP2完全準拠）
+        LangGraph StateGraphで収集した情報からIntentMandateを生成
+        AP2公式Pydanticモデル（common/mandate_types.py）を使用
 
         Args:
             intent: ユーザー入力
@@ -1762,7 +1785,7 @@ class ShoppingAgent(BaseAgent):
             now: 現在時刻
 
         Returns:
-            IntentMandate（署名前）
+            IntentMandate（AP2公式Pydanticモデル）
         """
         expires_at = now + timedelta(hours=1)
         merchants = session.get("merchants", [])
@@ -1788,29 +1811,22 @@ class ShoppingAgent(BaseAgent):
 
         logger.info(f"[_build_intent_mandate_from_session] Constructed natural_language_description: {natural_language_description}")
 
-        # AP2準拠のIntentMandate構造（mandate_types.py参照）
-        intent_mandate_unsigned = {
-            "id": f"intent_{uuid.uuid4().hex[:8]}",
-            "type": "IntentMandate",
-            "version": "0.2",
-            "user_id": user_id,
-            # AP2準拠フィールド
-            "natural_language_description": natural_language_description,
-            "user_cart_confirmation_required": True,
-            "merchants": merchants if merchants else None,  # Optional[list[str]]
-            "skus": skus if skus else None,  # Optional[list[str]]
-            "requires_refundability": False,
-            "intent_expiry": expires_at.isoformat().replace('+00:00', 'Z'),
-            # メタデータ（AP2仕様外だが互換性のため保持）
-            "created_at": now.isoformat().replace('+00:00', 'Z')
-        }
-
-        logger.info(
-            f"[ShoppingAgent] IntentMandate created (fallback mode): "
-            f"id={intent_mandate_unsigned['id']}, intent='{intent[:50]}...'"
+        # AP2公式Pydanticモデルを使用（mandate_types.py:25-71）
+        intent_mandate = IntentMandate(
+            user_cart_confirmation_required=True,
+            natural_language_description=natural_language_description,
+            merchants=merchants if merchants else None,
+            skus=skus if skus else None,
+            requires_refundability=False,
+            intent_expiry=expires_at.isoformat().replace('+00:00', 'Z')
         )
 
-        return intent_mandate_unsigned
+        logger.info(
+            f"[ShoppingAgent] IntentMandate created (AP2-compliant): "
+            f"intent='{intent[:50]}...', expiry={intent_mandate.intent_expiry}"
+        )
+
+        return intent_mandate
 
     async def _persist_intent_mandate(self, intent_mandate: Dict[str, Any], session: Dict[str, Any]) -> None:
         """

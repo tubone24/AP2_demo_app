@@ -349,14 +349,17 @@ async def create_cart_from_products(
     cart_mandate = {
         "contents": cart_contents,
         "merchant_authorization": None,  # Merchantが署名
-        # 追加メタデータ（AP2仕様外だが、Shopping Agent UIで必要）
+        # 追加メタデータ（AP2仕様外だが実装上必要）
         "_metadata": {
             "intent_mandate_id": intent_mandate_id,
             "merchant_id": agent.merchant_id,
             "created_at": now.isoformat().replace('+00:00', 'Z'),
             "cart_name": cart_name,
             "cart_description": cart_description,
-            "raw_items": cart_items  # 元のアイテム情報（互換性のため保持）
+            # raw_items: 在庫管理と領収書生成のための詳細情報
+            # 注意: AP2仕様ではpayment_request.details.display_itemsに商品情報が含まれるが、
+            #       在庫チェックと領収書生成で必要な詳細（SKU、数量等）をここに保持
+            "raw_items": cart_items
         }
     }
 

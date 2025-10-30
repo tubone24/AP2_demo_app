@@ -366,9 +366,18 @@ class PaymentProcessorService(BaseAgent):
         logger.info("[PaymentProcessor] Received PaymentMandate")
         payload = message.dataPart.payload
 
-        # VDC交換：PaymentMandateとCartMandateを取り出す
-        payment_mandate = payload.get("payment_mandate", payload)  # フォールバック対応
+        # AP2完全準拠：VDC交換でPaymentMandateとCartMandateを取り出す
+        # ペイロードは必ず {"payment_mandate": {...}, "cart_mandate": {...}} 形式
+        if not isinstance(payload, dict):
+            logger.error("[PaymentProcessor] Invalid payload format - must be dictionary")
+            raise ValueError("Payload must be a dictionary containing payment_mandate and cart_mandate")
+
+        payment_mandate = payload.get("payment_mandate")
         cart_mandate = payload.get("cart_mandate")
+
+        if not payment_mandate:
+            logger.error("[PaymentProcessor] Missing payment_mandate in payload")
+            raise ValueError("Payload must contain 'payment_mandate' field")
 
         # AP2仕様準拠：PaymentMandate検証
         try:
@@ -1005,9 +1014,8 @@ class PaymentProcessorService(BaseAgent):
             async with self.db_manager.get_session() as session:
                 transaction = await TransactionCRUD.get_by_id(session, transaction_id)
                 if not transaction:
-                    logger.warning(f"[PaymentProcessor] Transaction not found for receipt generation: {transaction_id}")
-                    # フォールバック: モックURL
-                    return f"https://receipts.ap2-demo.com/{transaction_id}.pdf"
+                    logger.error(f"[PaymentProcessor] Transaction not found for receipt generation: {transaction_id}")
+                    raise ValueError(f"Transaction not found: {transaction_id}")
 
                 transaction_dict = transaction.to_dict()
 
@@ -1046,7 +1054,7 @@ class PaymentProcessorService(BaseAgent):
             # ユーザー名を取得（AP2仕様準拠：payer_idからDBで取得）
             import os
             payer_id = payment_mandate.get("payer_id") or os.getenv("DEFAULT_USER_ID", "user_demo_001")
-            user_name = "デモユーザー"  # フォールバック用デフォルト値
+            user_name = "デモユーザー"  # DB未登録時のデフォルト値
 
             try:
                 from v2.common.database import UserCRUD
@@ -1104,5 +1112,5 @@ class PaymentProcessorService(BaseAgent):
 
         except Exception as e:
             logger.error(f"[_generate_receipt] Failed to generate PDF receipt: {e}", exc_info=True)
-            # フォールバック: モックURL
-            return f"https://receipts.ap2-demo.com/{transaction_id}.pdf"
+            # AP2完全準拠: 領収書生成失敗時は例外を再スロー
+            raise ValueError(f"Receipt generation failed for transaction {transaction_id}: {str(e)}") from e
