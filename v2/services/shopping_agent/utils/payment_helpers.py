@@ -197,7 +197,8 @@ class PaymentHelpers:
     def generate_user_authorization_for_payment(
         session: Dict[str, Any],
         cart_mandate: Dict[str, Any],
-        payment_mandate_contents: Dict[str, Any]
+        payment_mandate_contents: Dict[str, Any],
+        public_key_cose: str
     ) -> Optional[str]:
         """
         user_authorizationを生成（WebAuthn assertionからSD-JWT-VC形式）
@@ -206,6 +207,7 @@ class PaymentHelpers:
             session: セッション情報
             cart_mandate: CartMandate
             payment_mandate_contents: PaymentMandateContents
+            public_key_cose: COSE形式の公開鍵（base64エンコード済み、DB保存済みの値）
 
         Returns:
             Optional[str]: user_authorization（生成失敗時はNone）
@@ -220,6 +222,7 @@ class PaymentHelpers:
                 cart_mandate=cart_mandate,
                 payment_mandate_contents=payment_mandate_contents,
                 user_id=session.get("user_id", "user_demo_001"),
+                public_key_cose=public_key_cose,
                 payment_processor_id="did:ap2:agent:payment_processor"
             )
             logger.info(

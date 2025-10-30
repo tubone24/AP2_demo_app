@@ -1482,8 +1482,8 @@ class ShoppingAgent(BaseAgent):
                         cart_mandate=cart_mandate,
                         payment_mandate_contents=payment_mandate_for_vp,
                         user_id=user_id,
-                        payment_processor_id="did:ap2:agent:payment_processor",
-                        public_key_cose=public_key_cose
+                        public_key_cose=public_key_cose,
+                        payment_processor_id="did:ap2:agent:payment_processor"
                     )
 
                     payment_mandate["user_authorization"] = user_authorization
@@ -2002,14 +2002,38 @@ class ShoppingAgent(BaseAgent):
         """PaymentMandateContents構築（ヘルパーメソッドに委譲）"""
         return self.payment_helpers.build_payment_mandate_contents(cart_mandate, total_amount, payment_response)
 
-    def _generate_user_authorization_for_payment(
+    async def _generate_user_authorization_for_payment(
         self,
         session: Dict[str, Any],
         cart_mandate: Dict[str, Any],
         payment_mandate_contents: Dict[str, Any]
     ) -> Optional[str]:
         """user_authorization生成（ヘルパーメソッドに委譲）"""
-        return self.payment_helpers.generate_user_authorization_for_payment(session, cart_mandate, payment_mandate_contents)
+        # AP2完全準拠: Credential ProviderからDBに保存された公開鍵を取得
+        cart_webauthn_assertion = session.get("cart_webauthn_assertion")
+        if not cart_webauthn_assertion:
+            return None
+
+        try:
+            credential_id = cart_webauthn_assertion.get("id")
+            user_id = session.get("user_id", "user_demo_001")
+            selected_cp = session.get("selected_credential_provider", self.credential_providers[0])
+
+            # SignatureHandlersを使用してCredential Providerから公開鍵を取得
+            public_key_cose = await SignatureHandlers.retrieve_public_key_from_cp(
+                http_client=self.http_client,
+                credential_provider_url=selected_cp['url'],
+                credential_id=credential_id,
+                user_id=user_id,
+                timeout=SHORT_HTTP_TIMEOUT
+            )
+
+            return self.payment_helpers.generate_user_authorization_for_payment(
+                session, cart_mandate, payment_mandate_contents, public_key_cose
+            )
+        except Exception as e:
+            logger.error(f"[_generate_user_authorization_for_payment] Failed to retrieve public key: {e}", exc_info=True)
+            return None
 
     def _perform_risk_assessment(
         self,
@@ -2020,7 +2044,7 @@ class ShoppingAgent(BaseAgent):
         """リスク評価実施（ヘルパーメソッドに委譲）"""
         return self.payment_helpers.perform_risk_assessment(payment_mandate, cart_mandate, intent_mandate)
 
-    def _create_payment_mandate(self, session: Dict[str, Any]) -> Dict[str, Any]:
+    async def _create_payment_mandate(self, session: Dict[str, Any]) -> Dict[str, Any]:
         """
         PaymentMandateを作成（リスク評価統合版）
 
@@ -2047,7 +2071,7 @@ class ShoppingAgent(BaseAgent):
         )
 
         # 5. user_authorizationの生成
-        user_authorization = self._generate_user_authorization_for_payment(
+        user_authorization = await self._generate_user_authorization_for_payment(
             session,
             cart_mandate,
             payment_mandate_contents

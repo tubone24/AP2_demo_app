@@ -1152,7 +1152,7 @@ async def select_payment_method_node(state: ShoppingFlowState, agent_instance: A
 
         # PaymentMandate作成（AP2完全準拠、リスク評価含む）
         # Note: _create_payment_mandate()はsessionからcart_mandateとtokenized_payment_methodを取得
-        payment_mandate = agent_instance._create_payment_mandate(session=session)
+        payment_mandate = await agent_instance._create_payment_mandate(session=session)
 
         session["payment_mandate"] = payment_mandate
 
@@ -1269,7 +1269,7 @@ async def step_up_auth_node(state: ShoppingFlowState, agent_instance: Any) -> Sh
             )
 
             # PaymentMandate作成（AP2完全準拠、リスク評価含む）
-            payment_mandate = agent_instance._create_payment_mandate(session=session)
+            payment_mandate = await agent_instance._create_payment_mandate(session=session)
             session["payment_mandate"] = payment_mandate
 
             logger.info(
