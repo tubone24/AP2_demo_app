@@ -25,7 +25,7 @@ from v2.common.models import A2AMessage, ProcessPaymentRequest, ProcessPaymentRe
 from v2.common.database import DatabaseManager, TransactionCRUD
 from v2.common.user_authorization import verify_user_authorization_vp, compute_mandate_hash
 from v2.common.auth import verify_access_token
-from v2.common.logger import get_logger, log_a2a_message, log_database_operation
+from v2.common.logger import get_logger, log_a2a_message, log_database_operation, LoggingAsyncClient
 from v2.common.telemetry import get_tracer, create_http_span, is_telemetry_enabled
 
 # Payment Processor ユーティリティモジュール
@@ -72,7 +72,11 @@ class PaymentProcessorService(BaseAgent):
         self.db_manager = DatabaseManager(database_url=database_url)
 
         # HTTPクライアント（Credential Providerとの通信用）
-        self.http_client = httpx.AsyncClient(timeout=HTTP_CLIENT_TIMEOUT)
+        # AP2完全準拠: LoggingAsyncClientで全HTTP通信をログ記録
+        self.http_client = LoggingAsyncClient(
+            logger=logger,
+            timeout=HTTP_CLIENT_TIMEOUT
+        )
 
         # Credential Providerエンドポイント（Docker Compose環境想定）
         self.credential_provider_url = "http://credential_provider:8003"

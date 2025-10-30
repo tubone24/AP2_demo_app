@@ -178,21 +178,19 @@ def log_http_request(
         headers: リクエストヘッダー
         body: リクエストボディ
     """
-    logger.debug(f"HTTP Request: {method} {url}")
+    # 簡易ログ（INFO）
+    logger.info(f"HTTP Request: {method} {url}")
 
-    if headers and logger.isEnabledFor(logging.DEBUG):
-        # Authorizationヘッダーはマスク
-        safe_headers = {
-            k: '***MASKED***' if k.lower() == 'authorization' else v
-            for k, v in headers.items()
+    # 完全なペイロードとヘッダーをJSON形式で出力（DEBUG）
+    if logger.isEnabledFor(logging.DEBUG):
+        request_data = {
+            "type": "HTTP_REQUEST",
+            "method": method,
+            "url": url,
+            "headers": headers or {},
+            "body": body
         }
-        logger.debug(f"  Headers: {json.dumps(safe_headers, ensure_ascii=False)}")
-
-    if body and logger.isEnabledFor(logging.DEBUG):
-        if isinstance(body, (dict, list)):
-            logger.debug(f"  Body: {json.dumps(body, ensure_ascii=False, indent=2)}")
-        else:
-            logger.debug(f"  Body: {body}")
+        logger.debug(f"HTTP_REQUEST_RAW: {json.dumps(request_data, ensure_ascii=False, default=str)}")
 
 
 def log_http_response(
@@ -212,17 +210,20 @@ def log_http_response(
         body: レスポンスボディ
         duration_ms: リクエスト処理時間（ミリ秒）
     """
+    # 簡易ログ（INFO）
     duration_str = f" ({duration_ms:.2f}ms)" if duration_ms else ""
-    logger.debug(f"HTTP Response: {status_code}{duration_str}")
+    logger.info(f"HTTP Response: {status_code}{duration_str}")
 
-    if headers and logger.isEnabledFor(logging.DEBUG):
-        logger.debug(f"  Headers: {json.dumps(headers, ensure_ascii=False)}")
-
-    if body and logger.isEnabledFor(logging.DEBUG):
-        if isinstance(body, (dict, list)):
-            logger.debug(f"  Body: {json.dumps(body, ensure_ascii=False, indent=2)}")
-        else:
-            logger.debug(f"  Body: {body}")
+    # 完全なペイロードとヘッダーをJSON形式で出力（DEBUG）
+    if logger.isEnabledFor(logging.DEBUG):
+        response_data = {
+            "type": "HTTP_RESPONSE",
+            "status_code": status_code,
+            "headers": headers or {},
+            "body": body,
+            "duration_ms": duration_ms
+        }
+        logger.debug(f"HTTP_RESPONSE_RAW: {json.dumps(response_data, ensure_ascii=False, default=str)}")
 
 
 def log_a2a_message(
@@ -230,7 +231,8 @@ def log_a2a_message(
     direction: str,
     message_type: str,
     payload: Dict[str, Any],
-    peer: Optional[str] = None
+    peer: Optional[str] = None,
+    headers: Optional[Dict[str, str]] = None
 ):
     """
     A2Aメッセージをログ出力（DEBUGレベル）
@@ -241,12 +243,89 @@ def log_a2a_message(
         message_type: メッセージタイプ
         payload: メッセージペイロード
         peer: 通信相手
+        headers: HTTPヘッダー（オプション）
     """
+    # 簡易ログ（INFO）
     peer_str = f" to/from {peer}" if peer else ""
-    logger.debug(f"A2A Message {direction}{peer_str}: {message_type}")
+    logger.info(f"A2A Message {direction}{peer_str}: {message_type}")
 
+    # 完全なペイロードとヘッダーをJSON形式で出力（DEBUG）
     if logger.isEnabledFor(logging.DEBUG):
-        logger.debug(f"  Payload: {json.dumps(payload, ensure_ascii=False, indent=2)}")
+        a2a_data = {
+            "type": "A2A_MESSAGE",
+            "direction": direction,
+            "message_type": message_type,
+            "peer": peer,
+            "headers": headers or {},
+            "payload": payload
+        }
+        logger.debug(f"A2A_MESSAGE_RAW: {json.dumps(a2a_data, ensure_ascii=False, default=str)}")
+
+
+def log_mcp_request(
+    logger: logging.Logger,
+    tool_name: str,
+    arguments: Dict[str, Any],
+    url: Optional[str] = None,
+    headers: Optional[Dict[str, str]] = None
+):
+    """
+    MCPリクエストをログ出力（DEBUGレベル）
+
+    Args:
+        logger: ロガーインスタンス
+        tool_name: MCPツール名
+        arguments: ツール引数
+        url: MCPサーバーURL（オプション）
+        headers: HTTPヘッダー（オプション）
+    """
+    # 簡易ログ（INFO）
+    logger.info(f"MCP Request: {tool_name}")
+
+    # 完全なペイロードとヘッダーをJSON形式で出力（DEBUG）
+    if logger.isEnabledFor(logging.DEBUG):
+        mcp_data = {
+            "type": "MCP_REQUEST",
+            "tool_name": tool_name,
+            "url": url,
+            "headers": headers or {},
+            "arguments": arguments
+        }
+        logger.debug(f"MCP_REQUEST_RAW: {json.dumps(mcp_data, ensure_ascii=False, default=str)}")
+
+
+def log_mcp_response(
+    logger: logging.Logger,
+    tool_name: str,
+    result: Any,
+    duration_ms: Optional[float] = None,
+    error: Optional[str] = None
+):
+    """
+    MCPレスポンスをログ出力（DEBUGレベル）
+
+    Args:
+        logger: ロガーインスタンス
+        tool_name: MCPツール名
+        result: ツール実行結果
+        duration_ms: 実行時間（ミリ秒）
+        error: エラーメッセージ（失敗時）
+    """
+    # 簡易ログ（INFO）
+    duration_str = f" ({duration_ms:.2f}ms)" if duration_ms else ""
+    status = "ERROR" if error else "SUCCESS"
+    logger.info(f"MCP Response: {tool_name} - {status}{duration_str}")
+
+    # 完全なペイロードをJSON形式で出力（DEBUG）
+    if logger.isEnabledFor(logging.DEBUG):
+        mcp_data = {
+            "type": "MCP_RESPONSE",
+            "tool_name": tool_name,
+            "result": result,
+            "error": error,
+            "duration_ms": duration_ms
+        }
+        logger.debug(f"MCP_RESPONSE_RAW: {json.dumps(mcp_data, ensure_ascii=False, default=str)}")
 
 
 def log_crypto_operation(
@@ -310,3 +389,119 @@ def get_logger(name: str, service_name: Optional[str] = None) -> logging.Logger:
         設定済みロガー
     """
     return setup_logger(name, service_name=service_name)
+
+
+class LoggingAsyncClient:
+    """
+    ログ記録機能付きhttpx.AsyncClientラッパー（AP2完全準拠）
+
+    すべてのHTTP通信を自動的にログに記録し、ペイロードとヘッダーを
+    JSON形式で出力します。
+
+    使用例:
+        client = LoggingAsyncClient(logger, timeout=30.0)
+        response = await client.post(url, json=data)
+    """
+
+    def __init__(self, logger: logging.Logger, **kwargs):
+        """
+        Args:
+            logger: ロガーインスタンス
+            **kwargs: httpx.AsyncClientに渡す引数（timeout等）
+        """
+        import httpx
+        self.logger = logger
+        self._client = httpx.AsyncClient(**kwargs)
+
+    async def request(self, method: str, url: str, **kwargs) -> Any:
+        """
+        HTTPリクエストを実行し、ログに記録
+
+        Args:
+            method: HTTPメソッド（GET, POST等）
+            url: リクエストURL
+            **kwargs: httpx.AsyncClient.requestに渡す引数
+
+        Returns:
+            httpx.Response
+        """
+        import time
+        start_time = time.time()
+
+        # リクエストボディを取得
+        request_body = None
+        if 'json' in kwargs:
+            request_body = kwargs['json']
+        elif 'data' in kwargs:
+            request_body = kwargs['data']
+        elif 'content' in kwargs:
+            try:
+                request_body = kwargs['content'].decode('utf-8') if isinstance(kwargs['content'], bytes) else kwargs['content']
+            except:
+                request_body = None
+
+        # リクエストログ
+        log_http_request(
+            logger=self.logger,
+            method=method,
+            url=str(url),
+            headers=kwargs.get('headers', {}),
+            body=request_body
+        )
+
+        # リクエスト実行
+        response = await self._client.request(method, url, **kwargs)
+
+        # レスポンスを読み取る（AP2完全準拠: ボディを完全に読み込む）
+        await response.aread()
+
+        duration_ms = (time.time() - start_time) * 1000
+
+        # レスポンスボディを取得
+        response_body = None
+        try:
+            response_body = response.json()
+        except Exception:
+            try:
+                response_body = response.text
+            except Exception:
+                response_body = None
+
+        # レスポンスログ
+        log_http_response(
+            logger=self.logger,
+            status_code=response.status_code,
+            headers=dict(response.headers),
+            body=response_body,
+            duration_ms=duration_ms
+        )
+
+        return response
+
+    async def get(self, url: str, **kwargs):
+        """GETリクエスト"""
+        return await self.request("GET", url, **kwargs)
+
+    async def post(self, url: str, **kwargs):
+        """POSTリクエスト"""
+        return await self.request("POST", url, **kwargs)
+
+    async def put(self, url: str, **kwargs):
+        """PUTリクエスト"""
+        return await self.request("PUT", url, **kwargs)
+
+    async def delete(self, url: str, **kwargs):
+        """DELETEリクエスト"""
+        return await self.request("DELETE", url, **kwargs)
+
+    async def patch(self, url: str, **kwargs):
+        """PATCHリクエスト"""
+        return await self.request("PATCH", url, **kwargs)
+
+    async def aclose(self):
+        """HTTPクライアントをクローズ"""
+        await self._client.aclose()
+
+    def __getattr__(self, name):
+        """その他の属性は内部クライアントに委譲"""
+        return getattr(self._client, name)

@@ -27,7 +27,7 @@ from v2.common.base_agent import BaseAgent, AgentPassphraseManager
 from v2.common.models import A2AMessage, AttestationVerifyRequest, AttestationVerifyResponse
 from v2.common.database import DatabaseManager, Attestation, PasskeyCredentialCRUD, PaymentMethodCRUD, ReceiptCRUD
 from v2.common.crypto import DeviceAttestationManager, KeyManager
-from v2.common.logger import get_logger, log_a2a_message, log_database_operation
+from v2.common.logger import get_logger, log_a2a_message, log_database_operation, LoggingAsyncClient
 from v2.common.redis_client import RedisClient, TokenStore, SessionStore
 
 logger = get_logger(__name__, service_name='credential_provider')
@@ -78,6 +78,13 @@ class CredentialProviderService(BaseAgent):
 
         # 決済ネットワークURL（環境変数から読み込み）
         self.payment_network_url = os.getenv("PAYMENT_NETWORK_URL", "http://payment_network:8005")
+
+        # HTTPクライアント（Payment Networkとの通信用）
+        # AP2完全準拠: LoggingAsyncClientで全HTTP通信をログ記録
+        self.http_client = LoggingAsyncClient(
+            logger=logger,
+            timeout=PAYMENT_NETWORK_TIMEOUT
+        )
 
         # Device Attestation Manager（既存のap2_crypto.pyを使用）
         self.attestation_manager = DeviceAttestationManager(self.key_manager)
@@ -1791,38 +1798,37 @@ class CredentialProviderService(BaseAgent):
             )
 
             # 決済ネットワークにHTTP POSTリクエストを送信
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    f"{self.payment_network_url}/network/tokenize",
-                    json={
-                        "payment_mandate": payment_mandate,
-                        "attestation": attestation,
-                        "payment_method_token": payment_method_token,
-                        "transaction_context": {
-                            "credential_provider_id": self.agent_id,
-                            "timestamp": datetime.now(timezone.utc).isoformat()
-                        }
-                    },
-                    timeout=PAYMENT_NETWORK_TIMEOUT  # 10秒タイムアウト
+            # AP2完全準拠: self.http_clientを使用（HTTPXLoggingEventHooksでログ記録）
+            response = await self.http_client.post(
+                f"{self.payment_network_url}/network/tokenize",
+                json={
+                    "payment_mandate": payment_mandate,
+                    "attestation": attestation,
+                    "payment_method_token": payment_method_token,
+                    "transaction_context": {
+                        "credential_provider_id": self.agent_id,
+                        "timestamp": datetime.now(timezone.utc).isoformat()
+                    }
+                }
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                agent_token = data.get("agent_token")
+
+                logger.info(
+                    f"[CredentialProvider] Received Agent Token from Payment Network: "
+                    f"{agent_token[:32] if agent_token else 'None'}..., "
+                    f"network_name={data.get('network_name')}"
                 )
 
-                if response.status_code == 200:
-                    data = response.json()
-                    agent_token = data.get("agent_token")
-
-                    logger.info(
-                        f"[CredentialProvider] Received Agent Token from Payment Network: "
-                        f"{agent_token[:32] if agent_token else 'None'}..., "
-                        f"network_name={data.get('network_name')}"
-                    )
-
-                    return agent_token
-                else:
-                    logger.error(
-                        f"[CredentialProvider] Failed to get Agent Token from Payment Network: "
-                        f"status_code={response.status_code}, response={response.text}"
-                    )
-                    return None
+                return agent_token
+            else:
+                logger.error(
+                    f"[CredentialProvider] Failed to get Agent Token from Payment Network: "
+                    f"status_code={response.status_code}, response={response.text}"
+                )
+                return None
 
         except httpx.RequestError as e:
             logger.error(
