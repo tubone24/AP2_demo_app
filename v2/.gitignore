@@ -32,6 +32,14 @@ data/*.db-journal
 *.sqlite
 *.sqlite3
 
+# Meilisearch data (keep directory structure)
+data/meilisearch/*
+!data/meilisearch/.gitkeep
+
+# Redis data (keep directory structure)
+data/redis/*
+!data/redis/.gitkeep
+
 # IDE
 .vscode/
 .idea/

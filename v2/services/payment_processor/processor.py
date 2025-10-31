@@ -1051,22 +1051,14 @@ class PaymentProcessorService(BaseAgent):
                 "captured_at": payment_result.get("captured_at", "N/A")
             }
 
-            # ユーザー名を取得（AP2仕様準拠：payer_idからDBで取得）
+            # ユーザー名を生成（AP2完全準拠：マイクロサービスの独立性を保つ）
+            # AP2仕様: PaymentMandateにユーザー名は含まれない
+            # 各サービスは独立したDBを持つため、payer_idから表示名を生成
             import os
             payer_id = payment_mandate.get("payer_id") or os.getenv("DEFAULT_USER_ID", "user_demo_001")
-            user_name = "デモユーザー"  # DB未登録時のデフォルト値
+            user_name = f"User {payer_id[:8]}" if payer_id.startswith("usr_") else "Demo User"
 
-            try:
-                from v2.common.database import UserCRUD
-                async with self.db_manager.get_session() as session:
-                    user = await UserCRUD.get_by_id(session, payer_id)
-                    if user:
-                        user_name = user.display_name
-                        logger.info(f"[PaymentProcessor] Retrieved user name: {user_name} for payer_id: {payer_id}")
-                    else:
-                        logger.warning(f"[PaymentProcessor] User not found for payer_id: {payer_id}, using default name")
-            except Exception as e:
-                logger.warning(f"[PaymentProcessor] Failed to retrieve user name: {e}, using default name")
+            logger.info(f"[PaymentProcessor] Generated user name for receipt: {user_name} (payer_id: {payer_id})")
 
             # PDFを生成
             pdf_buffer = generate_receipt_pdf(

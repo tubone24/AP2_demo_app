@@ -37,7 +37,7 @@ logger = get_logger(__name__, service_name='merchant_agent_mcp')
 
 # グローバル設定
 MERCHANT_ID = os.getenv("MERCHANT_ID", "did:ap2:merchant:mugibo_merchant")
-MERCHANT_NAME = os.getenv("MERCHANT_NAME", "Demo Merchant")
+MERCHANT_NAME = os.getenv("MERCHANT_NAME", "むぎぼーショップ")
 MERCHANT_URL = os.getenv("MERCHANT_URL", "http://merchant:8002")
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite+aiosqlite:////app/v2/data/merchant_agent.db")
 

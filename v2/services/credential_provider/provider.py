@@ -943,7 +943,7 @@ class CredentialProviderService(BaseAgent):
                                 </div>
                                 <div class="info-row">
                                     <span class="label">加盟店</span>
-                                    <span class="value">Demo Merchant</span>
+                                    <span class="value">むぎぼーショップ</span>
                                 </div>
                             </div>
 
