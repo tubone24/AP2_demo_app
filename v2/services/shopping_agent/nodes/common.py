@@ -43,6 +43,8 @@ async def send_agent_message(events: List[Dict[str, Any]], message: str, delay: 
     """
     エージェントメッセージを一文字ずつストリーミング送信
 
+    AP2完全準拠: agent_text_completeには完成したメッセージ全体を含める
+
     Args:
         events: イベントリスト
         message: 送信するメッセージ
@@ -54,9 +56,10 @@ async def send_agent_message(events: List[Dict[str, Any]], message: str, delay: 
             "content": char
         })
 
+    # AP2完全準拠: agent_text_completeには完成したメッセージ全体を含める
     events.append({
         "type": "agent_text_complete",
-        "content": ""
+        "content": message
     })
 
     if delay > 0:
