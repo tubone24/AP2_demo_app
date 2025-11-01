@@ -184,11 +184,8 @@ class MerchantService(BaseAgent):
 
                 if self.auto_sign_mode:
                     # ===== 自動署名モード =====
-                    signature = await self._sign_cart_mandate(cart_mandate)
+                    # AP2完全準拠：merchant_authorization JWT（のみ）を生成
                     signed_cart_mandate = cart_mandate.copy()
-                    signed_cart_mandate["merchant_signature"] = signature.model_dump()
-
-                    # AP2仕様準拠：merchant_authorization JWT追加
                     merchant_authorization_jwt = self._generate_merchant_authorization_jwt(
                         cart_mandate,
                         self.merchant_id
@@ -227,7 +224,6 @@ class MerchantService(BaseAgent):
 
                     return {
                         "signed_cart_mandate": signed_cart_mandate,
-                        "merchant_signature": signed_cart_mandate["merchant_signature"],
                         "merchant_authorization": merchant_authorization_jwt
                     }
                 else:
@@ -522,12 +518,8 @@ class MerchantService(BaseAgent):
                     # mandate.payloadはJSON文字列なのでパース
                     cart_mandate = json.loads(mandate.payload) if isinstance(mandate.payload, str) else mandate.payload
 
-                    # 署名生成
-                    signature = await self._sign_cart_mandate(cart_mandate)
+                    # AP2完全準拠：merchant_authorization JWT（のみ）を生成
                     signed_cart_mandate = cart_mandate.copy()
-                    signed_cart_mandate["merchant_signature"] = signature.model_dump()
-
-                    # AP2仕様準拠：merchant_authorization JWT追加
                     merchant_authorization_jwt = self._generate_merchant_authorization_jwt(
                         cart_mandate,
                         self.merchant_id
@@ -545,7 +537,6 @@ class MerchantService(BaseAgent):
                     return {
                         "status": "approved",
                         "signed_cart_mandate": signed_cart_mandate,
-                        "merchant_signature": signed_cart_mandate["merchant_signature"],
                         "merchant_authorization": merchant_authorization_jwt
                     }
 
@@ -702,14 +693,8 @@ class MerchantService(BaseAgent):
             # 在庫確認
             await self._check_inventory(cart_mandate)
 
-            # 署名
-            signature = await self._sign_cart_mandate(cart_mandate)
-
-            # 署名を追加
+            # AP2完全準拠：merchant_authorization JWT（のみ）を生成
             signed_cart_mandate = cart_mandate.copy()
-            signed_cart_mandate["merchant_signature"] = signature.model_dump()
-
-            # AP2仕様準拠：merchant_authorization JWT追加
             merchant_authorization_jwt = self._generate_merchant_authorization_jwt(
                 cart_mandate,
                 self.merchant_id
@@ -764,78 +749,13 @@ class MerchantService(BaseAgent):
         """
         await self.inventory_helpers.check_inventory(cart_mandate)
 
-    def _compute_cart_hash(self, cart_mandate: Dict[str, Any]) -> str:
-        """
-        Cart Contentsのハッシュを計算（ヘルパーメソッドに委譲）
-
-        Args:
-            cart_mandate: CartMandate
-
-        Returns:
-            str: cart_hash
-        """
-        return self.signature_helpers.compute_cart_hash(cart_mandate)
-
-    def _build_jwt_header(self, merchant_id: str) -> Dict[str, str]:
-        """
-        JWTヘッダーを構築（ヘルパーメソッドに委譲）
-
-        Args:
-            merchant_id: Merchant ID
-
-        Returns:
-            Dict[str, str]: JWTヘッダー
-        """
-        return self.jwt_helpers.build_jwt_header(merchant_id)
-
-    def _build_merchant_jwt_payload(self, merchant_id: str, cart_hash: str) -> Dict[str, Any]:
-        """
-        Merchant用JWTペイロードを構築（ヘルパーメソッドに委譲）
-
-        Args:
-            merchant_id: Merchant ID
-            cart_hash: CartContentsのハッシュ
-
-        Returns:
-            Dict[str, Any]: JWTペイロード
-        """
-        return self.jwt_helpers.build_merchant_jwt_payload(merchant_id, cart_hash)
-
-    def _base64url_encode_jwt_part(self, data: Dict[str, Any]) -> str:
-        """
-        JWTパート（header/payload）をBase64urlエンコード（ヘルパーメソッドに委譲）
-
-        Args:
-            data: エンコードするデータ
-
-        Returns:
-            str: Base64urlエンコードされた文字列
-        """
-        return self.jwt_helpers.base64url_encode_jwt_part(data)
-
-    def _sign_jwt_message(self, message: str, key_id: str) -> str:
-        """
-        JWTメッセージに署名（ヘルパーメソッドに委譲）
-
-        Args:
-            message: 署名対象メッセージ（header_b64.payload_b64）
-            key_id: 秘密鍵のID
-
-        Returns:
-            str: Base64urlエンコードされた署名
-
-        Raises:
-            ValueError: 署名失敗時
-        """
-        return self.jwt_helpers.sign_jwt_message(message, key_id)
-
     def _generate_merchant_authorization_jwt(
         self,
         cart_mandate: Dict[str, Any],
         merchant_id: str
     ) -> str:
         """
-        AP2仕様準拠のmerchant_authorization JWTを生成
+        AP2仕様準拠のmerchant_authorization JWTを生成（共通実装を使用）
 
         JWT構造：
         - Header: { "alg": "ES256", "kid": "did:ap2:merchant:xxx#key-1", "typ": "JWT" }
@@ -866,32 +786,34 @@ class MerchantService(BaseAgent):
             ValueError: JWT生成失敗時
         """
         try:
-            # 1. Cart Contentsのハッシュ計算
-            cart_hash = self._compute_cart_hash(cart_mandate)
+            # AP2完全準拠：CartMandate全体（署名フィールドを除く）をハッシュ化
+            # merchant_authorizationはまだ存在しないため、自動的に除外される
+            from v2.common.user_authorization import compute_mandate_hash
+            from v2.common.jwt_utils import MerchantAuthorizationJWT
 
-            # 2. JWTのHeader構築
-            header = self._build_jwt_header(merchant_id)
+            # CartMandateのハッシュを計算（署名フィールドを自動除外）
+            cart_hash = compute_mandate_hash(cart_mandate)
 
-            # 3. JWTのPayload構築
-            payload = self._build_merchant_jwt_payload(merchant_id, cart_hash)
+            jwt_generator = MerchantAuthorizationJWT(
+                signature_manager=self.signature_manager,
+                key_manager=self.key_manager
+            )
 
-            # 4. Base64url エンコード
-            header_b64 = self._base64url_encode_jwt_part(header)
-            payload_b64 = self._base64url_encode_jwt_part(payload)
-
-            # 5. 署名生成
-            key_id = self.agent_id.split(":")[-1]  # did:ap2:merchant -> merchant
-            message_to_sign = f"{header_b64}.{payload_b64}"
-            signature_b64 = self._sign_jwt_message(message_to_sign, key_id)
+            # JWT生成（cart_hashを直接渡す）
+            jwt_token = jwt_generator.generate_with_hash(
+                merchant_id=merchant_id,
+                cart_hash=cart_hash,
+                audience="did:ap2:agent:payment_processor",
+                expiration_minutes=60,  # 1時間
+                algorithm="ECDSA",
+                key_id=merchant_id  # AP2完全準拠: DIDドキュメントに登録されているmerchant_idを使用
+            )
 
             logger.info(
                 f"[_generate_merchant_authorization_jwt] Generated signed JWT for CartMandate: "
-                f"cart_id={cart_mandate.get('id')}, cart_hash={cart_hash[:16]}..., "
-                f"alg=ES256, kid={header['kid']}"
+                f"cart_id={cart_mandate.get('id')}, "
+                f"alg=ES256, merchant_id={merchant_id}"
             )
-
-            # 6. JWT組み立て
-            jwt_token = f"{header_b64}.{payload_b64}.{signature_b64}"
 
             return jwt_token
 
@@ -901,19 +823,3 @@ class MerchantService(BaseAgent):
             )
             raise ValueError(f"Failed to generate merchant_authorization JWT: {e}")
 
-    async def _sign_cart_mandate(self, cart_mandate: Dict[str, Any]) -> Signature:
-        """
-        CartMandateに署名
-
-        v2.common.crypto.SignatureManagerを使用
-        """
-        # merchant_signatureフィールドを除外してから署名
-        cart_data = cart_mandate.copy()
-        cart_data.pop("merchant_signature", None)
-        cart_data.pop("user_signature", None)
-
-        # 署名生成（agent_idから鍵IDを抽出）
-        key_id = self.agent_id.split(":")[-1]  # did:ap2:merchant -> merchant
-        signature = self.signature_manager.sign_mandate(cart_data, key_id)
-
-        return signature

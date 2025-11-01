@@ -11,7 +11,7 @@ import logging
 from typing import Dict, Any
 from datetime import datetime, timezone
 from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.asymmetric import ec, utils as asym_utils
 
 logger = logging.getLogger(__name__)
 
@@ -85,14 +85,17 @@ class JWTHelpers:
 
     def sign_jwt_message(self, message: str, key_id: str) -> str:
         """
-        JWTメッセージに署名
+        JWTメッセージに署名（RFC 7515準拠）
+
+        RFC 7515準拠: pyca/cryptographyはDER形式の署名を返すため、
+        raw R || S (64バイト)形式に変換する必要があります。
 
         Args:
             message: 署名対象メッセージ（header_b64.payload_b64）
             key_id: 秘密鍵のID
 
         Returns:
-            str: Base64urlエンコードされた署名
+            str: Base64urlエンコードされた署名（raw R || S形式）
 
         Raises:
             ValueError: 署名失敗時
@@ -104,13 +107,21 @@ class JWTHelpers:
                 raise ValueError(f"Merchant private key not found: {key_id}")
 
             # ECDSA署名（ES256: ECDSA with SHA-256）
-            signature_bytes = private_key.sign(
+            # pyca/cryptographyはDER形式の署名を返す
+            der_signature = private_key.sign(
                 message.encode('utf-8'),
                 ec.ECDSA(hashes.SHA256())
             )
 
+            # RFC 7515準拠: DER形式からraw R || S (64バイト)形式に変換
+            r, s = asym_utils.decode_dss_signature(der_signature)
+            # P-256の場合、RとSは各32バイト（256ビット）
+            r_bytes = r.to_bytes(32, byteorder='big')
+            s_bytes = s.to_bytes(32, byteorder='big')
+            raw_signature = r_bytes + s_bytes  # 64バイト
+
             # Base64URLエンコード（パディングなし）
-            return base64.urlsafe_b64encode(signature_bytes).rstrip(b'=').decode('utf-8')
+            return base64.urlsafe_b64encode(raw_signature).rstrip(b'=').decode('utf-8')
 
         except Exception as e:
             logger.error(f"[_sign_jwt_message] Failed to generate signature: {e}")

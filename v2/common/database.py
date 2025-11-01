@@ -226,9 +226,52 @@ class PaymentMethod(Base):
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     def to_dict(self) -> Dict[str, Any]:
-        data = json.loads(self.payment_data) if self.payment_data else {}
-        data["id"] = self.id
-        return data
+        """
+        AP2完全準拠: PCI機密データを除外したセーフな辞書を返す
+
+        返却するデータ（非機密）:
+        - id, type, display_name, brand, last4, billing_address, requires_step_up
+
+        除外するデータ（PCI機密）:
+        - card_number, cvv, cardholder_name, expiry_month, expiry_year
+
+        PCI DSS準拠: カード情報はCredential Provider内でのみ保持し、外部に出さない
+        """
+        full_data = json.loads(self.payment_data) if self.payment_data else {}
+
+        # AP2完全準拠: 非機密データのみを返す
+        safe_data = {
+            "id": self.id,
+            "type": full_data.get("type", "basic-card"),
+            "display_name": full_data.get("display_name", "Unknown"),
+            "brand": full_data.get("brand", "Unknown"),
+            "last4": full_data.get("last4", "0000"),
+            "requires_step_up": full_data.get("requires_step_up", False)
+        }
+
+        # billing_addressは非機密データなので含める（国とpostal_codeのみ）
+        if "billing_address" in full_data:
+            safe_data["billing_address"] = {
+                "country": full_data["billing_address"].get("country"),
+                "postal_code": full_data["billing_address"].get("postal_code")
+            }
+
+        return safe_data
+
+    def get_full_data(self) -> Dict[str, Any]:
+        """
+        内部処理用: 完全なpayment_dataを返す（PCI機密データ含む）
+
+        注意: この関数はCredential Provider内部でのみ使用すること
+        - トークン化処理
+        - 決済実行
+        - カード検証
+
+        外部APIのレスポンスには絶対に使用しないこと（to_dict()を使用）
+        """
+        full_data = json.loads(self.payment_data) if self.payment_data else {}
+        full_data["id"] = self.id
+        return full_data
 
 
 class Attestation(Base):

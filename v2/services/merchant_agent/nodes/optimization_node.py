@@ -142,6 +142,15 @@ JSON配列形式で返答してください:
         # JSON抽出
         cart_plans = parse_json_from_llm(response_text)
 
+        # AP2完全準拠: JSONパース失敗時はルールベースフォールバック
+        if cart_plans is None:
+            logger.warning("[optimize_cart] LLM JSON parse failed, using rule-based fallback")
+            plans = create_rule_based_plans(products, max_amount)
+            state["cart_plans"] = plans
+            state["llm_reasoning"] = "LLM JSON parse failed, using rule-based fallback"
+            logger.info(f"[optimize_cart] Fallback: Created {len(plans)} rule-based plans")
+            return state
+
         # リストでない場合はリストにラップ
         if isinstance(cart_plans, dict):
             cart_plans = [cart_plans]

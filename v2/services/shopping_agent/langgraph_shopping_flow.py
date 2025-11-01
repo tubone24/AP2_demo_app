@@ -888,26 +888,35 @@ async def select_cart_node(state: ShoppingFlowState, agent_instance: Any) -> Sho
         if not cart_mandate:
             raise ValueError("CartMandate not found in selected cart")
 
-        # Merchant署名の暗号学的検証（AP2完全準拠）
-        merchant_signature = cart_mandate.get("merchant_signature")
-        if not merchant_signature:
-            raise ValueError("Merchant signature not found in CartMandate (not pending)")
+        # Merchant Authorization JWT検証（AP2完全準拠）
+        merchant_authorization = cart_mandate.get("merchant_authorization")
+        if not merchant_authorization:
+            raise ValueError("Merchant authorization JWT not found in CartMandate")
 
-        # merchant_signatureをSignatureオブジェクトに変換（AP2完全準拠）
-        if isinstance(merchant_signature, dict):
-            sig_obj = Signature(**merchant_signature)
-        else:
-            sig_obj = merchant_signature
+        cart_contents = cart_mandate.get("contents")
+        if not cart_contents:
+            raise ValueError("CartMandate does not contain contents")
 
-        # SignatureManagerでMerchant署名を検証（AP2完全準拠）
-        is_valid = agent_instance.signature_manager.verify_mandate_signature(
-            cart_mandate,
-            sig_obj
+        # MerchantAuthorizationJWTを使用して検証
+        from v2.common.jwt_utils import MerchantAuthorizationJWT
+        jwt_verifier = MerchantAuthorizationJWT(
+            signature_manager=agent_instance.signature_manager,
+            key_manager=agent_instance.key_manager
         )
 
-        if not is_valid:
-            logger.error(f"[select_cart_node] Merchant signature verification FAILED")
-            raise ValueError("Merchant署名の検証に失敗しました")
+        try:
+            # AP2完全準拠: CartMandate全体を渡す
+            payload = jwt_verifier.verify(
+                jwt=merchant_authorization,
+                expected_cart_mandate=cart_mandate
+            )
+            logger.info(
+                f"[select_cart_node] Merchant authorization JWT verified: "
+                f"merchant={payload.get('iss')}, cart_hash={payload.get('cart_hash')[:16]}..."
+            )
+        except Exception as e:
+            logger.error(f"[select_cart_node] Merchant authorization JWT verification FAILED: {e}")
+            raise ValueError(f"Merchant Authorization JWT検証に失敗しました: {e}")
 
         # CartMandateを保存
         session["cart_mandate"] = cart_mandate

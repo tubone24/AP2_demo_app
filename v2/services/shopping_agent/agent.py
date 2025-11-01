@@ -2103,9 +2103,9 @@ class ShoppingAgent(BaseAgent):
                 "type": tokenized_payment_method.get("type", "card"),
                 "token": tokenized_payment_method["token"],
                 "last4": tokenized_payment_method.get("last4", "0000"),
-                "brand": tokenized_payment_method.get("brand", "unknown"),
-                "expiry_month": tokenized_payment_method.get("expiry_month"),
-                "expiry_year": tokenized_payment_method.get("expiry_year")
+                "brand": tokenized_payment_method.get("brand", "unknown")
+                # AP2完全準拠 & PCI DSS準拠: 有効期限は含めない
+                # トークン化により、Credential Provider内部で管理される
             }
         }
 

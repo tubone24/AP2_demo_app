@@ -743,8 +743,9 @@ class CredentialProviderService(BaseAgent):
                         detail=f"Payment method not found: {payment_method_id}"
                     )
 
-                # データベースレコードを辞書に変換
-                payment_method = payment_method_record.to_dict()
+                # AP2完全準拠 & PCI DSS準拠: 内部処理用に完全なデータを取得
+                # 注意: get_full_data()はCredential Provider内部でのみ使用
+                payment_method_full = payment_method_record.get_full_data()
 
                 # 一時トークン生成（AP2トランザクション用）
                 # 暗号学的に安全なトークンを生成し、有効期限を設定
@@ -760,10 +761,11 @@ class CredentialProviderService(BaseAgent):
 
                 # トークンストアに保存（AP2仕様準拠）
                 # Redis KVに保存（TTL: 15分）
+                # 注意: 内部ストレージなので完全なカード情報を保存（PCI機密データ含む）
                 token_data = {
                     "user_id": user_id,
                     "payment_method_id": payment_method_id,
-                    "payment_method": payment_method,
+                    "payment_method": payment_method_full,  # 完全なデータを内部保存
                     "issued_at": now.isoformat(),
                     "expires_at": expires_at.isoformat()
                 }
@@ -772,19 +774,18 @@ class CredentialProviderService(BaseAgent):
                 logger.info(f"[tokenize_payment_method] Generated secure token for payment method: {payment_method_id}")
 
                 # AP2完全準拠: Stepup認証が必要かチェック
-                requires_stepup = payment_method.get("requires_stepup", False)
-                stepup_method = payment_method.get("stepup_method", None)
+                requires_stepup = payment_method_full.get("requires_stepup", False)
+                stepup_method = payment_method_full.get("stepup_method", None)
 
-                # AP2完全準拠：有効期限を含める（カードの場合）
+                # AP2完全準拠 & PCI DSS準拠: レスポンスには非機密データのみ
+                # カード有効期限は含めない（トークンと紐付けて内部保持済み）
                 response_data = {
                     "token": secure_token,
                     "payment_method_id": payment_method_id,
-                    "brand": payment_method.get("brand", "unknown"),
-                    "last4": payment_method.get("last4", "0000"),
-                    "type": payment_method.get("type", "card"),
-                    "expiry_month": payment_method.get("expiry_month"),  # カード有効期限（月）
-                    "expiry_year": payment_method.get("expiry_year"),    # カード有効期限（年）
-                    "expires_at": expires_at.isoformat().replace('+00:00', 'Z')  # トークン有効期限
+                    "brand": payment_method_full.get("brand", "unknown"),
+                    "last4": payment_method_full.get("last4", "0000"),
+                    "type": payment_method_full.get("type", "card"),
+                    "expires_at": expires_at.isoformat().replace('+00:00', 'Z')  # トークン有効期限のみ
                 }
 
                 # Stepup認証が必要な場合はフラグを追加

@@ -62,7 +62,11 @@ def extract_keywords_simple(text: str) -> List[str]:
 
 
 def parse_json_from_llm(text: str) -> Any:
-    """LLMの応答からJSON部分を抽出してパース"""
+    """LLMの応答からJSON部分を抽出してパース
+
+    Returns:
+        パースされたJSON（dict or list）。パースに失敗した場合はNone。
+    """
     # ```json ... ``` または ``` ... ``` から抽出
 
     # JSONブロックを探す
@@ -77,5 +81,5 @@ def parse_json_from_llm(text: str) -> Any:
         return json.loads(json_str)
     except json.JSONDecodeError as e:
         logger.error(f"[parse_json_from_llm] JSON parse error: {e}, text: {json_str[:200]}")
-        # フォールバック
-        return {}
+        # AP2完全準拠: パース失敗時はNoneを返してフォールバックさせる
+        return None

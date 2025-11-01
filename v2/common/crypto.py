@@ -404,11 +404,32 @@ class KeyManager:
         公開鍵を読み込み
 
         Args:
-            key_id: 鍵の識別子
+            key_id: 鍵の識別子（DID形式または短縮名）
 
         Returns:
             ec.EllipticCurvePublicKey: 公開鍵
         """
+        # AP2完全準拠: DID形式からキーファイル名を抽出
+        if key_id.startswith("did:"):
+            # フラグメント（#key-1）を除去
+            key_id_without_fragment = key_id.split("#")[0]
+            parts = key_id_without_fragment.split(":")
+
+            if len(parts) >= 3:
+                entity_type = parts[2]  # merchant, agent, cp
+                if entity_type == "merchant":
+                    # Merchant Serviceの場合は"merchant"を使用
+                    # 例: did:ap2:merchant:mugibo_merchant → merchant
+                    key_id = "merchant"
+                elif entity_type in ["agent", "cp"] and len(parts) >= 4:
+                    # Agent/CPの場合は最後の部分（エージェント名/プロバイダー名）を使用
+                    # 例: did:ap2:agent:shopping_agent → shopping_agent
+                    # 例: did:ap2:cp:demo_cp → demo_cp
+                    key_id = parts[3]
+                else:
+                    # フォールバック: 最後の部分を使用
+                    key_id = parts[-1]
+
         key_file = self.keys_directory / f"{key_id}_public.pem"
 
         if not key_file.exists():
@@ -424,12 +445,33 @@ class KeyManager:
         メモリ上の秘密鍵を取得（ECDSA/Ed25519両対応）
 
         Args:
-            key_id: 鍵の識別子
+            key_id: 鍵の識別子（DID形式または短縮名）
             algorithm: アルゴリズム（ECDSA or ED25519）
 
         Returns:
             秘密鍵（EllipticCurvePrivateKey or Ed25519PrivateKey）
         """
+        # AP2完全準拠: DID形式からキーファイル名を抽出
+        if key_id.startswith("did:"):
+            # フラグメント（#key-1）を除去
+            key_id_without_fragment = key_id.split("#")[0]
+            parts = key_id_without_fragment.split(":")
+
+            if len(parts) >= 3:
+                entity_type = parts[2]  # merchant, agent, cp
+                if entity_type == "merchant":
+                    # Merchant Serviceの場合は"merchant"を使用
+                    # 例: did:ap2:merchant:mugibo_merchant → merchant
+                    key_id = "merchant"
+                elif entity_type in ["agent", "cp"] and len(parts) >= 4:
+                    # Agent/CPの場合は最後の部分（エージェント名/プロバイダー名）を使用
+                    # 例: did:ap2:agent:shopping_agent → shopping_agent
+                    # 例: did:ap2:cp:demo_cp → demo_cp
+                    key_id = parts[3]
+                else:
+                    # フォールバック: 最後の部分を使用
+                    key_id = parts[-1]
+
         algorithm_upper = algorithm.upper()
         storage_key_id = f"{key_id}_{algorithm_upper}" if algorithm_upper == "ED25519" else key_id
         return self._active_keys.get(storage_key_id)
