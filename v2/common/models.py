@@ -45,17 +45,6 @@ from common.mandate_types import (
 # A2A Message Models (demo_app_v2.md準拠)
 # ========================================
 
-class A2ASignature(BaseModel):
-    """
-    A2Aメッセージの署名（旧形式：後方互換性のため保持）
-
-    非推奨: 新規実装ではA2AProofを使用してください
-    """
-    algorithm: Literal["ed25519", "ecdsa"] = "ed25519"
-    public_key: str = Field(..., description="BASE64エンコードされた公開鍵")
-    value: str = Field(..., description="BASE64エンコードされた署名値")
-
-
 class A2AProof(BaseModel):
     """
     A2Aメッセージの署名証明（Proof）
@@ -407,11 +396,8 @@ class A2AMessageHeader(BaseModel):
     nonce: str = Field(..., description="リプレイ攻撃対策用のワンタイムノンス（hex形式、32バイト以上推奨）")
     schema_version: str = Field(default="0.9", description="スキーマバージョン")
 
-    # A2A仕様準拠：proof構造を使用（推奨）
+    # A2A仕様準拠：proof構造を使用（AP2完全準拠）
     proof: Optional[A2AProof] = Field(None, description="メッセージ全体の署名証明（A2A仕様準拠）")
-
-    # 旧形式：後方互換性のため保持（非推奨）
-    signature: Optional[A2ASignature] = Field(None, description="[非推奨] メッセージ全体の署名（後方互換性のため保持）")
 
 
 class A2AArtifactPart(BaseModel):
@@ -655,9 +641,9 @@ class CartSignRequest(BaseModel):
 
 
 class CartSignResponse(BaseModel):
-    """POST /sign/cart レスポンス"""
+    """POST /sign/cart レスポンス（AP2完全準拠）"""
     signed_cart_mandate: Dict[str, Any] = Field(..., description="署名済みCartMandate")
-    merchant_signature: A2ASignature
+    merchant_signature: Signature
 
 
 # ========================================
@@ -973,7 +959,6 @@ class TokenData(BaseModel):
 
 __all__ = [
     # A2A Message Models
-    "A2ASignature",
     "A2AProof",
 
     # Cryptographic Models

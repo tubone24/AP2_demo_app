@@ -133,10 +133,10 @@ def canonicalize_a2a_message(
     a2a_message_dict: Dict[str, Any]
 ) -> str:
     """
-    A2Aメッセージを正規化
+    A2Aメッセージを正規化（AP2完全準拠）
 
     署名対象データを作成：
-    - header.proof または header.signature を除外
+    - header.proof を除外
     - その他のフィールドは保持
 
     Args:
@@ -152,11 +152,10 @@ def canonicalize_a2a_message(
         else:
             message_copy[key] = value
 
-    # header.proof と header.signature を除外
+    # header.proof を除外（AP2完全準拠）
     if 'header' in message_copy and isinstance(message_copy['header'], dict):
         header_copy = message_copy['header'].copy()
         header_copy.pop('proof', None)
-        header_copy.pop('signature', None)
         message_copy['header'] = header_copy
 
     return canonicalize_json(message_copy)
@@ -993,22 +992,22 @@ class SignatureManager:
         """
         A2Aメッセージ全体に署名（メッセージレベル署名）
 
-        A2A仕様準拠：
-        - header.proof と header.signature を除外してCanonical JSONから署名を作成
+        AP2完全準拠：
+        - header.proof を除外してCanonical JSONから署名を作成
         - canonicalize_a2a_message() 関数を使用
         - Ed25519署名を使用（より高速で安全、ECDSA P-256より短い署名長）
 
         Args:
             a2a_message_dict: A2Aメッセージの辞書表現（headerを含む）
             sender_key_id: 送信者の秘密鍵ID
-            algorithm: 署名アルゴリズム（デフォルト: ED25519、後方互換性のためECDSAもサポート）
+            algorithm: 署名アルゴリズム（デフォルト: ED25519、ECDSAもサポート）
 
         Returns:
             Signature: メッセージ署名
         """
         logger.debug(f"Signing A2A message (sender: {sender_key_id}, algorithm: {algorithm})")
 
-        # Canonical JSON文字列を生成（header.proof/signatureを除外）
+        # Canonical JSON文字列を生成（header.proofを除外、AP2完全準拠）
         canonical_json = canonicalize_a2a_message(a2a_message_dict)
         logger.debug(f"[SIGN] Canonical JSON length: {len(canonical_json)}, first 200 chars: {canonical_json[:200]}")
 
@@ -1023,8 +1022,8 @@ class SignatureManager:
         """
         A2Aメッセージの署名を検証
 
-        A2A仕様準拠：
-        - header.proof と header.signature を除外してCanonical JSONで検証
+        AP2完全準拠：
+        - header.proof を除外してCanonical JSONで検証
         - canonicalize_a2a_message() 関数を使用
 
         Args:
@@ -1036,7 +1035,7 @@ class SignatureManager:
         """
         logger.debug("Verifying A2A message signature")
 
-        # Canonical JSON文字列を生成（header.proof/signatureを除外）
+        # Canonical JSON文字列を生成（header.proofを除外、AP2完全準拠）
         canonical_json = canonicalize_a2a_message(a2a_message_dict)
         logger.debug(f"[VERIFY] Canonical JSON length: {len(canonical_json)}, first 200 chars: {canonical_json[:200]}")
 
