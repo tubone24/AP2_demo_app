@@ -52,6 +52,14 @@ except ImportError:
     CBOR2_AVAILABLE = False
     logger.warning("cbor2 library not available. WebAuthn verification will be limited.")
 
+# Multibase encoding for DID public keys
+try:
+    import multibase
+    MULTIBASE_AVAILABLE = True
+except ImportError:
+    MULTIBASE_AVAILABLE = False
+    logger.warning("multibase library not available. DID publicKeyMultibase encoding will be limited.")
+
 
 class CryptoError(Exception):
     """暗号処理に関するエラー"""
@@ -278,8 +286,9 @@ class KeyManager:
         private_key = ed25519.Ed25519PrivateKey.generate()
         public_key = private_key.public_key()
 
-        # メモリに保存
-        self._active_keys[key_id] = private_key
+        # メモリに保存（アルゴリズムサフィックス付き）
+        storage_key_id = f"{key_id}_ED25519"
+        self._active_keys[storage_key_id] = private_key
 
         logger.info("Ed25519 key pair generated successfully")
         return private_key, public_key
@@ -515,6 +524,165 @@ class KeyManager:
         pem = base64.b64decode(base64_str.encode('utf-8'))
         return serialization.load_pem_public_key(pem, backend=self.backend)
 
+    def public_key_to_multibase(self, public_key: Any) -> str:
+        """
+        公開鍵をpublicKeyMultibase形式に変換（DID仕様準拠）
+
+        W3C DID仕様に準拠したmultibase形式：
+        - Ed25519: multicodec header 0xed01 + 32バイト公開鍵 → base58-btc → 'z6Mk...'
+        - P-256 (ECDSA): multicodec header 0x1200 + 33バイト圧縮公開鍵 → base58-btc → 'z...'
+
+        Args:
+            public_key: 公開鍵（EllipticCurvePublicKey or Ed25519PublicKey）
+
+        Returns:
+            str: publicKeyMultibase形式の文字列（例: z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH）
+
+        Raises:
+            ImportError: multibaseライブラリが利用できない場合
+            CryptoError: サポートされていない公開鍵タイプの場合
+        """
+        if not MULTIBASE_AVAILABLE:
+            raise ImportError(
+                "multibase library is required for DID publicKeyMultibase encoding. "
+                "Please install it: uv add py-multibase or pip install py-multibase"
+            )
+
+        from cryptography.hazmat.primitives.asymmetric import ed25519
+
+        if isinstance(public_key, ed25519.Ed25519PublicKey):
+            # Ed25519: multicodec header 0xed01 + 32バイト公開鍵
+            public_key_bytes = public_key.public_bytes(
+                encoding=serialization.Encoding.Raw,
+                format=serialization.PublicFormat.Raw
+            )
+            # multicodec header for Ed25519
+            multicodec_header = bytes([0xed, 0x01])
+            multicodec_key = multicodec_header + public_key_bytes
+
+        elif isinstance(public_key, ec.EllipticCurvePublicKey):
+            # ECDSA P-256: multicodec header 0x1200 + 33バイト圧縮公開鍵
+            # 圧縮形式で公開鍵を取得
+            public_key_bytes = public_key.public_bytes(
+                encoding=serialization.Encoding.X962,
+                format=serialization.PublicFormat.CompressedPoint
+            )
+            # multicodec header for P-256 (secp256r1)
+            multicodec_header = bytes([0x12, 0x00])
+            multicodec_key = multicodec_header + public_key_bytes
+
+        else:
+            raise CryptoError(f"Unsupported public key type: {type(public_key)}")
+
+        # base58-btcエンコーディング（'z'プレフィックスが自動的に追加される）
+        encoded = multibase.encode('base58btc', multicodec_key)
+
+        # bytes -> str
+        return encoded.decode('utf-8') if isinstance(encoded, bytes) else encoded
+
+    def public_key_from_multibase(self, multibase_str: str) -> Any:
+        """
+        publicKeyMultibase形式から公開鍵を復元
+
+        Args:
+            multibase_str: publicKeyMultibase形式の文字列（例: z6Mk...）
+
+        Returns:
+            公開鍵（EllipticCurvePublicKey or Ed25519PublicKey）
+
+        Raises:
+            ImportError: multibaseライブラリが利用できない場合
+            CryptoError: サポートされていないmulticodec headerの場合
+        """
+        if not MULTIBASE_AVAILABLE:
+            raise ImportError(
+                "multibase library is required for DID publicKeyMultibase decoding. "
+                "Please install it: uv add py-multibase or pip install py-multibase"
+            )
+
+        # base58-btcデコード
+        multicodec_key = multibase.decode(multibase_str)
+
+        # multicodec headerを確認
+        if len(multicodec_key) < 2:
+            raise CryptoError("Invalid publicKeyMultibase: too short")
+
+        header = multicodec_key[:2]
+
+        if header == bytes([0xed, 0x01]):
+            # Ed25519
+            from cryptography.hazmat.primitives.asymmetric import ed25519
+            public_key_bytes = multicodec_key[2:]
+            if len(public_key_bytes) != 32:
+                raise CryptoError(f"Invalid Ed25519 public key length: {len(public_key_bytes)}")
+            return ed25519.Ed25519PublicKey.from_public_bytes(public_key_bytes)
+
+        elif header == bytes([0x12, 0x00]):
+            # P-256 (secp256r1)
+            public_key_bytes = multicodec_key[2:]
+            if len(public_key_bytes) != 33:
+                raise CryptoError(f"Invalid P-256 compressed public key length: {len(public_key_bytes)}")
+            # 圧縮形式から公開鍵を復元
+            return serialization.load_der_public_key(
+                # X.509 SubjectPublicKeyInfo DER形式に変換
+                self._compressed_point_to_der(public_key_bytes),
+                backend=self.backend
+            )
+
+        else:
+            raise CryptoError(f"Unsupported multicodec header: {header.hex()}")
+
+    def _compressed_point_to_der(self, compressed_point: bytes) -> bytes:
+        """
+        P-256圧縮ポイントをDER形式に変換
+
+        Args:
+            compressed_point: 33バイトの圧縮公開鍵
+
+        Returns:
+            bytes: DER形式の公開鍵
+        """
+        # P-256の場合、圧縮形式からDER形式への変換が必要
+        # 簡易実装：cryptographyのload_pem_public_keyを使用
+        # 圧縮形式をPEMに変換
+        from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+
+        # OID for secp256r1: 1.2.840.10045.3.1.7
+        # DER構造: SEQUENCE { SEQUENCE { OID, OID }, BIT STRING }
+        # 簡易的にはECポイントをアンコンプレスに変換してからDERにする必要がある
+        # ここでは、cryptographyのECPointNumbersを使用
+
+        # 圧縮ポイントから座標を復元
+        if compressed_point[0] == 0x02 or compressed_point[0] == 0x03:
+            # 圧縮形式
+            x_bytes = compressed_point[1:]
+            x = int.from_bytes(x_bytes, byteorder='big')
+
+            # y座標を計算（楕円曲線の方程式 y^2 = x^3 - 3x + b mod p）
+            # P-256のパラメータ
+            p = 0xffffffff00000001000000000000000000000000ffffffffffffffffffffffff
+            b = 0x5ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604b
+
+            y_squared = (pow(x, 3, p) - 3 * x + b) % p
+            y = pow(y_squared, (p + 1) // 4, p)
+
+            # 圧縮フラグに応じてy座標を調整
+            if (y % 2 == 0 and compressed_point[0] == 0x03) or (y % 2 == 1 and compressed_point[0] == 0x02):
+                y = p - y
+
+            # ECPublicNumbersを作成
+            from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePublicNumbers, SECP256R1
+            public_numbers = EllipticCurvePublicNumbers(x, y, SECP256R1())
+            public_key = public_numbers.public_key(self.backend)
+
+            # DER形式に変換
+            return public_key.public_bytes(
+                encoding=serialization.Encoding.DER,
+                format=serialization.PublicFormat.SubjectPublicKeyInfo
+            )
+        else:
+            raise CryptoError(f"Invalid compressed point prefix: {hex(compressed_point[0])}")
+
 
 class SignatureManager:
     """
@@ -669,15 +837,15 @@ class SignatureManager:
         else:
             raise CryptoError(f"サポートされていないアルゴリズム: {algorithm}")
 
-        # 公開鍵を取得
+        # 公開鍵を取得（publicKeyMultibase形式に変換）
         public_key = private_key.public_key()
-        public_key_base64 = self.key_manager.public_key_to_base64(public_key)
+        public_key_multibase = self.key_manager.public_key_to_multibase(public_key)
 
-        # Signatureオブジェクトを作成
+        # Signatureオブジェクトを作成（AP2完全準拠：publicKeyMultibase形式）
         signature = Signature(
             algorithm=algorithm,
             value=base64.b64encode(signature_bytes).decode('utf-8'),
-            public_key=public_key_base64,
+            publicKeyMultibase=public_key_multibase,
             signed_at=datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
             key_id=key_id
         )
@@ -703,8 +871,8 @@ class SignatureManager:
         logger.debug(f"Verifying signature (algorithm: {signature.algorithm})")
 
         try:
-            # 公開鍵を復元
-            public_key = self.key_manager.public_key_from_base64(signature.public_key)
+            # 公開鍵を復元（AP2完全準拠：publicKeyMultibase形式から復元）
+            public_key = self.key_manager.public_key_from_multibase(signature.publicKeyMultibase)
 
             # 署名をデコード
             signature_bytes = base64.b64decode(signature.value.encode('utf-8'))

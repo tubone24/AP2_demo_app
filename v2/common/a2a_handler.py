@@ -158,8 +158,8 @@ class A2AMessageHandler:
                     f"nonce={message.header.nonce[:16]}..."  # ログには先頭16文字のみ表示
                 )
 
-                # 5. DIDベースの公開鍵解決（専門家の指摘対応）
-                public_key_to_verify = proof.publicKey  # デフォルトは埋め込み公開鍵
+                # 5. DIDベースの公開鍵解決（AP2完全準拠：publicKeyMultibase形式）
+                public_key_multibase_to_verify = proof.publicKeyMultibase  # デフォルトは埋め込み公開鍵
 
                 if proof.kid:
                     # KIDから公開鍵を解決
@@ -172,21 +172,29 @@ class A2AMessageHandler:
                         )
                         # DID解決失敗時は埋め込み公開鍵にフォールバック
                         # これにより、エージェント起動順序の問題を回避
-                        public_key_to_verify = proof.publicKey
+                        public_key_multibase_to_verify = proof.publicKeyMultibase
                     else:
-                        # DID解決したPEM文字列をbase64エンコード
-                        # SignatureManagerはbase64エンコードされたPEMを期待するため
+                        # DID解決したPEM文字列をpublicKeyMultibase形式に変換
+                        # AP2完全準拠：multibase形式に統一
+                        from common.crypto import KeyManager
                         import base64
-                        public_key_to_verify = base64.b64encode(
-                            resolved_public_key_pem.encode('utf-8')
-                        ).decode('utf-8')
+
+                        # PEM文字列から公開鍵オブジェクトを復元
+                        key_manager_temp = KeyManager()
+                        pem_bytes = resolved_public_key_pem.encode('utf-8')
+                        public_key_obj = key_manager_temp.public_key_from_base64(
+                            base64.b64encode(pem_bytes).decode('utf-8')
+                        )
+
+                        # publicKeyMultibase形式に変換
+                        public_key_multibase_to_verify = key_manager_temp.public_key_to_multibase(public_key_obj)
 
                         logger.debug(
                             f"[A2AHandler] Using DID-resolved public key for verification: "
                             f"kid={proof.kid}"
                         )
                 else:
-                    # kidがない場合は埋め込み公開鍵を使用（後方互換性）
+                    # kidがない場合は埋め込み公開鍵を使用
                     logger.warning(
                         "[A2AHandler] No KID provided, using embedded public key. "
                         "This is not recommended for production."
@@ -196,11 +204,11 @@ class A2AMessageHandler:
                 # AP2/A2A仕様準拠：Noneフィールドを除外して署名時と同じ状態にする
                 message_dict = message.model_dump(by_alias=True, exclude_none=True)
 
-                # Signatureオブジェクトに変換（ap2_crypto用）
+                # Signatureオブジェクトに変換（ap2_crypto用、AP2完全準拠）
                 signature_obj = Signature(
                     algorithm=proof.algorithm.upper(),
                     value=proof.signatureValue,
-                    public_key=public_key_to_verify,  # DID解決した公開鍵を使用
+                    publicKeyMultibase=public_key_multibase_to_verify,  # DID解決した公開鍵（multibase形式）
                     signed_at=proof.created,
                     key_id=proof.kid  # KIDを設定
                 )
@@ -226,41 +234,10 @@ class A2AMessageHandler:
                 logger.error(f"[A2AHandler] proof署名検証エラー: {e}", exc_info=True)
                 return False
 
-        # 後方互換性：旧形式のsignatureをサポート（非推奨）
+        # AP2完全準拠：後方互換性は不要（旧形式のsignature削除）
         elif message.header.signature:
-            logger.warning("[A2AHandler] 旧形式のsignature使用（非推奨）。proof構造への移行を推奨")
-
-            try:
-                # Pydanticモデルを辞書に変換（署名検証用）
-                # AP2/A2A仕様準拠：Noneフィールドを除外
-                message_dict = message.model_dump(by_alias=True, exclude_none=True)
-
-                # Signatureオブジェクトに変換（ap2_crypto用）
-                sig = message.header.signature
-                signature_obj = Signature(
-                    algorithm=sig.algorithm.upper(),
-                    value=sig.value,
-                    public_key=sig.public_key,
-                    signed_at=message.header.timestamp
-                )
-
-                # 署名検証（ap2_crypto.SignatureManagerを使用）
-                is_valid = self.signature_manager.verify_a2a_message_signature(
-                    message_dict,
-                    signature_obj
-                )
-
-                if is_valid:
-                    logger.info(f"[A2AHandler] signature署名検証成功: sender={message.header.sender}")
-                else:
-                    logger.warning(f"[A2AHandler] signature署名検証失敗: sender={message.header.sender}")
-
-                return is_valid
-
-            except Exception as e:
-                logger.error(f"[A2AHandler] signature署名検証エラー: {e}", exc_info=True)
-                return False
-
+            logger.error("[A2AHandler] 旧形式のsignature検出。AP2完全準拠のため、proof構造のみサポートします。")
+            return False
         else:
             logger.warning("[A2AHandler] メッセージにproof/signatureがありません")
             return False
@@ -412,7 +389,7 @@ class A2AMessageHandler:
             message.header.proof = A2AProof(
                 algorithm=signature_obj.algorithm.lower(),
                 signatureValue=signature_obj.value,
-                publicKey=signature_obj.public_key,
+                publicKeyMultibase=signature_obj.publicKeyMultibase,
                 kid=kid,
                 created=timestamp,
                 proofPurpose="authentication"
@@ -519,7 +496,7 @@ class A2AMessageHandler:
             message.header.proof = A2AProof(
                 algorithm=signature_obj.algorithm.lower(),
                 signatureValue=signature_obj.value,
-                publicKey=signature_obj.public_key,
+                publicKeyMultibase=signature_obj.publicKeyMultibase,
                 kid=kid,
                 created=timestamp,
                 proofPurpose="authentication"

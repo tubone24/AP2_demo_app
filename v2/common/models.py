@@ -63,15 +63,17 @@ class A2AProof(BaseModel):
     W3C Verifiable Credentials仕様に準拠したproof構造
     A2A仕様準拠：header.proof として使用
 
-    専門家の指摘対応：
-    - kid（鍵ID）を追加してDIDベースの鍵解決を可能に
+    AP2完全準拠：
+    - publicKeyMultibase形式を使用（W3C DID仕様推奨）
+    - 'z6Mk...'（Ed25519）または 'z...'（P-256）形式
+    - kid（鍵ID）でDIDベースの鍵解決を可能に
     - algorithmの検証を強化（Ed25519/ES256のみ許可）
 
     Example:
     {
       "algorithm": "ed25519",
       "signatureValue": "MEUCIQDx...",
-      "publicKey": "LS0tLS1CRU...",
+      "publicKeyMultibase": "z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH",
       "kid": "did:ap2:agent:shopping_agent#key-1",
       "created": "2025-10-16T12:34:56Z",
       "proofPurpose": "authentication"
@@ -79,7 +81,7 @@ class A2AProof(BaseModel):
     """
     algorithm: Literal["ed25519", "ecdsa"] = Field(default="ed25519", description="署名アルゴリズム（EdDSA/ES256）")
     signatureValue: str = Field(..., description="BASE64エンコードされた署名値")
-    publicKey: str = Field(..., description="BASE64エンコードされた公開鍵")
+    publicKeyMultibase: str = Field(..., description="Multibase形式の公開鍵（W3C DID仕様準拠）")
     kid: Optional[str] = Field(None, description="鍵ID（DIDフラグメント）例: did:ap2:agent:shopping_agent#key-1")
     created: str = Field(..., description="署名作成日時（ISO 8601）")
     proofPurpose: Literal["authentication", "assertionMethod", "agreement"] = Field(
@@ -92,7 +94,7 @@ class A2AProof(BaseModel):
             "example": {
                 "algorithm": "ed25519",
                 "signatureValue": "MEUCIQDx8yZ...",
-                "publicKey": "LS0tLS1CRU...",
+                "publicKeyMultibase": "z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH",
                 "created": "2025-10-16T12:34:56Z",
                 "proofPurpose": "authentication"
             }
@@ -107,21 +109,23 @@ class Signature(BaseModel):
     """
     暗号署名
 
-    AP2仕様に準拠したEd25519/ECDSA署名
-    デフォルト: Ed25519（2025年推奨アルゴリズム）
+    AP2完全準拠：
+    - Ed25519/ECDSA署名をサポート
+    - publicKeyMultibase形式を使用（W3C DID仕様推奨）
+    - デフォルト: Ed25519（2025年推奨アルゴリズム）
     """
     algorithm: str = Field(default="Ed25519", description="署名アルゴリズム（Ed25519/ECDSA）")
     value: str = Field(..., description="BASE64エンコードされた署名値")
-    public_key: str = Field(..., description="BASE64エンコードされた公開鍵（PEM形式）")
+    publicKeyMultibase: str = Field(..., description="Multibase形式の公開鍵（W3C DID仕様準拠）")
     signed_at: str = Field(..., description="署名日時（ISO 8601）")
-    key_id: Optional[str] = Field(None, description="署名に使用した鍵のID（後方互換性のためOptional）")
+    key_id: Optional[str] = Field(None, description="署名に使用した鍵のID")
 
     class Config:
         json_schema_extra = {
             "example": {
                 "algorithm": "Ed25519",
                 "value": "MEUCIQDx...",
-                "public_key": "LS0tLS1CRU...",
+                "publicKeyMultibase": "z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH",
                 "signed_at": "2025-10-16T12:34:56Z",
                 "key_id": "shopping_agent"
             }
@@ -401,7 +405,7 @@ class A2AMessageHeader(BaseModel):
     recipient: str = Field(..., description="受信者エージェントDID (e.g., did:ap2:agent:merchant_agent)")
     timestamp: str = Field(..., description="ISO 8601タイムスタンプ (e.g., 2025-10-15T12:34:56Z)")
     nonce: str = Field(..., description="リプレイ攻撃対策用のワンタイムノンス（hex形式、32バイト以上推奨）")
-    schema_version: str = Field(default="0.2", description="スキーマバージョン")
+    schema_version: str = Field(default="0.9", description="スキーマバージョン")
 
     # A2A仕様準拠：proof構造を使用（推奨）
     proof: Optional[A2AProof] = Field(None, description="メッセージ全体の署名証明（A2A仕様準拠）")
