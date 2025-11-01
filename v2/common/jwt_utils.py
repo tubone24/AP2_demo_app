@@ -323,10 +323,10 @@ class MerchantAuthorizationJWT:
         # SignatureオブジェクトをAP2準拠形式で構築
         from common.models import Signature
 
-        # 公開鍵を取得（kidから）
+        # 公開鍵を取得（kidから）- AP2完全準拠: publicKeyMultibase形式
         try:
             public_key = self.key_manager.load_public_key(kid)
-            public_key_b64 = self.key_manager.public_key_to_base64(public_key)
+            public_key_multibase = self.key_manager.public_key_to_multibase(public_key)
         except Exception as e:
             raise ValueError(f"Failed to load public key for kid={kid}: {e}")
 
@@ -579,10 +579,10 @@ class UserAuthorizationSDJWT:
         # SignatureオブジェクトをAP2準拠形式で構築
         from common.models import Signature
 
-        # 公開鍵を取得（kidから）
+        # 公開鍵を取得（kidから）- AP2完全準拠: publicKeyMultibase形式
         try:
             public_key = self.key_manager.load_public_key(kid)
-            public_key_b64 = self.key_manager.public_key_to_base64(public_key)
+            public_key_multibase = self.key_manager.public_key_to_multibase(public_key)
         except Exception as e:
             raise ValueError(f"Failed to load public key for kid={kid}: {e}")
 
@@ -592,8 +592,9 @@ class UserAuthorizationSDJWT:
         kb_signature_obj = Signature(
             algorithm=algorithm,
             key_id=kid,
-            public_key=public_key_b64,
-            signature=kb_signature_bytes.hex()  # hex形式で格納
+            publicKeyMultibase=public_key_multibase,
+            value=base64.b64encode(kb_signature_bytes).decode('utf-8'),
+            signed_at=datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
         )
 
         # 署名対象データ

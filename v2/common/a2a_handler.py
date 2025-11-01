@@ -177,14 +177,12 @@ class A2AMessageHandler:
                         # DID解決したPEM文字列をpublicKeyMultibase形式に変換
                         # AP2完全準拠：multibase形式に統一
                         from common.crypto import KeyManager
-                        import base64
+                        from cryptography.hazmat.primitives import serialization
 
                         # PEM文字列から公開鍵オブジェクトを復元
                         key_manager_temp = KeyManager()
                         pem_bytes = resolved_public_key_pem.encode('utf-8')
-                        public_key_obj = key_manager_temp.public_key_from_base64(
-                            base64.b64encode(pem_bytes).decode('utf-8')
-                        )
+                        public_key_obj = serialization.load_pem_public_key(pem_bytes)
 
                         # publicKeyMultibase形式に変換
                         public_key_multibase_to_verify = key_manager_temp.public_key_to_multibase(public_key_obj)

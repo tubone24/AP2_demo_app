@@ -132,7 +132,7 @@ class AttestationType(str, Enum):
 
 class DeviceAttestation(BaseModel):
     """
-    デバイス証明
+    デバイス証明（AP2完全準拠）
 
     AP2ステップ20-23で使用される、デバイスが信頼されており
     取引が改ざんされていないことを証明する暗号学的証拠
@@ -141,7 +141,7 @@ class DeviceAttestation(BaseModel):
     attestation_type: AttestationType = Field(..., description="認証タイプ")
     attestation_value: str = Field(..., description="BASE64エンコードされた証明値")
     timestamp: str = Field(..., description="証明日時（ISO 8601）")
-    device_public_key: str = Field(..., description="デバイスの公開鍵（BASE64）")
+    device_public_key_multibase: str = Field(..., description="デバイスの公開鍵（publicKeyMultibase形式）")
     challenge: str = Field(..., description="リプレイ攻撃対策のチャレンジ値")
     platform: str = Field(..., description="プラットフォーム（iOS, Android, Web等）")
     os_version: Optional[str] = Field(None, description="OSバージョン")
@@ -160,7 +160,7 @@ class DeviceAttestation(BaseModel):
                 "attestation_type": "webauthn",
                 "attestation_value": "MEUCIQDx...",
                 "timestamp": "2025-10-16T12:34:56Z",
-                "device_public_key": "LS0tLS1CRU...",
+                "device_public_key_multibase": "z2oAtgCswLVHGBgbaEmaRp6m1zmj3jx4tf1LgSCKreVPjwRm1",
                 "challenge": "random_challenge_abc123",
                 "platform": "Web",
                 "os_version": "macOS 14.0",

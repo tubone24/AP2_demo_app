@@ -510,19 +510,6 @@ class KeyManager:
         public_key = self.load_public_key(key_id)
         return self.public_key_to_pem(public_key)
 
-    def public_key_to_base64(self, public_key: Any) -> str:
-        """公開鍵をBase64文字列に変換（ECDSA/Ed25519両対応）"""
-        pem = public_key.public_bytes(
-            encoding=serialization.Encoding.PEM,
-            format=serialization.PublicFormat.SubjectPublicKeyInfo
-        )
-        return base64.b64encode(pem).decode('utf-8')
-
-    def public_key_from_base64(self, base64_str: str) -> Any:
-        """Base64文字列から公開鍵を復元（ECDSA/Ed25519両対応）"""
-        pem = base64.b64decode(base64_str.encode('utf-8'))
-        return serialization.load_pem_public_key(pem, backend=self.backend)
-
     def public_key_to_multibase(self, public_key: Any) -> str:
         """
         公開鍵をpublicKeyMultibase形式に変換（DID仕様準拠）
@@ -1592,7 +1579,7 @@ class DeviceAttestationManager:
             raise CryptoError(f"デバイス秘密鍵が見つかりません: {device_key_id}")
 
         device_public_key = device_private_key.public_key()
-        device_public_key_base64 = self.key_manager.public_key_to_base64(device_public_key)
+        device_public_key_multibase = self.key_manager.public_key_to_multibase(device_public_key)
 
         if timestamp is None:
             timestamp = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
@@ -1621,7 +1608,7 @@ class DeviceAttestationManager:
             attestation_type=attestation_type,
             attestation_value=attestation_value,
             timestamp=timestamp,
-            device_public_key=device_public_key_base64,
+            device_public_key_multibase=device_public_key_multibase,
             challenge=challenge,
             platform=platform,
             os_version=os_version,
@@ -1685,8 +1672,8 @@ class DeviceAttestationManager:
             data_hash = hashlib.sha256(json_str.encode('utf-8')).digest()
 
             # 3. デバイスの公開鍵で署名を検証
-            device_public_key = self.key_manager.public_key_from_base64(
-                device_attestation.device_public_key
+            device_public_key = self.key_manager.public_key_from_multibase(
+                device_attestation.device_public_key_multibase
             )
             attestation_signature = base64.b64decode(device_attestation.attestation_value.encode('utf-8'))
 
