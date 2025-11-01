@@ -48,20 +48,26 @@ class PaymentHelpers:
         Returns:
             str: "human_present" または "human_not_present"
         """
-        # 1. WebAuthn/Passkey認証が完了しているか確認
-        attestation_token = session.get("attestation_token")
-        if attestation_token:
-            logger.info("[ShoppingAgent] transaction_type=human_present (WebAuthn attestation completed)")
+        # 1. WebAuthn assertion完了確認（最優先：実際の認証完了）
+        cart_webauthn_assertion = session.get("cart_webauthn_assertion")
+        payment_webauthn_assertion = session.get("payment_webauthn_assertion")
+        if cart_webauthn_assertion or payment_webauthn_assertion:
+            logger.info("[ShoppingAgent] transaction_type=human_present (WebAuthn assertion completed)")
             return "human_present"
 
-        # 2. will_use_passkeyフラグ確認（WebAuthn使用予定）
+        # 2. WebAuthn/Passkey認証トークン確認
+        attestation_token = session.get("attestation_token")
+        if attestation_token:
+            logger.info("[ShoppingAgent] transaction_type=human_present (WebAuthn attestation token found)")
+            return "human_present"
+
+        # 3. will_use_passkeyフラグ確認（WebAuthn使用予定）
         will_use_passkey = session.get("will_use_passkey", False)
         if will_use_passkey:
-            # フラグは立っているが、まだ認証完了していない場合
             logger.info("[ShoppingAgent] transaction_type=human_present (WebAuthn flow initiated)")
             return "human_present"
 
-        # 3. WebAuthn challengeが存在する場合（認証フロー進行中）
+        # 4. WebAuthn challengeが存在する場合（認証フロー進行中）
         webauthn_challenge = session.get("webauthn_challenge")
         if webauthn_challenge:
             logger.info("[ShoppingAgent] transaction_type=human_present (WebAuthn challenge active)")
@@ -128,26 +134,30 @@ class PaymentHelpers:
     @staticmethod
     def build_payment_response(tokenized_payment_method: Dict[str, Any]) -> Dict[str, Any]:
         """
-        PaymentResponseを構築（W3C Payment Request API準拠）
+        PaymentResponseを構築（AP2完全準拠 & PCI DSS準拠）
 
         Args:
             tokenized_payment_method: トークン化された支払い方法
 
         Returns:
             Dict: PaymentResponse
+
+        AP2完全準拠: PCI機密データを含めない
+        - カード番号、CVV、有効期限、カード名義人は含めない
+        - トークンで決済を実行（Credential Providerが内部で保持）
         """
         return {
             "methodName": "basic-card",  # または "secure-payment-confirmation"
             "details": {
-                "cardholderName": tokenized_payment_method.get("cardholder_name", "Demo User"),
-                "cardNumber": f"****{tokenized_payment_method.get('last4', '0000')}",  # トークン化済み
-                "cardSecurityCode": "***",  # トークン化済み
+                "cardNumber": f"****{tokenized_payment_method.get('last4', '0000')}",  # マスク済み
+                "cardSecurityCode": "***",  # マスク済み
                 "cardBrand": tokenized_payment_method.get("brand", "unknown"),
-                "expiryMonth": tokenized_payment_method.get("expiry_month", "12"),
-                "expiryYear": tokenized_payment_method.get("expiry_year", "2025"),
-                # AP2拡張：トークン
+                # AP2拡張：トークン（Credential Providerで実際のカード情報と紐付け）
                 "token": tokenized_payment_method["token"],
                 "tokenized": True
+                # AP2完全準拠 & PCI DSS準拠:
+                # - cardholderName: 含めない（PCI機密データ）
+                # - expiryMonth/Year: 含めない（トークン化により内部管理）
             }
         }
 
@@ -197,7 +207,8 @@ class PaymentHelpers:
     def generate_user_authorization_for_payment(
         session: Dict[str, Any],
         cart_mandate: Dict[str, Any],
-        payment_mandate_contents: Dict[str, Any]
+        payment_mandate_contents: Dict[str, Any],
+        public_key_cose: str
     ) -> Optional[str]:
         """
         user_authorizationを生成（WebAuthn assertionからSD-JWT-VC形式）
@@ -206,6 +217,7 @@ class PaymentHelpers:
             session: セッション情報
             cart_mandate: CartMandate
             payment_mandate_contents: PaymentMandateContents
+            public_key_cose: COSE形式の公開鍵（base64エンコード済み、DB保存済みの値）
 
         Returns:
             Optional[str]: user_authorization（生成失敗時はNone）
@@ -220,6 +232,7 @@ class PaymentHelpers:
                 cart_mandate=cart_mandate,
                 payment_mandate_contents=payment_mandate_contents,
                 user_id=session.get("user_id", "user_demo_001"),
+                public_key_cose=public_key_cose,
                 payment_processor_id="did:ap2:agent:payment_processor"
             )
             logger.info(

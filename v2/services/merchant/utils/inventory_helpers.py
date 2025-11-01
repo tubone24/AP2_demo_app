@@ -34,14 +34,15 @@ class InventoryHelpers:
         Raises:
             ValueError: 在庫不足時
         """
-        # AP2準拠：_metadata.raw_itemsから商品情報を取得
+        # _metadata.raw_itemsから商品詳細情報を取得
+        # 注意: AP2仕様ではpayment_request.details.display_itemsに商品情報が含まれるが、
+        #       在庫チェックに必要な詳細（SKU、数量）は_metadata.raw_itemsに保持
         metadata = cart_mandate.get("_metadata", {})
         raw_items = metadata.get("raw_items", [])
 
         if not raw_items:
-            # raw_itemsがない場合はスキップ（後方互換性）
-            logger.warning("[Merchant] No raw_items in _metadata, skipping inventory check")
-            return
+            logger.error("[Merchant] raw_items not found in _metadata - cannot verify inventory")
+            raise ValueError("CartMandate missing required _metadata.raw_items for inventory verification")
 
         async with self.db_manager.get_session() as session:
             for item in raw_items:

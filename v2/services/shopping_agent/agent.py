@@ -58,6 +58,7 @@ from v2.common.database import (
     UserCRUD,
     PasskeyCredentialCRUD,
 )
+from v2.common.mandate_types import IntentMandate
 from v2.common.risk_assessment import RiskAssessmentEngine
 from v2.common.crypto import WebAuthnChallengeManager, DeviceAttestationManager
 from v2.common.user_authorization import create_user_authorization_vp
@@ -1481,8 +1482,8 @@ class ShoppingAgent(BaseAgent):
                         cart_mandate=cart_mandate,
                         payment_mandate_contents=payment_mandate_for_vp,
                         user_id=user_id,
-                        payment_processor_id="did:ap2:agent:payment_processor",
-                        public_key_cose=public_key_cose
+                        public_key_cose=public_key_cose,
+                        payment_processor_id="did:ap2:agent:payment_processor"
                     )
 
                     payment_mandate["user_authorization"] = user_authorization
@@ -1683,19 +1684,20 @@ class ShoppingAgent(BaseAgent):
 
     async def _create_intent_mandate(self, intent: str, session: Dict[str, Any]) -> Dict[str, Any]:
         """
-        IntentMandateを作成（LangGraph AI統合版）
+        IntentMandateを作成（AP2完全準拠版）
 
         AP2仕様準拠：
+        - AP2公式Pydanticモデル（IntentMandate）を使用
         - LangGraphでユーザーの自然言語入力からインテント抽出
-        - 既存のIntentMandate型（mandate_types.py）を使用
-        - サーバー署名は使用しない（Passkey署名はフロントエンドで追加）
+        - AP2仕様のフィールドのみを含む
+        - メタデータ（id, user_id等）は呼び出し側で管理
 
         Args:
             intent: ユーザーの自然言語入力
             session: セッションデータ
 
         Returns:
-            IntentMandate（署名前、AP2仕様準拠の構造）
+            IntentMandate（辞書形式、AP2仕様準拠の構造）
         """
         now = datetime.now(timezone.utc)
         # AP2準拠：user_idはセッションから動的に取得（フロントエンドから提供）
@@ -1730,19 +1732,39 @@ class ShoppingAgent(BaseAgent):
 
         logger.info(f"[_create_intent_mandate] Reconstructed intent: {intent_full}")
 
-        # IntentMandate作成（AP2完全準拠）
-        # LangGraph StateGraph版では、インテント情報はセッションから取得
-        intent_mandate_unsigned = self._build_intent_mandate_from_session(intent, session, user_id, now)
+        # IntentMandate作成（AP2公式Pydanticモデル使用）
+        intent_mandate_model = self._build_intent_mandate_from_session(intent, session, user_id, now)
 
-        # User公開鍵を取得（WebAuthn Passkey公開鍵）
-        try:
-            user_public_key_pem = self.key_manager.get_public_key_pem(user_id)
-            intent_mandate_unsigned["user_public_key"] = user_public_key_pem
-        except Exception as e:
-            logger.info(f"[ShoppingAgent] User public key not available yet (will be provided by frontend): {e}")
-            intent_mandate_unsigned["user_public_key"] = None
+        # Pydanticモデルを辞書化（AP2仕様準拠フィールドのみ）
+        intent_mandate_dict = intent_mandate_model.model_dump(exclude_none=True)
 
-        return intent_mandate_unsigned
+        # AP2仕様外のメタデータを追加（A2A通信やセッション管理用）
+        #
+        # 注意: AP2仕様では、IntentMandateは以下のフィールドのみを含む：
+        #   - user_cart_confirmation_required
+        #   - natural_language_description
+        #   - merchants (Optional)
+        #   - skus (Optional)
+        #   - requires_refundability (Optional)
+        #   - intent_expiry
+        #
+        # 以下のメタデータはAP2仕様外だが、実装上の理由で含めています：
+        #   - id: データベースおよびA2Aメッセージ識別用
+        #   - type: メッセージタイプ識別用
+        #   - user_id: セッション管理およびMerchant Agent処理用
+        #   - created_at: 監査ログ用
+        #
+        # 将来的には、これらのメタデータをA2Aメッセージエンベロープや
+        # 別のデータ構造で管理することが望ましいです。
+        intent_mandate_with_metadata = {
+            "id": f"intent_{uuid.uuid4().hex[:8]}",
+            "type": "IntentMandate",
+            "user_id": user_id,
+            **intent_mandate_dict,  # AP2準拠フィールド（Pydanticモデルから生成）
+            "created_at": now.isoformat().replace('+00:00', 'Z')
+        }
+
+        return intent_mandate_with_metadata
 
     def _build_intent_mandate_from_session(
         self,
@@ -1750,10 +1772,11 @@ class ShoppingAgent(BaseAgent):
         session: Dict[str, Any],
         user_id: str,
         now: datetime
-    ) -> Dict[str, Any]:
-        """セッションデータからIntentMandateを構築
+    ) -> IntentMandate:
+        """セッションデータからIntentMandateを構築（AP2完全準拠）
 
-        LangGraph StateGraphで収集した情報からIntentMandateを生成（AP2完全準拠）
+        LangGraph StateGraphで収集した情報からIntentMandateを生成
+        AP2公式Pydanticモデル（common/mandate_types.py）を使用
 
         Args:
             intent: ユーザー入力
@@ -1762,7 +1785,7 @@ class ShoppingAgent(BaseAgent):
             now: 現在時刻
 
         Returns:
-            IntentMandate（署名前）
+            IntentMandate（AP2公式Pydanticモデル）
         """
         expires_at = now + timedelta(hours=1)
         merchants = session.get("merchants", [])
@@ -1788,29 +1811,22 @@ class ShoppingAgent(BaseAgent):
 
         logger.info(f"[_build_intent_mandate_from_session] Constructed natural_language_description: {natural_language_description}")
 
-        # AP2準拠のIntentMandate構造（mandate_types.py参照）
-        intent_mandate_unsigned = {
-            "id": f"intent_{uuid.uuid4().hex[:8]}",
-            "type": "IntentMandate",
-            "version": "0.2",
-            "user_id": user_id,
-            # AP2準拠フィールド
-            "natural_language_description": natural_language_description,
-            "user_cart_confirmation_required": True,
-            "merchants": merchants if merchants else None,  # Optional[list[str]]
-            "skus": skus if skus else None,  # Optional[list[str]]
-            "requires_refundability": False,
-            "intent_expiry": expires_at.isoformat().replace('+00:00', 'Z'),
-            # メタデータ（AP2仕様外だが互換性のため保持）
-            "created_at": now.isoformat().replace('+00:00', 'Z')
-        }
-
-        logger.info(
-            f"[ShoppingAgent] IntentMandate created (fallback mode): "
-            f"id={intent_mandate_unsigned['id']}, intent='{intent[:50]}...'"
+        # AP2公式Pydanticモデルを使用（mandate_types.py:25-71）
+        intent_mandate = IntentMandate(
+            user_cart_confirmation_required=True,
+            natural_language_description=natural_language_description,
+            merchants=merchants if merchants else None,
+            skus=skus if skus else None,
+            requires_refundability=False,
+            intent_expiry=expires_at.isoformat().replace('+00:00', 'Z')
         )
 
-        return intent_mandate_unsigned
+        logger.info(
+            f"[ShoppingAgent] IntentMandate created (AP2-compliant): "
+            f"intent='{intent[:50]}...', expiry={intent_mandate.intent_expiry}"
+        )
+
+        return intent_mandate
 
     async def _persist_intent_mandate(self, intent_mandate: Dict[str, Any], session: Dict[str, Any]) -> None:
         """
@@ -1986,14 +2002,38 @@ class ShoppingAgent(BaseAgent):
         """PaymentMandateContents構築（ヘルパーメソッドに委譲）"""
         return self.payment_helpers.build_payment_mandate_contents(cart_mandate, total_amount, payment_response)
 
-    def _generate_user_authorization_for_payment(
+    async def _generate_user_authorization_for_payment(
         self,
         session: Dict[str, Any],
         cart_mandate: Dict[str, Any],
         payment_mandate_contents: Dict[str, Any]
     ) -> Optional[str]:
         """user_authorization生成（ヘルパーメソッドに委譲）"""
-        return self.payment_helpers.generate_user_authorization_for_payment(session, cart_mandate, payment_mandate_contents)
+        # AP2完全準拠: Credential ProviderからDBに保存された公開鍵を取得
+        cart_webauthn_assertion = session.get("cart_webauthn_assertion")
+        if not cart_webauthn_assertion:
+            return None
+
+        try:
+            credential_id = cart_webauthn_assertion.get("id")
+            user_id = session.get("user_id", "user_demo_001")
+            selected_cp = session.get("selected_credential_provider", self.credential_providers[0])
+
+            # SignatureHandlersを使用してCredential Providerから公開鍵を取得
+            public_key_cose = await SignatureHandlers.retrieve_public_key_from_cp(
+                http_client=self.http_client,
+                credential_provider_url=selected_cp['url'],
+                credential_id=credential_id,
+                user_id=user_id,
+                timeout=SHORT_HTTP_TIMEOUT
+            )
+
+            return self.payment_helpers.generate_user_authorization_for_payment(
+                session, cart_mandate, payment_mandate_contents, public_key_cose
+            )
+        except Exception as e:
+            logger.error(f"[_generate_user_authorization_for_payment] Failed to retrieve public key: {e}", exc_info=True)
+            return None
 
     def _perform_risk_assessment(
         self,
@@ -2004,7 +2044,7 @@ class ShoppingAgent(BaseAgent):
         """リスク評価実施（ヘルパーメソッドに委譲）"""
         return self.payment_helpers.perform_risk_assessment(payment_mandate, cart_mandate, intent_mandate)
 
-    def _create_payment_mandate(self, session: Dict[str, Any]) -> Dict[str, Any]:
+    async def _create_payment_mandate(self, session: Dict[str, Any]) -> Dict[str, Any]:
         """
         PaymentMandateを作成（リスク評価統合版）
 
@@ -2031,7 +2071,7 @@ class ShoppingAgent(BaseAgent):
         )
 
         # 5. user_authorizationの生成
-        user_authorization = self._generate_user_authorization_for_payment(
+        user_authorization = await self._generate_user_authorization_for_payment(
             session,
             cart_mandate,
             payment_mandate_contents
@@ -2063,9 +2103,9 @@ class ShoppingAgent(BaseAgent):
                 "type": tokenized_payment_method.get("type", "card"),
                 "token": tokenized_payment_method["token"],
                 "last4": tokenized_payment_method.get("last4", "0000"),
-                "brand": tokenized_payment_method.get("brand", "unknown"),
-                "expiry_month": tokenized_payment_method.get("expiry_month"),
-                "expiry_year": tokenized_payment_method.get("expiry_year")
+                "brand": tokenized_payment_method.get("brand", "unknown")
+                # AP2完全準拠 & PCI DSS準拠: 有効期限は含めない
+                # トークン化により、Credential Provider内部で管理される
             }
         }
 

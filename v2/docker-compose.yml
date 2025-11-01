@@ -171,7 +171,7 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - MERCHANT_ID=did:ap2:merchant:mugibo_merchant
-      - MERCHANT_NAME=Demo Merchant
+      - MERCHANT_NAME=${MERCHANT_NAME:-むぎぼーショップ}
       - MERCHANT_URL=http://merchant:8002
       - DATABASE_URL=sqlite+aiosqlite:////app/v2/data/merchant_agent.db
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
@@ -385,7 +385,7 @@ services:
       - MEILI_MASTER_KEY=masterKey123
       - MEILI_NO_ANALYTICS=true
     volumes:
-      - meilisearch_data:/meili_data
+      - ./data/meilisearch:/meili_data
     networks:
       - ap2_network
     restart: unless-stopped
@@ -412,7 +412,7 @@ services:
       - "6379:6379"
     command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
     volumes:
-      - redis_data:/data
+      - ./data/redis:/data
     networks:
       - ap2_network
     restart: unless-stopped
@@ -427,10 +427,6 @@ networks:
     driver: bridge
 
 volumes:
-  meilisearch_data:
-    driver: local
-  redis_data:
-    driver: local
   keys:
     driver: local
     driver_opts:

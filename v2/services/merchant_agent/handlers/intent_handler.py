@@ -32,20 +32,25 @@ async def handle_intent_mandate(agent: 'MerchantAgent', message: A2AMessage) -> 
     logger.info("[MerchantAgent] Received IntentMandate")
     payload = message.dataPart.payload
 
-    # AP2仕様準拠：ペイロードからintent_mandateとshipping_addressを抽出
-    if isinstance(payload, dict) and "intent_mandate" in payload:
-        # 新しい形式：{intent_mandate: {...}, shipping_address: {...}}
-        intent_mandate = payload["intent_mandate"]
-        shipping_address = payload.get("shipping_address")
-        logger.info("[MerchantAgent] Received IntentMandate with shipping_address (AP2 v0.1 compliant)")
-    else:
-        # 旧形式（後方互換性のため）：payload自体がintent_mandate
-        intent_mandate = payload
-        shipping_address = None
-        logger.info("[MerchantAgent] Received IntentMandate without shipping_address (legacy format)")
+    # AP2完全準拠：ペイロードは必ず {intent_mandate: {...}, shipping_address: {...}} 形式
+    if not isinstance(payload, dict) or "intent_mandate" not in payload:
+        logger.error("[MerchantAgent] Invalid payload format - missing 'intent_mandate' field")
+        return {
+            "type": "ap2.errors.Error",
+            "id": str(uuid.uuid4()),
+            "payload": {
+                "error_code": "invalid_payload_format",
+                "error_message": "Payload must contain 'intent_mandate' field (AP2 v0.1+ required)"
+            }
+        }
 
-    # AP2準拠：natural_language_descriptionフィールドを使用
-    intent_text = intent_mandate.get("natural_language_description", intent_mandate.get("intent", ""))
+    intent_mandate = payload["intent_mandate"]
+    shipping_address = payload.get("shipping_address")
+
+    logger.info("[MerchantAgent] Received IntentMandate with shipping_address (AP2 v0.1 compliant)")
+
+    # AP2完全準拠：natural_language_descriptionフィールドを使用
+    intent_text = intent_mandate.get("natural_language_description", "")
     logger.info(f"[MerchantAgent] Searching products with intent: '{intent_text}'")
 
     try:
@@ -65,9 +70,9 @@ async def handle_intent_mandate(agent: 'MerchantAgent', message: A2AMessage) -> 
         # Shopping Agentから提供された配送先を使用（AP2完全準拠）
         logger.info(f"[MerchantAgent] Using provided shipping address: {shipping_address.get('recipient', 'N/A')}")
 
-        # 複数のカート候補を生成
-        # AI Mode: LangGraphエンジンを使用
+        # 複数のカート候補を生成（AP2完全準拠）
         if agent.ai_mode_enabled and agent.langgraph_agent:
+            # LangGraph AI engine使用（推奨モード）
             logger.info("[MerchantAgent] Using LangGraph AI engine for cart generation")
             cart_candidates = await agent.langgraph_agent.create_cart_candidates(
                 intent_mandate=intent_mandate,
@@ -75,8 +80,8 @@ async def handle_intent_mandate(agent: 'MerchantAgent', message: A2AMessage) -> 
                 session_id=str(uuid.uuid4())
             )
         else:
-            # 従来Mode: 固定ロジック
-            logger.info("[MerchantAgent] Using legacy cart generation")
+            # ルールベースカート生成（AI無効時）
+            logger.info("[MerchantAgent] Using rule-based cart generation (AI disabled)")
             cart_candidates = await agent._create_multiple_cart_candidates(
                 intent_mandate_id=intent_mandate["id"],
                 intent_text=intent_text,

@@ -177,9 +177,10 @@ async def greeting_node(state: ShoppingFlowState) -> ShoppingFlowState:
             "content": char
         })
 
+    # AP2完全準拠: agent_text_completeには完成したメッセージ全体を含める
     events.append({
         "type": "agent_text_complete",
-        "content": ""
+        "content": greeting_msg
     })
 
     session["step"] = "ask_intent"
@@ -260,6 +261,10 @@ JSON形式で返答してください:
                 if intent_data.get("max_amount"):
                     session["max_amount"] = int(intent_data["max_amount"])
 
+                # キーワードも保存（AP2完全準拠: Intent Mandateの詳細情報）
+                if intent_data.get("keywords"):
+                    session["keywords"] = intent_data["keywords"]
+
                 logger.info(f"[collect_intent_node] LLM result: {intent_data}")
 
             except Exception as llm_error:
@@ -283,7 +288,8 @@ JSON形式で返答してください:
         session["intent_mandate"] = intent_mandate
         session["step"] = "intent_complete_ask_shipping"
 
-        # 確認メッセージ
+        # AP2完全準拠 + LangGraphベストプラクティス: Intent Mandateの詳細をユーザーに確認
+        # 基本確認メッセージ
         confirm_msg = f"承知しました。「{session['intent']}」でお探しします。"
         for char in confirm_msg:
             events.append({
@@ -291,9 +297,68 @@ JSON形式で返答してください:
                 "content": char
             })
 
+        # AP2完全準拠: agent_text_completeには完成したメッセージ全体を含める
         events.append({
             "type": "agent_text_complete",
-            "content": ""
+            "content": confirm_msg
+        })
+
+        await asyncio.sleep(0.3)
+
+        # Intent Mandateの制約条件を詳細表示（AP2完全準拠: ユーザー確認）
+        constraint_parts = []
+
+        # Intent Mandate ID（AP2完全準拠: トレーサビリティ）
+        intent_mandate_id = intent_mandate.get("id", "unknown")
+        constraint_parts.append(f"📋 Mandate ID: {intent_mandate_id}")
+
+        # 最大金額
+        max_amount = session.get("max_amount")
+        if max_amount:
+            constraint_parts.append(f"💰 予算: {max_amount:,}円以内")
+
+        # キーワード（LLMが抽出）
+        keywords = session.get("keywords", [])
+        if keywords:
+            constraint_parts.append(f"🔍 キーワード: {', '.join(keywords)}")
+
+        # カテゴリー
+        categories = session.get("categories", [])
+        if categories:
+            constraint_parts.append(f"🏷️ カテゴリー: {', '.join(categories)}")
+
+        # ブランド
+        brands = session.get("brands", [])
+        if brands:
+            constraint_parts.append(f"🏪 ブランド: {', '.join(brands)}")
+
+        # Intent Mandateの有効期限（AP2完全準拠）
+        intent_expiry = intent_mandate.get("intent_expiry")
+        if intent_expiry:
+            from datetime import datetime
+            from zoneinfo import ZoneInfo
+            try:
+                expiry_dt = datetime.fromisoformat(intent_expiry.replace('Z', '+00:00'))
+                # 日本時間に変換して表示
+                jst = ZoneInfo('Asia/Tokyo')
+                expiry_jst = expiry_dt.astimezone(jst)
+                constraint_parts.append(f"⏰ 有効期限: {expiry_jst.strftime('%Y-%m-%d %H:%M')} JST")
+            except Exception as ex:
+                logger.warning(f"[validate_intent_node] Failed to parse intent_expiry: {ex}")
+
+        # Intent Mandateの詳細を表示（AP2完全準拠: 必ずMandate IDを含む）
+        constraint_msg = "\n\n【Intent Mandate - 購入条件】\n" + "\n".join(constraint_parts)
+
+        for char in constraint_msg:
+            events.append({
+                "type": "agent_text_chunk",
+                "content": char
+            })
+
+        # AP2完全準拠: agent_text_completeには完成したメッセージ全体を含める
+        events.append({
+            "type": "agent_text_complete",
+            "content": constraint_msg
         })
 
         await asyncio.sleep(0.3)
@@ -306,9 +371,10 @@ JSON形式で返答してください:
                 "content": char
             })
 
+        # AP2完全準拠: agent_text_completeには完成したメッセージ全体を含める
         events.append({
             "type": "agent_text_complete",
-            "content": ""
+            "content": shipping_msg
         })
 
         # 配送先フォーム表示（AP2準拠: ContactAddress形式）
@@ -376,9 +442,10 @@ async def collect_shipping_node(state: ShoppingFlowState, agent_instance: Any) -
                 "content": char
             })
 
+        # AP2完全準拠: agent_text_completeには完成したメッセージ全体を含める
         events.append({
             "type": "agent_text_complete",
-            "content": ""
+            "content": confirm_msg
         })
 
         await asyncio.sleep(0.3)
@@ -506,9 +573,10 @@ async def select_cp_node(state: ShoppingFlowState, agent_instance: Any) -> Shopp
                     "content": char
                 })
 
+            # AP2完全準拠: agent_text_completeには完成したメッセージ全体を含める
             events.append({
                 "type": "agent_text_complete",
-                "content": ""
+                "content": cp_msg
             })
 
             await asyncio.sleep(0.2)
@@ -535,9 +603,10 @@ async def select_cp_node(state: ShoppingFlowState, agent_instance: Any) -> Shopp
                     "content": char
                 })
 
+            # AP2完全準拠: agent_text_completeには完成したメッセージ全体を含める
             events.append({
                 "type": "agent_text_complete",
-                "content": ""
+                "content": cp_msg
             })
 
             await asyncio.sleep(0.2)
@@ -597,9 +666,10 @@ async def select_cp_node(state: ShoppingFlowState, agent_instance: Any) -> Shopp
                 "content": char
             })
 
+        # AP2完全準拠: agent_text_completeには完成したメッセージ全体を含める
         events.append({
             "type": "agent_text_complete",
-            "content": ""
+            "content": cp_msg
         })
 
         await asyncio.sleep(0.2)
@@ -664,9 +734,10 @@ async def get_payment_methods_node(state: ShoppingFlowState, agent_instance: Any
                 "content": char
             })
 
+        # AP2完全準拠: agent_text_completeには完成したメッセージ全体を含める
         events.append({
             "type": "agent_text_complete",
-            "content": ""
+            "content": pm_msg
         })
 
         # ステップ6: SAがCPに支払い方法リストを要求（AP2完全準拠）
@@ -736,9 +807,10 @@ async def fetch_carts_node(state: ShoppingFlowState, agent_instance: Any) -> Sho
                 "content": char
             })
 
+        # AP2完全準拠: agent_text_completeには完成したメッセージ全体を含める
         events.append({
             "type": "agent_text_complete",
-            "content": ""
+            "content": ai_msg
         })
 
         # IntentMandateを取得
@@ -888,26 +960,35 @@ async def select_cart_node(state: ShoppingFlowState, agent_instance: Any) -> Sho
         if not cart_mandate:
             raise ValueError("CartMandate not found in selected cart")
 
-        # Merchant署名の暗号学的検証（AP2完全準拠）
-        merchant_signature = cart_mandate.get("merchant_signature")
-        if not merchant_signature:
-            raise ValueError("Merchant signature not found in CartMandate (not pending)")
+        # Merchant Authorization JWT検証（AP2完全準拠）
+        merchant_authorization = cart_mandate.get("merchant_authorization")
+        if not merchant_authorization:
+            raise ValueError("Merchant authorization JWT not found in CartMandate")
 
-        # merchant_signatureをSignatureオブジェクトに変換（AP2完全準拠）
-        if isinstance(merchant_signature, dict):
-            sig_obj = Signature(**merchant_signature)
-        else:
-            sig_obj = merchant_signature
+        cart_contents = cart_mandate.get("contents")
+        if not cart_contents:
+            raise ValueError("CartMandate does not contain contents")
 
-        # SignatureManagerでMerchant署名を検証（AP2完全準拠）
-        is_valid = agent_instance.signature_manager.verify_mandate_signature(
-            cart_mandate,
-            sig_obj
+        # MerchantAuthorizationJWTを使用して検証
+        from v2.common.jwt_utils import MerchantAuthorizationJWT
+        jwt_verifier = MerchantAuthorizationJWT(
+            signature_manager=agent_instance.signature_manager,
+            key_manager=agent_instance.key_manager
         )
 
-        if not is_valid:
-            logger.error(f"[select_cart_node] Merchant signature verification FAILED")
-            raise ValueError("Merchant署名の検証に失敗しました")
+        try:
+            # AP2完全準拠: CartMandate全体を渡す
+            payload = jwt_verifier.verify(
+                jwt=merchant_authorization,
+                expected_cart_mandate=cart_mandate
+            )
+            logger.info(
+                f"[select_cart_node] Merchant authorization JWT verified: "
+                f"merchant={payload.get('iss')}, cart_hash={payload.get('cart_hash')[:16]}..."
+            )
+        except Exception as e:
+            logger.error(f"[select_cart_node] Merchant authorization JWT verification FAILED: {e}")
+            raise ValueError(f"Merchant Authorization JWT検証に失敗しました: {e}")
 
         # CartMandateを保存
         session["cart_mandate"] = cart_mandate
@@ -1056,9 +1137,10 @@ async def select_payment_method_node(state: ShoppingFlowState, agent_instance: A
                     "content": char
                 })
 
+            # AP2完全準拠: agent_text_completeには完成したメッセージ全体を含める
             events.append({
                 "type": "agent_text_complete",
-                "content": ""
+                "content": payment_msg
             })
 
             await asyncio.sleep(0.2)
@@ -1152,7 +1234,7 @@ async def select_payment_method_node(state: ShoppingFlowState, agent_instance: A
 
         # PaymentMandate作成（AP2完全準拠、リスク評価含む）
         # Note: _create_payment_mandate()はsessionからcart_mandateとtokenized_payment_methodを取得
-        payment_mandate = agent_instance._create_payment_mandate(session=session)
+        payment_mandate = await agent_instance._create_payment_mandate(session=session)
 
         session["payment_mandate"] = payment_mandate
 
@@ -1269,7 +1351,7 @@ async def step_up_auth_node(state: ShoppingFlowState, agent_instance: Any) -> Sh
             )
 
             # PaymentMandate作成（AP2完全準拠、リスク評価含む）
-            payment_mandate = agent_instance._create_payment_mandate(session=session)
+            payment_mandate = await agent_instance._create_payment_mandate(session=session)
             session["payment_mandate"] = payment_mandate
 
             logger.info(

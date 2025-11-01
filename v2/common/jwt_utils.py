@@ -17,7 +17,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, Optional, TYPE_CHECKING
 
 import rfc8785
-from cryptography.hazmat.primitives.asymmetric import ec, ed25519
+from cryptography.hazmat.primitives.asymmetric import ec, ed25519, utils as asym_utils
 from cryptography.hazmat.primitives import hashes
 
 # 循環インポート回避のためTYPE_CHECKINGを使用
@@ -75,7 +75,8 @@ class MerchantAuthorizationJWT:
         cart_contents: Dict[str, Any],
         audience: str = "payment_processor",
         expiration_minutes: int = 10,
-        algorithm: str = "ECDSA"
+        algorithm: str = "ECDSA",
+        key_id: str = None
     ) -> str:
         """Merchant Authorization JWTを生成
 
@@ -85,11 +86,15 @@ class MerchantAuthorizationJWT:
             audience: 受信者の識別子（デフォルト: "payment_processor"）
             expiration_minutes: 有効期限（分）（デフォルト: 10分）
             algorithm: 署名アルゴリズム（"ECDSA" または "ED25519"）
+            key_id: 署名に使用する鍵のID（デフォルト: merchant_idを使用）
 
         Returns:
             base64url-encoded JWT文字列
         """
-        # Canonical Hashを計算
+        # AP2完全準拠: key_idが指定されていない場合はmerchant_idを使用
+        signing_key_id = key_id if key_id is not None else merchant_id
+
+        # AP2完全準拠: cart_contentsのハッシュを計算（後方互換性のため残す）
         cart_hash = compute_canonical_hash(cart_contents)
 
         # 現在時刻
@@ -109,10 +114,15 @@ class MerchantAuthorizationJWT:
         }
 
         # Headerを生成
+        # AP2完全準拠: kidにはDID#fragmentフォーマットが必要
+        # ECDSA用は#key-1、Ed25519用は#key-2
+        key_fragment = "#key-1" if algorithm == "ECDSA" else "#key-2"
+        kid_with_fragment = signing_key_id if "#" in signing_key_id else f"{signing_key_id}{key_fragment}"
+
         header = {
             "alg": "ES256" if algorithm == "ECDSA" else "EdDSA",
             "typ": "JWT",
-            "kid": merchant_id
+            "kid": kid_with_fragment  # AP2完全準拠: DID#fragment形式
         }
 
         # Header.Payloadをbase64url-encode
@@ -127,17 +137,122 @@ class MerchantAuthorizationJWT:
         # 署名対象データ
         signing_input = f"{header_b64}.{payload_b64}"
 
-        # 署名を生成
-        signature = self.signature_manager.sign_data(
+        # AP2完全準拠: JWT署名では生データに対して直接ECDSA署名を行う（二重ハッシュ化を避ける）
+        private_key = self.key_manager.get_private_key(signing_key_id, algorithm=algorithm)
+        if private_key is None:
+            raise ValueError(f"秘密鍵が見つかりません: {signing_key_id} (algorithm: {algorithm})")
+
+        # ECDSA署名を生成（ec.ECDSA()が内部でSHA256ハッシュ化を行う）
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.hazmat.primitives import hashes
+
+        # pyca/cryptographyはDER形式の署名を返す
+        der_signature = private_key.sign(
             signing_input.encode('utf-8'),
-            merchant_id,
-            algorithm=algorithm
+            ec.ECDSA(hashes.SHA256())
         )
 
+        # RFC 7515準拠: DER形式からraw R || S (64バイト)形式に変換
+        r, s = asym_utils.decode_dss_signature(der_signature)
+        # P-256の場合、RとSは各32バイト（256ビット）
+        r_bytes = r.to_bytes(32, byteorder='big')
+        s_bytes = s.to_bytes(32, byteorder='big')
+        raw_signature = r_bytes + s_bytes  # 64バイト
+
         # 署名をbase64url-encode
-        signature_b64 = base64.urlsafe_b64encode(
-            bytes.fromhex(signature.signature)
+        signature_b64 = base64.urlsafe_b64encode(raw_signature).decode('utf-8').rstrip('=')
+
+        # JWT = Header.Payload.Signature
+        jwt = f"{header_b64}.{payload_b64}.{signature_b64}"
+
+        return jwt
+
+    def generate_with_hash(
+        self,
+        merchant_id: str,
+        cart_hash: str,
+        audience: str = "payment_processor",
+        expiration_minutes: int = 10,
+        algorithm: str = "ECDSA",
+        key_id: str = None
+    ) -> str:
+        """Merchant Authorization JWTを生成（cart_hashを直接指定）
+
+        AP2完全準拠: CartMandate全体のハッシュを受け取ってJWT生成
+
+        Args:
+            merchant_id: Merchantの識別子（issuerおよびsubjectとして使用）
+            cart_hash: CartMandateのcanonical hash（compute_mandate_hashで計算済み）
+            audience: 受信者の識別子（デフォルト: "payment_processor"）
+            expiration_minutes: 有効期限（分）（デフォルト: 10分）
+            algorithm: 署名アルゴリズム（"ECDSA" または "ED25519"）
+            key_id: 署名に使用する鍵のID（デフォルト: merchant_idを使用）
+
+        Returns:
+            base64url-encoded JWT文字列
+        """
+        # AP2完全準拠: key_idが指定されていない場合はmerchant_idを使用
+        signing_key_id = key_id if key_id is not None else merchant_id
+
+        # 現在時刻
+        now = datetime.now(timezone.utc)
+        iat = int(now.timestamp())
+        exp = int((now + timedelta(minutes=expiration_minutes)).timestamp())
+
+        # JWTペイロード
+        payload = {
+            "iss": merchant_id,
+            "sub": merchant_id,
+            "aud": audience,
+            "iat": iat,
+            "exp": exp,
+            "jti": str(uuid.uuid4()),
+            "cart_hash": cart_hash
+        }
+
+        # JWTヘッダー（AP2完全準拠: kidにはDID#fragmentフォーマットが必要）
+        key_fragment = "#key-1" if algorithm == "ECDSA" else "#key-2"
+        kid_with_fragment = signing_key_id if "#" in signing_key_id else f"{signing_key_id}{key_fragment}"
+
+        header = {
+            "alg": "ES256" if algorithm == "ECDSA" else "EdDSA",
+            "typ": "JWT",
+            "kid": kid_with_fragment
+        }
+
+        # RFC 8785準拠のJSON正規化してbase64url-encode
+        header_b64 = base64.urlsafe_b64encode(
+            rfc8785.dumps(header)
         ).decode('utf-8').rstrip('=')
+
+        payload_b64 = base64.urlsafe_b64encode(
+            rfc8785.dumps(payload)
+        ).decode('utf-8').rstrip('=')
+
+        # 署名対象データ
+        signing_input = f"{header_b64}.{payload_b64}"
+
+        # AP2完全準拠: JWT署名では生データに対して直接ECDSA署名を行う（二重ハッシュ化を避ける）
+        private_key = self.key_manager.get_private_key(signing_key_id, algorithm=algorithm)
+        if private_key is None:
+            raise ValueError(f"秘密鍵が見つかりません: {signing_key_id} (algorithm: {algorithm})")
+
+        # ECDSA署名を生成（ec.ECDSA()が内部でSHA256ハッシュ化を行う）
+        # pyca/cryptographyはDER形式の署名を返す
+        der_signature = private_key.sign(
+            signing_input.encode('utf-8'),
+            ec.ECDSA(hashes.SHA256())
+        )
+
+        # RFC 7515準拠: DER形式からraw R || S (64バイト)形式に変換
+        r, s = asym_utils.decode_dss_signature(der_signature)
+        # P-256の場合、RとSは各32バイト（256ビット）
+        r_bytes = r.to_bytes(32, byteorder='big')
+        s_bytes = s.to_bytes(32, byteorder='big')
+        raw_signature = r_bytes + s_bytes  # 64バイト
+
+        # 署名をbase64url-encode
+        signature_b64 = base64.urlsafe_b64encode(raw_signature).decode('utf-8').rstrip('=')
 
         # JWT = Header.Payload.Signature
         jwt = f"{header_b64}.{payload_b64}.{signature_b64}"
@@ -147,13 +262,15 @@ class MerchantAuthorizationJWT:
     def verify(
         self,
         jwt: str,
-        expected_cart_contents: Dict[str, Any]
+        expected_cart_mandate: Dict[str, Any]
     ) -> Dict[str, Any]:
         """Merchant Authorization JWTを検証
 
+        AP2完全準拠: CartMandate全体（署名フィールドを除く）をハッシュ化して検証
+
         Args:
             jwt: 検証対象のJWT文字列
-            expected_cart_contents: 期待されるCartContentsオブジェクトの辞書表現
+            expected_cart_mandate: 期待されるCartMandateオブジェクトの辞書表現
 
         Returns:
             検証済みのJWTペイロード
@@ -179,8 +296,9 @@ class MerchantAuthorizationJWT:
         payload = json.loads(base64.urlsafe_b64decode(payload_b64_padded))
         signature_bytes = base64.urlsafe_b64decode(signature_b64_padded)
 
-        # cart_hashを検証
-        expected_cart_hash = compute_canonical_hash(expected_cart_contents)
+        # AP2完全準拠: CartMandate全体（署名フィールドを除く）のハッシュを計算して検証
+        from v2.common.user_authorization import compute_mandate_hash
+        expected_cart_hash = compute_mandate_hash(expected_cart_mandate)
         if payload.get('cart_hash') != expected_cart_hash:
             raise ValueError(
                 f"cart_hash mismatch: expected {expected_cart_hash}, "
@@ -215,21 +333,29 @@ class MerchantAuthorizationJWT:
         # アルゴリズム名を変換（ES256 -> ECDSA, EdDSA -> Ed25519）
         algorithm = "ECDSA" if alg == "ES256" else "Ed25519"
 
-        signature_obj = Signature(
-            algorithm=algorithm,
-            key_id=kid,
-            public_key=public_key_b64,
-            signature=signature_bytes.hex()  # hex形式で格納
-        )
+        # RFC 7515準拠: raw R || S (64バイト)形式からDER形式に変換
+        if len(signature_bytes) != 64:
+            raise ValueError(f"Invalid ES256 signature length: expected 64 bytes, got {len(signature_bytes)}")
 
-        # SignatureManagerで検証（signing_inputをbytesで渡す）
-        is_valid = self.signature_manager.verify_signature(
-            signing_input.encode('utf-8'),
-            signature_obj
-        )
+        # 前半32バイト = R、後半32バイト = S
+        r_bytes = signature_bytes[:32]
+        s_bytes = signature_bytes[32:]
+        r = int.from_bytes(r_bytes, byteorder='big')
+        s = int.from_bytes(s_bytes, byteorder='big')
 
-        if not is_valid:
-            raise ValueError(f"JWT signature verification failed for kid={kid}")
+        # DER形式に変換
+        der_signature = asym_utils.encode_dss_signature(r, s)
+
+        # AP2完全準拠: JWT検証では生データに対して直接ECDSA署名検証を行う（二重ハッシュ化を避ける）
+        try:
+            # ECDSA署名を検証（ec.ECDSA()が内部でSHA256ハッシュ化を行う）
+            public_key.verify(
+                der_signature,
+                signing_input.encode('utf-8'),
+                ec.ECDSA(hashes.SHA256())
+            )
+        except Exception as e:
+            raise ValueError(f"JWT signature verification failed for kid={kid}: {e}")
 
         return payload
 

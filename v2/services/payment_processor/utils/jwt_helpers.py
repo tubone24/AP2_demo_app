@@ -188,6 +188,9 @@ class JWTHelpers:
         """
         JWT署名を検証（ES256: ECDSA with P-256 and SHA-256）
 
+        RFC 7515準拠: JWTの署名はraw R || S (64バイト)形式であり、
+        pyca/cryptographyが期待するDER形式に変換する必要があります。
+
         Args:
             header: JWTヘッダー
             header_b64: Base64urlエンコードされたヘッダー
@@ -199,7 +202,7 @@ class JWTHelpers:
         """
         from v2.common.did_resolver import DIDResolver
         from cryptography.hazmat.primitives import serialization
-        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.hazmat.primitives.asymmetric import ec, utils as asym_utils
         from cryptography.hazmat.primitives import hashes
         from cryptography.exceptions import InvalidSignature
 
@@ -226,14 +229,29 @@ class JWTHelpers:
             # 署名をデコード
             signature_bytes = self.base64url_decode(signature_b64)
 
-            # ECDSA署名を検証
+            # RFC 7515準拠: raw R || S (64バイト)形式からDER形式に変換
+            if len(signature_bytes) != 64:
+                raise ValueError(
+                    f"Invalid ES256 signature length: expected 64 bytes, got {len(signature_bytes)}"
+                )
+
+            # 前半32バイト = R、後半32バイト = S
+            r_bytes = signature_bytes[:32]
+            s_bytes = signature_bytes[32:]
+            r = int.from_bytes(r_bytes, byteorder='big')
+            s = int.from_bytes(s_bytes, byteorder='big')
+
+            # DER形式に変換
+            der_signature = asym_utils.encode_dss_signature(r, s)
+
+            # ECDSA署名を検証（DER形式）
             public_key.verify(
-                signature_bytes,
+                der_signature,
                 message_to_verify,
                 ec.ECDSA(hashes.SHA256())
             )
 
-            logger.info("[_verify_jwt_signature] ✓ JWT signature verified successfully")
+            logger.info("[_verify_jwt_signature] ✓ JWT signature verified successfully (RFC 7515 compliant)")
 
         except InvalidSignature:
             raise ValueError("Invalid JWT signature: signature verification failed")

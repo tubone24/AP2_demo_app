@@ -419,42 +419,36 @@ class MerchantIntegrationHelpers:
             if not signed_cart_mandate:
                 raise ValueError("Merchant did not return signed_cart_mandate")
 
-            # Merchant署名を検証
-            merchant_signature = signed_cart_mandate.get("merchant_signature")
-            if not merchant_signature:
-                raise ValueError("CartMandate does not contain merchant_signature")
+            # Merchant Authorization JWT検証（AP2完全準拠）
+            merchant_authorization = signed_cart_mandate.get("merchant_authorization")
+            if not merchant_authorization:
+                raise ValueError("CartMandate does not contain merchant_authorization JWT")
 
-            # v2.common.models.Signatureに変換
-            import sys
-            from pathlib import Path
-            sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
-            from v2.common.models import Signature
+            cart_contents = signed_cart_mandate.get("contents")
+            if not cart_contents:
+                raise ValueError("CartMandate does not contain contents")
 
-            signature_obj = Signature(
-                algorithm=merchant_signature.get("algorithm", "ECDSA").upper(),
-                value=merchant_signature["value"],
-                public_key=merchant_signature["public_key"],
-                signed_at=merchant_signature["signed_at"]
+            # MerchantAuthorizationJWTを使用して検証
+            from v2.common.jwt_utils import MerchantAuthorizationJWT
+            jwt_verifier = MerchantAuthorizationJWT(
+                signature_manager=signature_manager,
+                key_manager=key_manager
             )
 
-            # 署名対象データ（merchant_signature除外）
-            cart_data_for_verification = signed_cart_mandate.copy()
-            cart_data_for_verification.pop("merchant_signature", None)
-            cart_data_for_verification.pop("user_signature", None)
-
-            # 署名検証
-            is_valid = signature_manager.verify_mandate_signature(
-                cart_data_for_verification,
-                signature_obj
-            )
-
-            if not is_valid:
-                raise ValueError("Merchant signature verification failed")
-
-            logger.info(
-                f"[MerchantIntegration] ✅ Merchant signature verified for CartMandate: "
-                f"{cart_mandate['id']}"
-            )
+            try:
+                # AP2完全準拠: CartMandate全体を渡す
+                payload = jwt_verifier.verify(
+                    jwt=merchant_authorization,
+                    expected_cart_mandate=cart_mandate
+                )
+                logger.info(
+                    f"[MerchantIntegration] ✅ Merchant authorization JWT verified for CartMandate: "
+                    f"{cart_mandate['id']}, merchant={payload.get('iss')}, "
+                    f"cart_hash={payload.get('cart_hash')[:16]}..."
+                )
+            except Exception as e:
+                logger.error(f"[MerchantIntegration] Merchant authorization JWT verification failed: {e}")
+                raise ValueError(f"Merchant authorization JWT verification failed: {e}")
             return signed_cart_mandate
 
         except httpx.HTTPError as e:

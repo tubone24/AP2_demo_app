@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 from v2.common.base_agent import BaseAgent, AgentPassphraseManager
 from v2.common.models import A2AMessage, AttestationVerifyRequest, AttestationVerifyResponse
-from v2.common.database import DatabaseManager, Attestation, PasskeyCredentialCRUD, PaymentMethodCRUD, ReceiptCRUD
+from v2.common.database import DatabaseManager, Attestation, PasskeyCredentialCRUD, PaymentMethodCRUD, ReceiptCRUD, UserCRUD
 from v2.common.crypto import DeviceAttestationManager, KeyManager
 from v2.common.logger import get_logger, log_a2a_message, log_database_operation, LoggingAsyncClient
 from v2.common.redis_client import RedisClient, TokenStore, SessionStore
@@ -415,6 +415,18 @@ class CredentialProviderService(BaseAgent):
                         "transports": transports
                     })
 
+                    # AP2完全準拠: Userテーブルにもユーザーを作成（レシート生成などで使用）
+                    user_exists = await UserCRUD.get_by_id(session, user_id)
+                    if not user_exists:
+                        await UserCRUD.create(session, {
+                            "user_id": user_id,
+                            "display_name": f"User {user_id[:8]}",
+                            "email": None
+                        })
+                        logger.info(f"[register_passkey] User created: {user_id}")
+                    else:
+                        logger.info(f"[register_passkey] User already exists: {user_id}")
+
                 logger.info(f"[register_passkey] Passkey registered: {credential_id[:16]}...")
 
                 # AP2仕様準拠：公開鍵はCredential Provider内で管理される
@@ -731,8 +743,9 @@ class CredentialProviderService(BaseAgent):
                         detail=f"Payment method not found: {payment_method_id}"
                     )
 
-                # データベースレコードを辞書に変換
-                payment_method = payment_method_record.to_dict()
+                # AP2完全準拠 & PCI DSS準拠: 内部処理用に完全なデータを取得
+                # 注意: get_full_data()はCredential Provider内部でのみ使用
+                payment_method_full = payment_method_record.get_full_data()
 
                 # 一時トークン生成（AP2トランザクション用）
                 # 暗号学的に安全なトークンを生成し、有効期限を設定
@@ -748,10 +761,11 @@ class CredentialProviderService(BaseAgent):
 
                 # トークンストアに保存（AP2仕様準拠）
                 # Redis KVに保存（TTL: 15分）
+                # 注意: 内部ストレージなので完全なカード情報を保存（PCI機密データ含む）
                 token_data = {
                     "user_id": user_id,
                     "payment_method_id": payment_method_id,
-                    "payment_method": payment_method,
+                    "payment_method": payment_method_full,  # 完全なデータを内部保存
                     "issued_at": now.isoformat(),
                     "expires_at": expires_at.isoformat()
                 }
@@ -760,19 +774,18 @@ class CredentialProviderService(BaseAgent):
                 logger.info(f"[tokenize_payment_method] Generated secure token for payment method: {payment_method_id}")
 
                 # AP2完全準拠: Stepup認証が必要かチェック
-                requires_stepup = payment_method.get("requires_stepup", False)
-                stepup_method = payment_method.get("stepup_method", None)
+                requires_stepup = payment_method_full.get("requires_stepup", False)
+                stepup_method = payment_method_full.get("stepup_method", None)
 
-                # AP2完全準拠：有効期限を含める（カードの場合）
+                # AP2完全準拠 & PCI DSS準拠: レスポンスには非機密データのみ
+                # カード有効期限は含めない（トークンと紐付けて内部保持済み）
                 response_data = {
                     "token": secure_token,
                     "payment_method_id": payment_method_id,
-                    "brand": payment_method.get("brand", "unknown"),
-                    "last4": payment_method.get("last4", "0000"),
-                    "type": payment_method.get("type", "card"),
-                    "expiry_month": payment_method.get("expiry_month"),  # カード有効期限（月）
-                    "expiry_year": payment_method.get("expiry_year"),    # カード有効期限（年）
-                    "expires_at": expires_at.isoformat().replace('+00:00', 'Z')  # トークン有効期限
+                    "brand": payment_method_full.get("brand", "unknown"),
+                    "last4": payment_method_full.get("last4", "0000"),
+                    "type": payment_method_full.get("type", "card"),
+                    "expires_at": expires_at.isoformat().replace('+00:00', 'Z')  # トークン有効期限のみ
                 }
 
                 # Stepup認証が必要な場合はフラグを追加
@@ -931,7 +944,7 @@ class CredentialProviderService(BaseAgent):
                                 </div>
                                 <div class="info-row">
                                     <span class="label">加盟店</span>
-                                    <span class="value">Demo Merchant</span>
+                                    <span class="value">むぎぼーショップ</span>
                                 </div>
                             </div>
 

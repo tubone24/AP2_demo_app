@@ -158,8 +158,10 @@ export function useSSEChat() {
                 case "agent_text_chunk":
                   // エージェント応答のストリーミングチャンク
                   if (!isTyping) {
+                    // 新しいメッセージの開始
                     isTyping = true;
                     agentMessageContent = "";
+                    console.log("[agent_text_chunk] Starting new message");
                   }
                   agentMessageContent += event.content || "";
                   setCurrentAgentMessage(agentMessageContent);
@@ -167,6 +169,29 @@ export function useSSEChat() {
 
                 case "agent_text_complete":
                   // エージェント応答完了
+                  // AP2完全準拠: agent_text_completeイベントには完成したメッセージ全体が含まれる
+                  const completeEvent = event as any;
+                  const completeMessage = completeEvent.content || "";
+
+                  console.log("[agent_text_complete]", {
+                    eventContent: completeMessage,
+                    length: completeMessage.length
+                  });
+
+                  if (completeMessage.trim()) {
+                    const agentMessage: ChatMessage = {
+                      id: `agent-${Date.now()}`,
+                      role: "agent",
+                      content: completeMessage,
+                      timestamp: new Date(),
+                    };
+                    setMessages((prev) => [...prev, agentMessage]);
+                    console.log("[agent_text_complete] Message added to messages array");
+                  }
+
+                  // currentAgentMessageをクリア（次のメッセージは新しい吹き出しに）
+                  agentMessageContent = "";
+                  setCurrentAgentMessage("");
                   isTyping = false;
                   break;
 
@@ -362,7 +387,8 @@ export function useSSEChat() {
                   console.log("[SSE Done Event] paymentCompletedData:", paymentCompletedData);
                   console.log("[SSE Done Event] streamProducts:", streamProducts);
 
-                  if (agentMessageContent) {
+                  // agent_text_completeで既に確定されていない場合のみ追加
+                  if (agentMessageContent.trim()) {
                     // メタデータを構築（AP2完全準拠）
                     const metadata: any = {};
 

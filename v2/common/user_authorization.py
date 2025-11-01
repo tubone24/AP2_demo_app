@@ -87,77 +87,21 @@ def compute_mandate_hash(mandate: Dict[str, Any]) -> str:
     return hashlib.sha256(canonical_bytes).hexdigest()
 
 
-def extract_public_key_from_webauthn_assertion(
-    assertion: Dict[str, Any]
-) -> Tuple[ec.EllipticCurvePublicKey, str]:
-    """
-    WebAuthn assertionから公開鍵を抽出
-
-    WebAuthn assertionには公開鍵が含まれていないため、
-    この関数は登録時（registration）に使用されるattestationObjectから公開鍵を抽出します。
-
-    Args:
-        assertion: WebAuthn assertion（attestationObject含む場合）
-
-    Returns:
-        Tuple[ec.EllipticCurvePublicKey, str]: (公開鍵, PEM形式の公開鍵)
-
-    Raises:
-        ValueError: 公開鍵の抽出に失敗した場合
-    """
-    try:
-        # attestationObjectから公開鍵を抽出（登録時のみ利用可能）
-        if "attestationObject" in assertion:
-            attestation_object_b64 = assertion["attestationObject"]
-            attestation_object_bytes = base64url_decode(attestation_object_b64)
-
-            from fido2.webauthn import AttestationObject
-            attestation_obj = AttestationObject(attestation_object_bytes)
-            auth_data = attestation_obj.auth_data
-
-            # 公開鍵を取得（COSE形式）
-            credential_public_key = auth_data.credential_data.public_key
-
-            # COSE鍵パラメータの定義
-            COSE_KEY_CRV = -1  # 曲線
-            COSE_KEY_X = -2    # X座標
-            COSE_KEY_Y = -3    # Y座標
-
-            cose_key_dict = dict(credential_public_key)
-            x_bytes = cose_key_dict.get(COSE_KEY_X)
-            y_bytes = cose_key_dict.get(COSE_KEY_Y)
-
-            if not x_bytes or not y_bytes:
-                raise ValueError("Missing X or Y coordinates in COSE key")
-
-            # X, Y座標が整数の場合はバイト列に変換
-            if isinstance(x_bytes, int):
-                x_bytes = x_bytes.to_bytes(32, byteorder='big')
-            if isinstance(y_bytes, int):
-                y_bytes = y_bytes.to_bytes(32, byteorder='big')
-
-            # cryptography.ECCPublicNumbersを使って公開鍵を構築
-            from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePublicNumbers, SECP256R1
-
-            x_int = int.from_bytes(x_bytes, byteorder='big')
-            y_int = int.from_bytes(y_bytes, byteorder='big')
-
-            public_numbers = EllipticCurvePublicNumbers(x_int, y_int, SECP256R1())
-            public_key = public_numbers.public_key(default_backend())
-
-            # PEM形式にエンコード
-            public_pem = public_key.public_bytes(
-                encoding=serialization.Encoding.PEM,
-                format=serialization.PublicFormat.SubjectPublicKeyInfo
-            ).decode('utf-8')
-
-            return public_key, public_pem
-        else:
-            raise ValueError("attestationObject not found in assertion")
-
-    except Exception as e:
-        logger.error(f"Failed to extract public key from WebAuthn assertion: {e}", exc_info=True)
-        raise ValueError(f"Failed to extract public key: {e}")
+# 削除: extract_public_key_from_webauthn_assertion 関数
+#
+# AP2完全準拠のため削除しました:
+#
+# WebAuthnの正しい動作:
+#   - Registration (登録): attestationObjectを含む → 公開鍵を抽出してDBに保存
+#   - Assertion (認証): attestationObjectを含まない → DB保存済みの公開鍵を使用
+#
+# この関数はRegistrationとAssertionを混同していました。
+# Assertion時にattestationObjectから公開鍵を抽出しようとするのは誤りです。
+#
+# 正しい実装:
+#   - 公開鍵はPasskey登録時にDBに保存済み
+#   - user_authorization生成時はDBから取得した public_key_cose を使用
+#   - create_user_authorization_vp() の public_key_cose パラメータは必須
 
 
 def create_user_authorization_vp(
@@ -165,8 +109,8 @@ def create_user_authorization_vp(
     cart_mandate: Dict[str, Any],
     payment_mandate_contents: Dict[str, Any],
     user_id: str,
-    payment_processor_id: str = "did:ap2:agent:payment_processor",
-    public_key_cose: Optional[str] = None
+    public_key_cose: str,
+    payment_processor_id: str = "did:ap2:agent:payment_processor"
 ) -> str:
     """
     WebAuthn assertionからSD-JWT-VC形式のuser_authorizationを生成（AP2仕様完全準拠）
@@ -182,6 +126,7 @@ def create_user_authorization_vp(
         cart_mandate: CartMandate（ハッシュ計算に使用）
         payment_mandate_contents: PaymentMandateの内容（ハッシュ計算に使用）
         user_id: ユーザーID
+        public_key_cose: COSE形式の公開鍵（base64エンコード済み、DB保存済みの値を使用）
         payment_processor_id: Payment ProcessorのDID（デフォルト: did:ap2:agent:payment_processor）
 
     Returns:
@@ -214,45 +159,34 @@ def create_user_authorization_vp(
         logger.info(f"[create_user_authorization_vp] cart_hash: {cart_hash[:16]}...")
         logger.info(f"[create_user_authorization_vp] payment_hash: {payment_hash[:16]}...")
 
-        # Step 3: 公開鍵を取得
-        public_key = None
+        # Step 3: COSE形式の公開鍵を復元（AP2完全準拠）
+        # WebAuthn Registration時にDBに保存された公開鍵を使用
+        try:
+            from fido2.cose import ES256
+            import cbor2
 
-        # 優先順位1: public_key_coseパラメータから公開鍵を復元
-        if public_key_cose:
-            try:
-                from fido2.cose import ES256
-                import cbor2
+            # COSE形式の公開鍵をデコード
+            cose_key_bytes = base64.b64decode(public_key_cose)
+            cose_key = cbor2.loads(cose_key_bytes)
 
-                # COSE形式の公開鍵をデコード
-                cose_key_bytes = base64.b64decode(public_key_cose)
-                cose_key = cbor2.loads(cose_key_bytes)
+            # COSE keyからECDSA公開鍵を復元
+            from cryptography.hazmat.primitives.asymmetric.ec import (
+                EllipticCurvePublicNumbers, SECP256R1
+            )
+            from cryptography.hazmat.backends import default_backend
 
-                # COSE keyからECDSA公開鍵を復元
-                from cryptography.hazmat.primitives.asymmetric.ec import (
-                    EllipticCurvePublicNumbers, SECP256R1
-                )
-                from cryptography.hazmat.backends import default_backend
+            x_bytes = cose_key[-2]  # x coordinate
+            y_bytes = cose_key[-3]  # y coordinate
+            x_int = int.from_bytes(x_bytes, byteorder='big')
+            y_int = int.from_bytes(y_bytes, byteorder='big')
 
-                x_bytes = cose_key[-2]  # x coordinate
-                y_bytes = cose_key[-3]  # y coordinate
-                x_int = int.from_bytes(x_bytes, byteorder='big')
-                y_int = int.from_bytes(y_bytes, byteorder='big')
+            public_numbers = EllipticCurvePublicNumbers(x_int, y_int, SECP256R1())
+            public_key = public_numbers.public_key(default_backend())
 
-                public_numbers = EllipticCurvePublicNumbers(x_int, y_int, SECP256R1())
-                public_key = public_numbers.public_key(default_backend())
-
-                logger.info(f"[create_user_authorization_vp] Restored public key from COSE format")
-            except Exception as e:
-                logger.warning(f"[create_user_authorization_vp] Failed to restore public key from COSE: {e}")
-
-        # 優先順位2: attestationObjectから公開鍵を抽出
-        if not public_key:
-            try:
-                public_key, public_pem = extract_public_key_from_webauthn_assertion(webauthn_assertion)
-                logger.info(f"[create_user_authorization_vp] Extracted public key from attestation")
-            except ValueError:
-                # attestationObjectがない場合（assertion時）
-                logger.warning("[create_user_authorization_vp] No attestationObject, and no public_key_cose provided")
+            logger.info(f"[create_user_authorization_vp] Restored public key from COSE format (DB)")
+        except Exception as e:
+            logger.error(f"[create_user_authorization_vp] Failed to restore public key from COSE: {e}", exc_info=True)
+            raise ValueError(f"Invalid public_key_cose format: {e}") from e
 
         # Step 4: Issuer-signed JWT を生成（公開鍵の確認）
         now = datetime.now(timezone.utc)
@@ -271,19 +205,16 @@ def create_user_authorization_vp(
             "nbf": int(now.timestamp()),
         }
 
-        # cnf claim（Confirmation Claim）: 公開鍵を含む
-        if public_key:
-            issuer_jwt_payload["cnf"] = {
-                "jwk": {
-                    "kty": "EC",
-                    "crv": "P-256",
-                    "x": base64url_encode(public_key.public_numbers().x.to_bytes(32, byteorder='big')),
-                    "y": base64url_encode(public_key.public_numbers().y.to_bytes(32, byteorder='big'))
-                }
+        # cnf claim（Confirmation Claim）: 公開鍵を含む（AP2完全準拠）
+        issuer_jwt_payload["cnf"] = {
+            "jwk": {
+                "kty": "EC",
+                "crv": "P-256",
+                "x": base64url_encode(public_key.public_numbers().x.to_bytes(32, byteorder='big')),
+                "y": base64url_encode(public_key.public_numbers().y.to_bytes(32, byteorder='big'))
             }
-            logger.info("[create_user_authorization_vp] cnf claim with JWK added to Issuer JWT")
-        else:
-            logger.warning("[create_user_authorization_vp] No public key available, cnf claim not added")
+        }
+        logger.info("[create_user_authorization_vp] cnf claim with JWK added to Issuer JWT")
 
         # Issuer JWTをエンコード（署名なし、デバイス鍵で署名するため）
         issuer_jwt_str = (
