@@ -1259,19 +1259,27 @@ class ShoppingAgent(BaseAgent):
             current_user: UserInDB = Depends(self.get_current_user_dependency)  # AP2準拠: Layer 1認証
         ):
             """
-            POST /cart/submit-signature - CartMandateへのWebAuthn署名を受信
+            POST /cart/submit-signature - CartMandateのユーザー確認とWebAuthn認証を受信
 
             AP2プロトコル完全準拠（Human-Presentフロー）:
-            - Layer 1認証: JWT Bearer Token（HTTP Session）
-            - Layer 2認証: WebAuthn署名（Mandate Signature）
-            - user_id = JWT.sub（認証済みユーザーID）
-            - トラステッドサーフェス: WebAuthn/Passkey
+            - AP2仕様: CartMandateにはuser_authorizationフィールドは存在しない
+            - WebAuthn assertionは後でPaymentMandate.user_authorizationとして使用
+            - user_cart_confirmation_required=trueの場合、ユーザー確認が必須
 
-            フロー:
+            認証レイヤー:
+            - Layer 1認証: JWT Bearer Token（HTTP Session）
+            - Layer 2認証: WebAuthn署名（Trusted Device Surface）
+            - user_id = JWT.sub（認証済みユーザーID）
+
+            フロー（AP2仕様準拠）:
             1. Merchantが署名済みのCartMandateをユーザーに提示
-            2. ユーザーがWebAuthnで署名（Layer 2）
-            3. このエンドポイントで署名を受信・検証
-            4. PaymentMandate作成へ進む
+            2. ユーザーがCartMandate内容を確認し、WebAuthnで認証（Layer 2）
+            3. このエンドポイントでWebAuthn assertionを受信・検証
+            4. WebAuthn assertionをセッションに保存（PaymentMandate作成時に使用）
+            5. PaymentMandate作成時、user_authorizationフィールドを生成
+               - user_authorization = VP(CartMandate_hash, PaymentMandate_hash)
+
+            注意: CartMandateには署名を追加しません（AP2仕様に従い、PaymentMandateにのみ追加）
 
             リクエスト:
             - Header: Authorization: Bearer <JWT>
@@ -1293,7 +1301,7 @@ class ShoppingAgent(BaseAgent):
             レスポンス:
             {
                 "status": "success",
-                "message": "CartMandate signed successfully",
+                "message": "CartMandate confirmed successfully",
                 "next_step": "payment_mandate_creation"
             }
             """
@@ -1313,22 +1321,23 @@ class ShoppingAgent(BaseAgent):
                 session = await self._get_or_create_session(session_id, user_id=user_id)
 
                 logger.info(
-                    f"[submit_cart_signature] Received CartMandate signature: "
-                    f"cart_id={cart_mandate.get('id')}, "
+                    f"[submit_cart_signature] Received CartMandate user confirmation: "
+                    f"cart_id={cart_mandate.get('contents', {}).get('id', 'unknown')}, "
                     f"session_id={session_id}"
                 )
 
-                # ✅ AP2プロトコル完全準拠: Credential ProviderでWebAuthn署名検証
-                # AP2仕様: CartMandate自体にuser_signature_requiredはfalse
-                # ユーザーの意思確認はWebAuthn（trusted device surface）で行われる
-                # WebAuthn assertionは後でPaymentMandate作成時のuser_authorizationとして使用
+                # ✅ AP2プロトコル完全準拠: Credential ProviderでWebAuthn認証検証
+                # AP2仕様:
+                # - CartMandateにはuser_authorizationフィールドは存在しない
+                # - user_cart_confirmation_required=trueの場合、ユーザー確認が必須
+                # - WebAuthn assertionは後でPaymentMandate.user_authorizationとして使用
                 #
                 # 設計根拠:
-                # 1. AP2仕様: Mandate署名はCredential Providerで検証される
+                # 1. AP2仕様: WebAuthn認証はCredential Providerで検証される
                 # 2. Credential Providerはハードウェアバックドキーの公開鍵を管理
                 # 3. Shopping AgentはCredential Providerに検証をデリゲート
 
-                # SignatureHandlersを使用してCredential Providerで署名検証
+                # SignatureHandlersを使用してCredential Providerで認証検証
                 verification_result = await SignatureHandlers.verify_cart_signature_with_cp(
                     http_client=self.http_client,
                     credential_provider_url=self.credential_provider_url,
@@ -1337,13 +1346,12 @@ class ShoppingAgent(BaseAgent):
                     user_id=user_id
                 )
 
-                # AP2完全準拠: CartMandateは変更せず、Merchant署名のままPayment Processorに送信
-                # User署名情報（WebAuthn assertion）はPaymentMandateのuser_authorizationに含める
-                # CartMandateの内容を変更すると、merchant_authorization JWTのcart_hashと一致しなくなる
+                # AP2完全準拠: CartMandateは変更しない（user_authorizationフィールドは存在しない）
+                # WebAuthn assertionはPaymentMandate.user_authorizationとして使用
+                # CartMandateはMerchant署名のままPayment Processorに送信
 
                 # WebAuthn assertionをセッションに保存（PaymentMandate生成時にuser_authorization作成に使用）
                 session["cart_webauthn_assertion"] = webauthn_assertion
-                # CartMandateは変更せずそのまま保持（Merchant署名時のハッシュを維持）
 
                 # LangGraphベストプラクティス: stepの更新はLangGraph Checkpointerに任せる
                 # データベースには、WebAuthn assertionのみを保存（Checkpointerが管理しないデータ）
@@ -1353,14 +1361,14 @@ class ShoppingAgent(BaseAgent):
                 await self._update_session(session_id, session)
 
                 logger.info(
-                    f"[submit_cart_signature] CartMandate signed by user: "
-                    f"cart_id={cart_mandate.get('id')}, webauthn_assertion saved"
+                    f"[submit_cart_signature] CartMandate confirmed by user: "
+                    f"cart_id={cart_mandate.get('contents', {}).get('id', 'unknown')}, webauthn_assertion saved"
                 )
 
-                # AP2完全準拠: CartMandate署名完了後、次のLangGraph実行でPaymentMandate作成へ進む
+                # AP2完全準拠: CartMandate確認完了後、次のLangGraph実行でPaymentMandate作成へ進む
                 return {
                     "status": "success",
-                    "message": "CartMandate signed successfully",
+                    "message": "CartMandate confirmed successfully",
                     "next_step": "payment_mandate_creation"  # フロントエンド表示用（実際の状態遷移はLangGraphが管理）
                 }
 
@@ -1368,7 +1376,7 @@ class ShoppingAgent(BaseAgent):
                 raise
             except Exception as e:
                 logger.error(f"[submit_cart_signature] Error: {e}", exc_info=True)
-                raise HTTPException(status_code=500, detail=f"Failed to process CartMandate signature: {e}")
+                raise HTTPException(status_code=500, detail=f"Failed to process CartMandate confirmation: {e}")
 
         @self.app.post("/payment/submit-attestation")
         async def submit_payment_attestation(
