@@ -68,3 +68,4 @@ keys/*.key
 keys/*.enc
 !keys/.gitkeep
 data/receipts/txn_*.pdf
+data/did_documents/*.json
