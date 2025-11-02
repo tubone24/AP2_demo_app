@@ -77,7 +77,8 @@ async def handle_intent_mandate(agent: 'MerchantAgent', message: A2AMessage) -> 
             cart_candidates = await agent.langgraph_agent.create_cart_candidates(
                 intent_mandate=intent_mandate,
                 user_id=intent_mandate.get("user_id", "unknown"),
-                session_id=str(uuid.uuid4())
+                session_id=str(uuid.uuid4()),
+                shipping_address=shipping_address  # AP2準拠: 配送先住所を渡す
             )
         else:
             # ルールベースカート生成（AI無効時）

@@ -91,6 +91,7 @@ class MerchantAgentState(TypedDict):
         intent_mandate: IntentMandate（Shopping Agentから受信）
         user_id: ユーザーID
         session_id: セッションID
+        shipping_address: 配送先住所（AP2準拠）
 
     中間データ:
         available_products: データベース検索結果
@@ -104,6 +105,7 @@ class MerchantAgentState(TypedDict):
     intent_mandate: Dict[str, Any]
     user_id: str
     session_id: str
+    shipping_address: Dict[str, Any]  # AP2準拠: 配送先住所
 
     # 中間データ
     available_products: List[Dict[str, Any]]
@@ -246,7 +248,8 @@ class MerchantLangGraphAgent:
         self,
         intent_mandate: Dict[str, Any],
         user_id: str,
-        session_id: str
+        session_id: str,
+        shipping_address: Dict[str, Any]
     ) -> List[Dict[str, Any]]:
         """カート候補を生成（エントリーポイント）
 
@@ -254,6 +257,7 @@ class MerchantLangGraphAgent:
             intent_mandate: IntentMandate
             user_id: ユーザーID
             session_id: セッションID
+            shipping_address: 配送先住所（AP2準拠）
 
         Returns:
             複数のCartMandate候補（通常3つ、署名済み）
@@ -266,6 +270,7 @@ class MerchantLangGraphAgent:
             "intent_mandate": intent_mandate,
             "user_id": user_id,
             "session_id": session_id,
+            "shipping_address": shipping_address,  # AP2準拠: 配送先住所
             "available_products": [],
             "inventory_status": {},
             "user_preferences": {},

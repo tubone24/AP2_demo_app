@@ -221,6 +221,10 @@ async def check_inventory(params: Dict[str, Any]) -> Dict[str, Any]:
             "shipping_address": {
                 "type": "object",
                 "description": "AP2準拠のContactAddress"
+            },
+            "intent_mandate_id": {
+                "type": "string",
+                "description": "IntentMandate ID（AP2準拠）"
             }
         },
         "required": ["cart_plan", "products"]
@@ -230,7 +234,7 @@ async def build_cart_mandates(params: Dict[str, Any]) -> Dict[str, Any]:
     """AP2準拠のCartMandateを構築
 
     Args:
-        params: {"cart_plan": {...}, "products": [...], "shipping_address": {...}}
+        params: {"cart_plan": {...}, "products": [...], "shipping_address": {...}, "intent_mandate_id": "..."}
 
     Returns:
         {"cart_mandate": {...}}  # 未署名
@@ -238,6 +242,7 @@ async def build_cart_mandates(params: Dict[str, Any]) -> Dict[str, Any]:
     cart_plan = params["cart_plan"]
     products = params["products"]
     shipping_address = params.get("shipping_address")
+    intent_mandate_id = params.get("intent_mandate_id")  # AP2準拠: IntentMandate IDを取得
 
     # 商品IDマッピング
     products_map = {p["id"]: p for p in products}
@@ -266,7 +271,7 @@ async def build_cart_mandates(params: Dict[str, Any]) -> Dict[str, Any]:
 
     # AP2準拠のCartMandate構築（ヘルパーメソッドに委譲）
     session_data = {
-        "intent_mandate_id": params.get("_session_data", {}).get("intent_mandate_id"),
+        "intent_mandate_id": intent_mandate_id,  # AP2準拠: IntentMandate IDを設定
         "cart_name": cart_plan.get("name", "カート"),
         "cart_description": cart_plan.get("description", "")
     }
