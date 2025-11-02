@@ -49,19 +49,37 @@ AGENTS = [
         "agent_id": "shopping_agent",
         "did": "did:ap2:agent:shopping_agent",
         "name": "Shopping Agent",
-        "env_var": "AP2_SHOPPING_AGENT_PASSPHRASE"
+        "env_var": "AP2_SHOPPING_AGENT_PASSPHRASE",
+        "service_endpoint": {
+            "type": "A2AEndpoint",
+            "url": "http://shopping_agent:8000/a2a",
+            "name": "Shopping Agent A2A Endpoint",
+            "description": "A2A通信エンドポイント（ユーザー購買代理エージェント）"
+        }
     },
     {
         "agent_id": "merchant_agent",
         "did": "did:ap2:agent:merchant_agent",
         "name": "Merchant Agent",
-        "env_var": "AP2_MERCHANT_AGENT_PASSPHRASE"
+        "env_var": "AP2_MERCHANT_AGENT_PASSPHRASE",
+        "service_endpoint": {
+            "type": "A2AEndpoint",
+            "url": "http://merchant_agent:8001/a2a",
+            "name": "Merchant Agent A2A Endpoint",
+            "description": "A2A通信エンドポイント（マーチャント代理エージェント）"
+        }
     },
     {
         "agent_id": "merchant",
         "did": "did:ap2:merchant:mugibo_merchant",
         "name": "Merchant",
-        "env_var": "AP2_MERCHANT_PASSPHRASE"
+        "env_var": "AP2_MERCHANT_PASSPHRASE",
+        "service_endpoint": {
+            "type": "A2AEndpoint",
+            "url": "http://merchant:8002/a2a",
+            "name": "Merchant A2A Endpoint",
+            "description": "A2A通信エンドポイント（むぎぼーショップ）"
+        }
     },
     {
         "agent_id": "credential_provider",
@@ -95,7 +113,13 @@ AGENTS = [
         "agent_id": "payment_processor",
         "did": "did:ap2:agent:payment_processor",
         "name": "Payment Processor",
-        "env_var": "AP2_PAYMENT_PROCESSOR_PASSPHRASE"
+        "env_var": "AP2_PAYMENT_PROCESSOR_PASSPHRASE",
+        "service_endpoint": {
+            "type": "A2AEndpoint",
+            "url": "http://payment_processor:8004/a2a",
+            "name": "Payment Processor A2A Endpoint",
+            "description": "A2A通信エンドポイント（支払い処理プロセッサー）"
+        }
     }
 ]
 
@@ -198,6 +222,10 @@ class KeyInitializer:
         """
         W3C DID準拠のDID Documentを生成（ECDSA + Ed25519の両方の鍵を含む）
 
+        AP2完全準拠:
+        - publicKeyPem形式（後方互換性）
+        - publicKeyMultibase形式（W3C DID仕様準拠）
+
         Args:
             agent_info: エージェント情報
             ecdsa_public_key: ECDSA公開鍵（JWT署名用）
@@ -220,6 +248,39 @@ class KeyInitializer:
             format=serialization.PublicFormat.SubjectPublicKeyInfo
         ).decode('utf-8')
 
+        # AP2完全準拠: publicKeyMultibase形式を生成
+        # crypto.pyのpublic_key_to_multibase()メソッドを使用
+        try:
+            from v2.common.crypto import KeyManager
+            key_manager_temp = KeyManager()
+            ecdsa_multibase = key_manager_temp.public_key_to_multibase(ecdsa_public_key)
+            ed25519_multibase = key_manager_temp.public_key_to_multibase(ed25519_public_key)
+            print(f"  ✓ publicKeyMultibase生成: ECDSA={ecdsa_multibase[:20]}..., Ed25519={ed25519_multibase[:20]}...")
+        except Exception as e:
+            print(f"  ⚠ publicKeyMultibase生成エラー: {e}")
+            # フォールバック：PEMのみ
+            ecdsa_multibase = None
+            ed25519_multibase = None
+
+        # DIDドキュメント構築
+        verification_method_1 = {
+            "id": f"{did}#key-1",
+            "type": "EcdsaSecp256r1VerificationKey2019",
+            "controller": did,
+            "publicKeyPem": ecdsa_pem
+        }
+        if ecdsa_multibase:
+            verification_method_1["publicKeyMultibase"] = ecdsa_multibase
+
+        verification_method_2 = {
+            "id": f"{did}#key-2",
+            "type": "Ed25519VerificationKey2020",
+            "controller": did,
+            "publicKeyPem": ed25519_pem
+        }
+        if ed25519_multibase:
+            verification_method_2["publicKeyMultibase"] = ed25519_multibase
+
         did_doc = {
             "@context": [
                 "https://www.w3.org/ns/did/v1",
@@ -228,18 +289,8 @@ class KeyInitializer:
             ],
             "id": did,
             "verificationMethod": [
-                {
-                    "id": f"{did}#key-1",
-                    "type": "EcdsaSecp256r1VerificationKey2019",
-                    "controller": did,
-                    "publicKeyPem": ecdsa_pem
-                },
-                {
-                    "id": f"{did}#key-2",
-                    "type": "Ed25519VerificationKey2020",
-                    "controller": did,
-                    "publicKeyPem": ed25519_pem
-                }
+                verification_method_1,
+                verification_method_2
             ],
             "authentication": [f"{did}#key-1", f"{did}#key-2"],
             "assertionMethod": [f"{did}#key-1", f"{did}#key-2"],
@@ -250,17 +301,27 @@ class KeyInitializer:
         # AP2完全準拠: サービスエンドポイントを追加（存在する場合）
         if "service_endpoint" in agent_info:
             service_ep = agent_info["service_endpoint"]
-            did_doc["service"] = [
-                {
-                    "id": f"{did}#{service_ep['type'].lower().replace('ap2', '')}",
-                    "type": service_ep["type"],
-                    "serviceEndpoint": service_ep["url"],
-                    "name": service_ep["name"],
-                    "description": service_ep["description"],
-                    "supported_methods": service_ep["supported_methods"],
-                    "logo_url": service_ep["logo_url"]
-                }
-            ]
+
+            # W3C DID仕様準拠: serviceフィールドを構築
+            # 必須フィールド: id, type, serviceEndpoint
+            # オプショナルフィールド: name, description, supported_methods, logo_url
+            service_entry = {
+                "id": f"{did}#{service_ep['type'].lower().replace('ap2', '')}",
+                "type": service_ep["type"],
+                "serviceEndpoint": service_ep["url"]
+            }
+
+            # オプショナルフィールドを追加（存在する場合のみ）
+            if "name" in service_ep:
+                service_entry["name"] = service_ep["name"]
+            if "description" in service_ep:
+                service_entry["description"] = service_ep["description"]
+            if "supported_methods" in service_ep:
+                service_entry["supported_methods"] = service_ep["supported_methods"]
+            if "logo_url" in service_ep:
+                service_entry["logo_url"] = service_ep["logo_url"]
+
+            did_doc["service"] = [service_entry]
 
         return did_doc
 

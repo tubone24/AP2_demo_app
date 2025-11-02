@@ -133,10 +133,10 @@ def canonicalize_a2a_message(
     a2a_message_dict: Dict[str, Any]
 ) -> str:
     """
-    A2Aメッセージを正規化
+    A2Aメッセージを正規化（AP2完全準拠）
 
     署名対象データを作成：
-    - header.proof または header.signature を除外
+    - header.proof を除外
     - その他のフィールドは保持
 
     Args:
@@ -152,11 +152,10 @@ def canonicalize_a2a_message(
         else:
             message_copy[key] = value
 
-    # header.proof と header.signature を除外
+    # header.proof を除外（AP2完全準拠）
     if 'header' in message_copy and isinstance(message_copy['header'], dict):
         header_copy = message_copy['header'].copy()
         header_copy.pop('proof', None)
-        header_copy.pop('signature', None)
         message_copy['header'] = header_copy
 
     return canonicalize_json(message_copy)
@@ -510,19 +509,6 @@ class KeyManager:
         """
         public_key = self.load_public_key(key_id)
         return self.public_key_to_pem(public_key)
-
-    def public_key_to_base64(self, public_key: Any) -> str:
-        """公開鍵をBase64文字列に変換（ECDSA/Ed25519両対応）"""
-        pem = public_key.public_bytes(
-            encoding=serialization.Encoding.PEM,
-            format=serialization.PublicFormat.SubjectPublicKeyInfo
-        )
-        return base64.b64encode(pem).decode('utf-8')
-
-    def public_key_from_base64(self, base64_str: str) -> Any:
-        """Base64文字列から公開鍵を復元（ECDSA/Ed25519両対応）"""
-        pem = base64.b64decode(base64_str.encode('utf-8'))
-        return serialization.load_pem_public_key(pem, backend=self.backend)
 
     def public_key_to_multibase(self, public_key: Any) -> str:
         """
@@ -993,22 +979,22 @@ class SignatureManager:
         """
         A2Aメッセージ全体に署名（メッセージレベル署名）
 
-        A2A仕様準拠：
-        - header.proof と header.signature を除外してCanonical JSONから署名を作成
+        AP2完全準拠：
+        - header.proof を除外してCanonical JSONから署名を作成
         - canonicalize_a2a_message() 関数を使用
         - Ed25519署名を使用（より高速で安全、ECDSA P-256より短い署名長）
 
         Args:
             a2a_message_dict: A2Aメッセージの辞書表現（headerを含む）
             sender_key_id: 送信者の秘密鍵ID
-            algorithm: 署名アルゴリズム（デフォルト: ED25519、後方互換性のためECDSAもサポート）
+            algorithm: 署名アルゴリズム（デフォルト: ED25519、ECDSAもサポート）
 
         Returns:
             Signature: メッセージ署名
         """
         logger.debug(f"Signing A2A message (sender: {sender_key_id}, algorithm: {algorithm})")
 
-        # Canonical JSON文字列を生成（header.proof/signatureを除外）
+        # Canonical JSON文字列を生成（header.proofを除外、AP2完全準拠）
         canonical_json = canonicalize_a2a_message(a2a_message_dict)
         logger.debug(f"[SIGN] Canonical JSON length: {len(canonical_json)}, first 200 chars: {canonical_json[:200]}")
 
@@ -1023,8 +1009,8 @@ class SignatureManager:
         """
         A2Aメッセージの署名を検証
 
-        A2A仕様準拠：
-        - header.proof と header.signature を除外してCanonical JSONで検証
+        AP2完全準拠：
+        - header.proof を除外してCanonical JSONで検証
         - canonicalize_a2a_message() 関数を使用
 
         Args:
@@ -1036,7 +1022,7 @@ class SignatureManager:
         """
         logger.debug("Verifying A2A message signature")
 
-        # Canonical JSON文字列を生成（header.proof/signatureを除外）
+        # Canonical JSON文字列を生成（header.proofを除外、AP2完全準拠）
         canonical_json = canonicalize_a2a_message(a2a_message_dict)
         logger.debug(f"[VERIFY] Canonical JSON length: {len(canonical_json)}, first 200 chars: {canonical_json[:200]}")
 
@@ -1593,7 +1579,7 @@ class DeviceAttestationManager:
             raise CryptoError(f"デバイス秘密鍵が見つかりません: {device_key_id}")
 
         device_public_key = device_private_key.public_key()
-        device_public_key_base64 = self.key_manager.public_key_to_base64(device_public_key)
+        device_public_key_multibase = self.key_manager.public_key_to_multibase(device_public_key)
 
         if timestamp is None:
             timestamp = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
@@ -1622,7 +1608,7 @@ class DeviceAttestationManager:
             attestation_type=attestation_type,
             attestation_value=attestation_value,
             timestamp=timestamp,
-            device_public_key=device_public_key_base64,
+            device_public_key_multibase=device_public_key_multibase,
             challenge=challenge,
             platform=platform,
             os_version=os_version,
@@ -1686,8 +1672,8 @@ class DeviceAttestationManager:
             data_hash = hashlib.sha256(json_str.encode('utf-8')).digest()
 
             # 3. デバイスの公開鍵で署名を検証
-            device_public_key = self.key_manager.public_key_from_base64(
-                device_attestation.device_public_key
+            device_public_key = self.key_manager.public_key_from_multibase(
+                device_attestation.device_public_key_multibase
             )
             attestation_signature = base64.b64decode(device_attestation.attestation_value.encode('utf-8'))
 

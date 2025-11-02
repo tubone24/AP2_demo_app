@@ -15,7 +15,7 @@ import logging
 # v2の暗号化モジュールとモデルをインポート
 from common.crypto import SignatureManager, KeyManager
 from common.models import (
-    A2AMessage, A2AMessageHeader, A2ADataPart, A2ASignature, A2AProof, Signature,
+    A2AMessage, A2AMessageHeader, A2ADataPart, A2AProof, Signature,
     A2AArtifact, A2AArtifactPart
 )
 from common.did_resolver import DIDResolver
@@ -75,7 +75,7 @@ class A2AMessageHandler:
         """
         A2Aメッセージの署名を検証
 
-        A2A仕様準拠：proof構造を優先的に使用、後方互換性のためsignatureもサポート
+        AP2完全準拠：proof構造のみサポート
 
         専門家の指摘対応：
         1. algorithm（alg）の検証 - ECDSA/Ed25519のみ許可
@@ -177,14 +177,12 @@ class A2AMessageHandler:
                         # DID解決したPEM文字列をpublicKeyMultibase形式に変換
                         # AP2完全準拠：multibase形式に統一
                         from common.crypto import KeyManager
-                        import base64
+                        from cryptography.hazmat.primitives import serialization
 
                         # PEM文字列から公開鍵オブジェクトを復元
                         key_manager_temp = KeyManager()
                         pem_bytes = resolved_public_key_pem.encode('utf-8')
-                        public_key_obj = key_manager_temp.public_key_from_base64(
-                            base64.b64encode(pem_bytes).decode('utf-8')
-                        )
+                        public_key_obj = serialization.load_pem_public_key(pem_bytes)
 
                         # publicKeyMultibase形式に変換
                         public_key_multibase_to_verify = key_manager_temp.public_key_to_multibase(public_key_obj)
@@ -233,13 +231,9 @@ class A2AMessageHandler:
             except Exception as e:
                 logger.error(f"[A2AHandler] proof署名検証エラー: {e}", exc_info=True)
                 return False
-
-        # AP2完全準拠：後方互換性は不要（旧形式のsignature削除）
-        elif message.header.signature:
-            logger.error("[A2AHandler] 旧形式のsignature検出。AP2完全準拠のため、proof構造のみサポートします。")
-            return False
         else:
-            logger.warning("[A2AHandler] メッセージにproof/signatureがありません")
+            # AP2完全準拠：proof構造のみサポート
+            logger.warning("[A2AHandler] メッセージにproofがありません（AP2完全準拠のためproof必須）")
             return False
 
     async def handle_message(self, message: A2AMessage) -> Dict[str, Any]:

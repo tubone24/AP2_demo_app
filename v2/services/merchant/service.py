@@ -139,6 +139,50 @@ class MerchantService(BaseAgent):
         Merchant固有エンドポイントの登録
         """
 
+        # ========================================
+        # W3C DID仕様準拠: DIDドキュメント公開エンドポイント
+        # ========================================
+
+        @self.app.get("/.well-known/did.json")
+        async def get_did_document():
+            """
+            GET /.well-known/did.json - DIDドキュメント取得
+
+            W3C DID仕様準拠:
+            - DIDドキュメントをHTTP経由で公開
+            - リモート解決を可能にする（Docker内部DNS対応）
+            - 公開鍵の検証に使用
+
+            AP2プロトコル要件:
+            - 各エージェントのDIDを公開し、相互運用性を向上
+            - did:ap2:merchant:mugibo_merchant → http://merchant:8002/.well-known/did.json
+            """
+            import json
+            from pathlib import Path
+
+            # DIDドキュメントファイルパスを解決
+            did_docs_dir = Path("/app/v2/data/did_documents")
+            did_doc_file = did_docs_dir / "merchant_did.json"
+
+            if not did_doc_file.exists():
+                logger.error(f"[get_did_document] DID document not found: {did_doc_file}")
+                raise HTTPException(
+                    status_code=404,
+                    detail="DID document not found"
+                )
+
+            # DIDドキュメントを読み込んで返却
+            try:
+                did_doc = json.loads(did_doc_file.read_text())
+                logger.debug(f"[get_did_document] Returning DID document: {did_doc.get('id')}")
+                return did_doc
+            except Exception as e:
+                logger.error(f"[get_did_document] Failed to read DID document: {e}")
+                raise HTTPException(
+                    status_code=500,
+                    detail="Failed to read DID document"
+                )
+
         @self.app.post("/sign/cart")
         async def sign_cart_mandate(sign_request: Dict[str, Any]):
             """

@@ -45,17 +45,6 @@ from common.mandate_types import (
 # A2A Message Models (demo_app_v2.md準拠)
 # ========================================
 
-class A2ASignature(BaseModel):
-    """
-    A2Aメッセージの署名（旧形式：後方互換性のため保持）
-
-    非推奨: 新規実装ではA2AProofを使用してください
-    """
-    algorithm: Literal["ed25519", "ecdsa"] = "ed25519"
-    public_key: str = Field(..., description="BASE64エンコードされた公開鍵")
-    value: str = Field(..., description="BASE64エンコードされた署名値")
-
-
 class A2AProof(BaseModel):
     """
     A2Aメッセージの署名証明（Proof）
@@ -143,7 +132,7 @@ class AttestationType(str, Enum):
 
 class DeviceAttestation(BaseModel):
     """
-    デバイス証明
+    デバイス証明（AP2完全準拠）
 
     AP2ステップ20-23で使用される、デバイスが信頼されており
     取引が改ざんされていないことを証明する暗号学的証拠
@@ -152,7 +141,7 @@ class DeviceAttestation(BaseModel):
     attestation_type: AttestationType = Field(..., description="認証タイプ")
     attestation_value: str = Field(..., description="BASE64エンコードされた証明値")
     timestamp: str = Field(..., description="証明日時（ISO 8601）")
-    device_public_key: str = Field(..., description="デバイスの公開鍵（BASE64）")
+    device_public_key_multibase: str = Field(..., description="デバイスの公開鍵（publicKeyMultibase形式）")
     challenge: str = Field(..., description="リプレイ攻撃対策のチャレンジ値")
     platform: str = Field(..., description="プラットフォーム（iOS, Android, Web等）")
     os_version: Optional[str] = Field(None, description="OSバージョン")
@@ -171,7 +160,7 @@ class DeviceAttestation(BaseModel):
                 "attestation_type": "webauthn",
                 "attestation_value": "MEUCIQDx...",
                 "timestamp": "2025-10-16T12:34:56Z",
-                "device_public_key": "LS0tLS1CRU...",
+                "device_public_key_multibase": "z2oAtgCswLVHGBgbaEmaRp6m1zmj3jx4tf1LgSCKreVPjwRm1",
                 "challenge": "random_challenge_abc123",
                 "platform": "Web",
                 "os_version": "macOS 14.0",
@@ -247,18 +236,24 @@ class VerificationMethod(BaseModel):
     W3C DID仕様準拠：公開鍵とその用途を定義
     専門家の指摘対応：DIDベースの公開鍵解決を実現
 
+    AP2完全準拠:
+    - publicKeyPem形式（後方互換性）
+    - publicKeyMultibase形式（W3C DID仕様準拠）
+
     Example:
     {
       "id": "did:ap2:agent:shopping_agent#key-1",
       "type": "EcdsaSecp256k1VerificationKey2019",
       "controller": "did:ap2:agent:shopping_agent",
-      "publicKeyPem": "-----BEGIN PUBLIC KEY-----..."
+      "publicKeyPem": "-----BEGIN PUBLIC KEY-----...",
+      "publicKeyMultibase": "z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH"
     }
     """
     id: str = Field(..., description="検証メソッドID（DIDフラグメント形式）")
     type: str = Field(..., description="公開鍵タイプ（例: EcdsaSecp256k1VerificationKey2019）")
     controller: str = Field(..., description="コントローラーDID")
     publicKeyPem: str = Field(..., description="PEM形式の公開鍵")
+    publicKeyMultibase: Optional[str] = Field(None, description="Multibase形式の公開鍵（W3C DID仕様準拠、例: z6Mk...）")
 
     class Config:
         json_schema_extra = {
@@ -277,7 +272,16 @@ class ServiceEndpoint(BaseModel):
 
     W3C DID仕様準拠：エンティティが提供するサービスの情報
 
-    Example:
+    A2A Endpoint の場合:
+    {
+      "id": "did:ap2:agent:shopping_agent#a2aendpoint",
+      "type": "A2AEndpoint",
+      "serviceEndpoint": "http://shopping_agent:8000/a2a",
+      "name": "Shopping Agent A2A Endpoint",
+      "description": "A2A通信エンドポイント（ユーザー購買代理エージェント）"
+    }
+
+    Merchant Agent の場合:
     {
       "id": "did:ap2:merchant:nike#merchant-agent",
       "type": "AP2MerchantAgent",
@@ -298,7 +302,7 @@ class ServiceEndpoint(BaseModel):
     }
     """
     id: str = Field(..., description="サービスID（DIDフラグメント形式）")
-    type: str = Field(..., description="サービスタイプ（例: AP2MerchantAgent, AP2CredentialProvider）")
+    type: str = Field(..., description="サービスタイプ（例: A2AEndpoint, AP2MerchantAgent, AP2CredentialProvider）")
     serviceEndpoint: str = Field(..., description="サービスエンドポイントURL")
     name: Optional[str] = Field(None, description="サービス名（人間可読）")
     description: Optional[str] = Field(None, description="サービスの説明")
@@ -407,11 +411,8 @@ class A2AMessageHeader(BaseModel):
     nonce: str = Field(..., description="リプレイ攻撃対策用のワンタイムノンス（hex形式、32バイト以上推奨）")
     schema_version: str = Field(default="0.9", description="スキーマバージョン")
 
-    # A2A仕様準拠：proof構造を使用（推奨）
+    # A2A仕様準拠：proof構造を使用（AP2完全準拠）
     proof: Optional[A2AProof] = Field(None, description="メッセージ全体の署名証明（A2A仕様準拠）")
-
-    # 旧形式：後方互換性のため保持（非推奨）
-    signature: Optional[A2ASignature] = Field(None, description="[非推奨] メッセージ全体の署名（後方互換性のため保持）")
 
 
 class A2AArtifactPart(BaseModel):
@@ -655,9 +656,9 @@ class CartSignRequest(BaseModel):
 
 
 class CartSignResponse(BaseModel):
-    """POST /sign/cart レスポンス"""
+    """POST /sign/cart レスポンス（AP2完全準拠）"""
     signed_cart_mandate: Dict[str, Any] = Field(..., description="署名済みCartMandate")
-    merchant_signature: A2ASignature
+    merchant_signature: Signature
 
 
 # ========================================
@@ -973,7 +974,6 @@ class TokenData(BaseModel):
 
 __all__ = [
     # A2A Message Models
-    "A2ASignature",
     "A2AProof",
 
     # Cryptographic Models
