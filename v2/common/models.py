@@ -236,18 +236,24 @@ class VerificationMethod(BaseModel):
     W3C DID仕様準拠：公開鍵とその用途を定義
     専門家の指摘対応：DIDベースの公開鍵解決を実現
 
+    AP2完全準拠:
+    - publicKeyPem形式（後方互換性）
+    - publicKeyMultibase形式（W3C DID仕様準拠）
+
     Example:
     {
       "id": "did:ap2:agent:shopping_agent#key-1",
       "type": "EcdsaSecp256k1VerificationKey2019",
       "controller": "did:ap2:agent:shopping_agent",
-      "publicKeyPem": "-----BEGIN PUBLIC KEY-----..."
+      "publicKeyPem": "-----BEGIN PUBLIC KEY-----...",
+      "publicKeyMultibase": "z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH"
     }
     """
     id: str = Field(..., description="検証メソッドID（DIDフラグメント形式）")
     type: str = Field(..., description="公開鍵タイプ（例: EcdsaSecp256k1VerificationKey2019）")
     controller: str = Field(..., description="コントローラーDID")
     publicKeyPem: str = Field(..., description="PEM形式の公開鍵")
+    publicKeyMultibase: Optional[str] = Field(None, description="Multibase形式の公開鍵（W3C DID仕様準拠、例: z6Mk...）")
 
     class Config:
         json_schema_extra = {

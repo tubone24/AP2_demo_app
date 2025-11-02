@@ -101,7 +101,8 @@ class DIDResolver:
                             id=vm["id"],
                             type=vm["type"],
                             controller=vm["controller"],
-                            publicKeyPem=vm["publicKeyPem"]
+                            publicKeyPem=vm["publicKeyPem"],
+                            publicKeyMultibase=vm.get("publicKeyMultibase")  # AP2完全準拠
                         ))
 
                     # AP2完全準拠: serviceフィールドを抽出
@@ -232,15 +233,21 @@ class DIDResolver:
 
     async def resolve_async(self, did: str) -> Optional[DIDDocument]:
         """
-        DIDからDIDドキュメントを解決（非同期版・Phase 2実装）
+        DIDからDIDドキュメントを解決（非同期版・AP2完全準拠）
 
         解決順序:
         1. インメモリキャッシュから取得
-        2. Merchant DIDの場合: MerchantRegistryから解決
-        3. Agent DIDの場合: ローカルレジストリから取得
+        2. HTTP解決: .well-known/did.jsonエンドポイントから取得（Docker内部DNS対応）
+        3. Merchant DIDの場合: MerchantRegistryから解決（フォールバック）
+        4. ローカルファイルから取得（フォールバック）
+
+        W3C DID仕様準拠:
+        - did:ap2:agent:merchant_agent → http://merchant_agent:8001/.well-known/did.json
+        - did:ap2:merchant:mugibo_merchant → http://merchant:8002/.well-known/did.json
+        - Docker内部DNSでホスト名解決（相互運用性向上）
 
         Args:
-            did: 解決するDID（例: did:ap2:agent:shopping_agent, did:ap2:merchant:nike）
+            did: 解決するDID（例: did:ap2:agent:shopping_agent, did:ap2:merchant:mugibo_merchant）
 
         Returns:
             Optional[DIDDocument]: DIDドキュメント（存在しない場合はNone）
@@ -251,7 +258,15 @@ class DIDResolver:
             logger.debug(f"[DIDResolver] Resolved from cache: {did}")
             return did_doc
 
-        # 2. Merchant DIDの場合: MerchantRegistryから解決（Phase 2）
+        # 2. HTTP解決を試行（AP2完全準拠: リモートDID解決）
+        did_doc = await self._resolve_via_http(did)
+        if did_doc:
+            # キャッシュに保存
+            self._did_registry[did] = did_doc
+            logger.info(f"[DIDResolver] Resolved via HTTP: {did}")
+            return did_doc
+
+        # 3. Merchant DIDの場合: MerchantRegistryから解決（フォールバック）
         if did.startswith("did:ap2:merchant:") and self.merchant_registry:
             try:
                 did_doc = await self.merchant_registry.resolve_merchant_did(did)
@@ -263,9 +278,96 @@ class DIDResolver:
             except Exception as e:
                 logger.error(f"[DIDResolver] Failed to resolve Merchant DID: {did}: {e}")
 
-        # 3. 見つからない場合
+        # 4. 見つからない場合
         logger.warning(f"[DIDResolver] DID not found: {did}")
         return None
+
+    async def _resolve_via_http(self, did: str) -> Optional[DIDDocument]:
+        """
+        HTTP経由でDIDドキュメントを解決（Docker内部DNS対応）
+
+        W3C DID仕様準拠:
+        - .well-known/did.jsonエンドポイントから取得
+        - Docker内部DNSでホスト名を解決
+
+        Args:
+            did: 解決するDID（例: did:ap2:agent:merchant_agent）
+
+        Returns:
+            Optional[DIDDocument]: DIDドキュメント（取得失敗時はNone）
+        """
+        # DIDからホスト名とポート番号を決定
+        # did:ap2:agent:merchant_agent → merchant_agent:8001
+        # did:ap2:merchant:mugibo_merchant → merchant:8002
+        # did:ap2:cp:demo_cp → credential_provider:8003
+
+        hostname_port_mapping = {
+            # Agent DIDs
+            "did:ap2:agent:shopping_agent": ("shopping_agent", 8000),
+            "did:ap2:agent:merchant_agent": ("merchant_agent", 8001),
+            "did:ap2:agent:payment_processor": ("payment_processor", 8004),
+            # Merchant DIDs
+            "did:ap2:merchant:mugibo_merchant": ("merchant", 8002),
+            # Credential Provider DIDs
+            "did:ap2:cp:demo_cp": ("credential_provider", 8003),
+            "did:ap2:cp:demo_cp_2": ("credential_provider_2", 8003),
+        }
+
+        if did not in hostname_port_mapping:
+            logger.debug(f"[DIDResolver] No HTTP mapping for DID: {did}")
+            return None
+
+        hostname, port = hostname_port_mapping[did]
+        url = f"http://{hostname}:{port}/.well-known/did.json"
+
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                logger.debug(f"[DIDResolver] Fetching DID document via HTTP: {url}")
+                response = await client.get(url)
+                response.raise_for_status()
+                did_doc_dict = response.json()
+
+                # DIDDocumentモデルに変換
+                from common.models import ServiceEndpoint
+
+                verification_methods = []
+                for vm in did_doc_dict.get("verificationMethod", []):
+                    verification_methods.append(VerificationMethod(
+                        id=vm["id"],
+                        type=vm["type"],
+                        controller=vm["controller"],
+                        publicKeyPem=vm["publicKeyPem"],
+                        publicKeyMultibase=vm.get("publicKeyMultibase")  # AP2完全準拠
+                    ))
+
+                # AP2完全準拠: serviceフィールドを抽出
+                services = []
+                for svc in did_doc_dict.get("service", []):
+                    services.append(ServiceEndpoint(
+                        id=svc["id"],
+                        type=svc["type"],
+                        serviceEndpoint=svc["serviceEndpoint"],
+                        name=svc.get("name"),
+                        description=svc.get("description"),
+                        supported_methods=svc.get("supported_methods"),
+                        logo_url=svc.get("logo_url")
+                    ))
+
+                did_doc = DIDDocument(
+                    id=did_doc_dict["id"],
+                    verificationMethod=verification_methods,
+                    authentication=did_doc_dict.get("authentication", []),
+                    assertionMethod=did_doc_dict.get("assertionMethod", []),
+                    service=services if services else None
+                )
+
+                logger.info(f"[DIDResolver] Successfully fetched DID document from {url}")
+                return did_doc
+
+        except Exception as e:
+            logger.warning(f"[DIDResolver] HTTP resolution failed for {url}: {e}")
+            return None
 
     def resolve_public_key(self, kid: str) -> Optional[str]:
         """

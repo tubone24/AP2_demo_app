@@ -198,6 +198,10 @@ class KeyInitializer:
         """
         W3C DID準拠のDID Documentを生成（ECDSA + Ed25519の両方の鍵を含む）
 
+        AP2完全準拠:
+        - publicKeyPem形式（後方互換性）
+        - publicKeyMultibase形式（W3C DID仕様準拠）
+
         Args:
             agent_info: エージェント情報
             ecdsa_public_key: ECDSA公開鍵（JWT署名用）
@@ -220,6 +224,39 @@ class KeyInitializer:
             format=serialization.PublicFormat.SubjectPublicKeyInfo
         ).decode('utf-8')
 
+        # AP2完全準拠: publicKeyMultibase形式を生成
+        # crypto.pyのpublic_key_to_multibase()メソッドを使用
+        try:
+            from v2.common.crypto import KeyManager
+            key_manager_temp = KeyManager()
+            ecdsa_multibase = key_manager_temp.public_key_to_multibase(ecdsa_public_key)
+            ed25519_multibase = key_manager_temp.public_key_to_multibase(ed25519_public_key)
+            print(f"  ✓ publicKeyMultibase生成: ECDSA={ecdsa_multibase[:20]}..., Ed25519={ed25519_multibase[:20]}...")
+        except Exception as e:
+            print(f"  ⚠ publicKeyMultibase生成エラー: {e}")
+            # フォールバック：PEMのみ
+            ecdsa_multibase = None
+            ed25519_multibase = None
+
+        # DIDドキュメント構築
+        verification_method_1 = {
+            "id": f"{did}#key-1",
+            "type": "EcdsaSecp256r1VerificationKey2019",
+            "controller": did,
+            "publicKeyPem": ecdsa_pem
+        }
+        if ecdsa_multibase:
+            verification_method_1["publicKeyMultibase"] = ecdsa_multibase
+
+        verification_method_2 = {
+            "id": f"{did}#key-2",
+            "type": "Ed25519VerificationKey2020",
+            "controller": did,
+            "publicKeyPem": ed25519_pem
+        }
+        if ed25519_multibase:
+            verification_method_2["publicKeyMultibase"] = ed25519_multibase
+
         did_doc = {
             "@context": [
                 "https://www.w3.org/ns/did/v1",
@@ -228,18 +265,8 @@ class KeyInitializer:
             ],
             "id": did,
             "verificationMethod": [
-                {
-                    "id": f"{did}#key-1",
-                    "type": "EcdsaSecp256r1VerificationKey2019",
-                    "controller": did,
-                    "publicKeyPem": ecdsa_pem
-                },
-                {
-                    "id": f"{did}#key-2",
-                    "type": "Ed25519VerificationKey2020",
-                    "controller": did,
-                    "publicKeyPem": ed25519_pem
-                }
+                verification_method_1,
+                verification_method_2
             ],
             "authentication": [f"{did}#key-1", f"{did}#key-2"],
             "assertionMethod": [f"{did}#key-1", f"{did}#key-2"],
