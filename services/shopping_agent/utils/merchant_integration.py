@@ -2,6 +2,11 @@
 v2/services/shopping_agent/utils/merchant_integration.py
 
 Merchant Agent連携処理のヘルパーメソッド
+
+AP2完全準拠：
+- IntentMandateをA2A通信でMerchant Agentに送信
+- Merchant AgentからのレスポンスをEd25519署名検証（双方向認証）
+- 署名検証失敗時はエラーを返却（セキュリティ要件）
 """
 
 import json
@@ -115,41 +120,70 @@ class MerchantIntegrationHelpers:
                 f"{'='*80}"
             )
 
+            # AP2完全準拠：A2Aレスポンスの署名検証
+            from common.models import A2AMessage
+
+            try:
+                # A2AMessageとしてパース
+                response_message = A2AMessage.model_validate(result)
+
+                # 署名検証（AP2完全準拠：セキュリティ要件）
+                if not await a2a_handler.verify_message_signature(response_message):
+                    logger.error(
+                        f"[MerchantIntegration] ❌ Signature verification failed for response "
+                        f"from Merchant Agent (message_id={response_message.header.message_id})"
+                    )
+                    raise ValueError(
+                        "Invalid signature in Merchant Agent response (AP2 security requirement)"
+                    )
+
+                logger.info(
+                    f"[MerchantIntegration] ✓ Signature verified for Merchant Agent response "
+                    f"(sender={response_message.header.sender}, message_id={response_message.header.message_id})"
+                )
+
+            except ValueError:
+                # 署名検証失敗はそのまま再送出
+                raise
+            except Exception as e:
+                logger.error(
+                    f"[MerchantIntegration] Failed to parse or verify A2A response: {e}",
+                    exc_info=True
+                )
+                raise ValueError(f"Invalid A2A response from Merchant Agent: {e}")
+
             # A2AレスポンスからCart Candidatesを抽出
-            if isinstance(result, dict) and "dataPart" in result:
-                data_part = result["dataPart"]
-                response_type = data_part.get("@type") or data_part.get("type")
+            data_part = response_message.dataPart
+            response_type = data_part.type
 
-                # AP2/A2A仕様準拠：CartCandidatesレスポンス
-                if response_type == "ap2.responses.CartCandidates":
-                    cart_candidates = data_part["payload"].get("cart_candidates", [])
-                    logger.info(
-                        f"[MerchantIntegration] Received {len(cart_candidates)} "
-                        f"cart candidates from Merchant Agent"
-                    )
-                    return cart_candidates
+            # AP2/A2A仕様準拠：CartCandidatesレスポンス
+            if response_type == "ap2.responses.CartCandidates":
+                cart_candidates = data_part.payload.get("cart_candidates", [])
+                logger.info(
+                    f"[MerchantIntegration] Received {len(cart_candidates)} "
+                    f"cart candidates from Merchant Agent"
+                )
+                return cart_candidates
 
-                # 後方互換性：ProductListレスポンス（旧形式）
-                elif response_type == "ap2.responses.ProductList":
-                    logger.warning(
-                        "[MerchantIntegration] Received ProductList (old format). "
-                        "Converting to cart candidates."
-                    )
-                    products = data_part["payload"].get("products", [])
-                    logger.info(f"[MerchantIntegration] Received {len(products)} products (old format)")
-                    return products
+            # 後方互換性：ProductListレスポンス（旧形式）
+            elif response_type == "ap2.responses.ProductList":
+                logger.warning(
+                    "[MerchantIntegration] Received ProductList (old format). "
+                    "Converting to cart candidates."
+                )
+                products = data_part.payload.get("products", [])
+                logger.info(f"[MerchantIntegration] Received {len(products)} products (old format)")
+                return products
 
-                # エラーレスポンス
-                elif response_type == "ap2.errors.Error":
-                    error_payload = data_part.get("payload", {})
-                    error_msg = error_payload.get("error_message", "Unknown error")
-                    logger.error(f"[MerchantIntegration] Merchant Agent returned error: {error_msg}")
-                    raise ValueError(f"Merchant Agent error: {error_msg}")
+            # エラーレスポンス
+            elif response_type == "ap2.errors.Error":
+                error_payload = data_part.payload
+                error_msg = error_payload.get("error_message", "Unknown error")
+                logger.error(f"[MerchantIntegration] Merchant Agent returned error: {error_msg}")
+                raise ValueError(f"Merchant Agent error: {error_msg}")
 
-                else:
-                    raise ValueError(f"Unexpected response type: {response_type}")
             else:
-                raise ValueError("Invalid response format from Merchant Agent")
+                raise ValueError(f"Unexpected response type: {response_type}")
 
         except httpx.HTTPError as e:
             logger.error(f"[MerchantIntegration] HTTP error: {e}")
