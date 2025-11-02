@@ -13,10 +13,12 @@ logger = logging.getLogger(__name__)
 
 
 class CartMandateHelpers:
-    """CartMandate構築に関連するヘルパーメソッドを提供するクラス"""
+    """CartMandate構築に関連するヘルパーメソッドを提供するクラス（AP2 & W3C Payment Request API完全準拠）"""
 
     def __init__(self, merchant_id: str, merchant_name: str, merchant_url: str,
-                 shipping_fee: float, free_shipping_threshold: float, tax_rate: float):
+                 shipping_fee: float, free_shipping_threshold: float, tax_rate: float,
+                 supported_payment_methods: List[Dict[str, Any]] = None,
+                 payment_options: Dict[str, Any] = None):
         """
         Args:
             merchant_id: Merchant ID
@@ -25,6 +27,8 @@ class CartMandateHelpers:
             shipping_fee: 送料
             free_shipping_threshold: 送料無料の閾値
             tax_rate: 税率
+            supported_payment_methods: サポートする支払い方法（W3C Payment Request API準拠）
+            payment_options: PaymentOptions設定（W3C Payment Request API準拠）
         """
         self.merchant_id = merchant_id
         self.merchant_name = merchant_name
@@ -32,6 +36,26 @@ class CartMandateHelpers:
         self.shipping_fee = shipping_fee
         self.free_shipping_threshold = free_shipping_threshold
         self.tax_rate = tax_rate
+
+        # W3C Payment Request API準拠: デフォルトの支払い方法
+        self.supported_payment_methods = supported_payment_methods or [
+            {
+                "supported_methods": "basic-card",
+                "data": {
+                    "supportedNetworks": ["visa", "mastercard", "jcb"],
+                    "supportedTypes": ["credit", "debit"]
+                }
+            }
+        ]
+
+        # W3C Payment Request API準拠: デフォルトのPaymentOptions
+        self.payment_options = payment_options or {
+            "request_payer_name": True,
+            "request_payer_email": True,
+            "request_payer_phone": False,
+            "request_shipping": True,
+            "shipping_type": "shipping"
+        }
 
     def build_cart_items(
         self,
@@ -123,17 +147,21 @@ class CartMandateHelpers:
         session_data: Dict[str, Any]
     ) -> Dict[str, Any]:
         """
-        AP2準拠のCartMandate構造を構築
+        AP2 & W3C Payment Request API完全準拠のCartMandate構造を構築
 
         Args:
             display_items: 表示アイテムリスト
             raw_items: 生アイテムリスト
             total: 合計金額
-            shipping_address: 配送先住所
+            shipping_address: 配送先住所（AP2準拠）
             session_data: セッションデータ
 
         Returns:
-            Dict[str, Any]: CartMandate
+            Dict[str, Any]: CartMandate（W3C Payment Request API準拠）
+
+        W3C準拠の変更点:
+        - method_data: 空配列ではなく、サポートする支払い方法を設定（必須）
+        - options: PaymentOptionsを追加（推奨）
         """
         cart_id = f"cart_{uuid.uuid4().hex[:8]}"
         cart_expiry = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat().replace('+00:00', 'Z')
@@ -143,7 +171,9 @@ class CartMandateHelpers:
                 "id": cart_id,
                 "user_cart_confirmation_required": True,
                 "payment_request": {
-                    "method_data": [],
+                    # W3C Payment Request API準拠: 少なくとも1つの支払い方法が必須
+                    # 空配列はTypeError（W3C仕様違反）
+                    "method_data": self.supported_payment_methods,
                     "details": {
                         "id": cart_id,
                         "display_items": display_items,
@@ -152,6 +182,9 @@ class CartMandateHelpers:
                             "amount": {"value": total, "currency": "JPY"}
                         }
                     },
+                    # W3C Payment Request API準拠: PaymentOptions追加
+                    "options": self.payment_options,
+                    # AP2準拠: 配送先住所
                     "shipping_address": shipping_address
                 },
                 "cart_expiry": cart_expiry,
@@ -168,5 +201,8 @@ class CartMandateHelpers:
             }
         }
 
-        logger.info(f"[build_cart_mandates] Built CartMandate: {cart_id}")
+        logger.info(
+            f"[build_cart_mandates] Built W3C-compliant CartMandate: {cart_id}, "
+            f"payment_methods={len(self.supported_payment_methods)}"
+        )
         return cart_mandate
