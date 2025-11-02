@@ -1,0 +1,441 @@
+version: "3.8"
+
+services:
+  # Init Keys - キーペア初期化（起動時に1回実行）
+  init-keys:
+    build:
+      context: .
+      dockerfile: services/shopping_agent/Dockerfile
+    container_name: ap2_init_keys
+    working_dir: /app
+    volumes:
+      - keys:/app/keys
+      - data:/app/data
+    env_file:
+      - .env
+    command: python -m scripts.init_keys
+    networks:
+      - ap2_network
+
+  # Init Seeds - シードデータ投入（起動時に1回実行）
+  init-seeds:
+    build:
+      context: .
+      dockerfile: services/shopping_agent/Dockerfile
+    container_name: ap2_init_seeds
+    working_dir: /app
+    volumes:
+      - keys:/app/keys
+      - data:/app/data
+    env_file:
+      - .env
+    command: python -m scripts.init_seeds
+    networks:
+      - ap2_network
+    depends_on:
+      init-keys:
+        condition: service_completed_successfully
+
+  # Shopping Agent - ユーザー向けエージェント
+  shopping_agent:
+    build:
+      context: .
+      dockerfile: services/shopping_agent/Dockerfile
+    container_name: ap2_shopping_agent
+    ports:
+      - "8000:8000"
+    volumes:
+      - keys:/app/keys
+      - data:/app/data
+    env_file:
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+      - AGENT_ID=did:ap2:agent:shopping_agent
+      - MERCHANT_AGENT_URL=http://merchant_agent:8001
+      - MERCHANT_URL=http://merchant:8002
+      - CREDENTIAL_PROVIDER_URL=http://credential_provider:8003
+      - PAYMENT_PROCESSOR_URL=http://payment_processor:8004
+      - AP2_KEYS_DIRECTORY=/app/keys
+      - DATABASE_URL=sqlite+aiosqlite:////app/data/shopping_agent.db
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_FORMAT=${LOG_FORMAT:-text}
+      - DMR_API_URL=${DMR_API_URL:-http://host.docker.internal:12434/engines/llama.cpp/v1}
+      - DMR_MODEL=${DMR_MODEL:-ai/qwen3}
+      - DMR_API_KEY=${DMR_API_KEY:-none}
+      - SHOPPING_MCP_URL=http://shopping_agent_mcp:8010
+      - LANGFUSE_ENABLED=${LANGFUSE_ENABLED:-false}
+      - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY:-}
+      - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY:-}
+      - LANGFUSE_HOST=${LANGFUSE_HOST:-https://cloud.langfuse.com}
+      # OpenTelemetry設定
+      - OTEL_ENABLED=${OTEL_ENABLED:-true}
+      - OTEL_SERVICE_NAME=shopping_agent
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
+      - OTEL_EXPORTER_OTLP_INSECURE=true
+    networks:
+      - ap2_network
+    depends_on:
+      init-seeds:
+        condition: service_completed_successfully
+      shopping_agent_mcp:
+        condition: service_started
+    restart: unless-stopped
+
+  # Shopping Agent MCP - MCPツール（LangGraphノード）
+  shopping_agent_mcp:
+    build:
+      context: .
+      dockerfile: services/shopping_agent_mcp/Dockerfile
+    container_name: ap2_shopping_agent_mcp
+    ports:
+      - "8010:8010"
+    volumes:
+      - keys:/app/keys
+      - data:/app/data
+    env_file:
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+      - AGENT_ID=did:ap2:agent:shopping_agent
+      - AP2_KEYS_DIRECTORY=/app/keys
+      - DATABASE_URL=sqlite+aiosqlite:////app/data/shopping_agent.db
+      - MERCHANT_AGENT_URL=http://merchant_agent:8001
+      - PAYMENT_PROCESSOR_URL=http://payment_processor:8004
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_FORMAT=${LOG_FORMAT:-text}
+      # OpenTelemetry設定
+      - OTEL_ENABLED=${OTEL_ENABLED:-true}
+      - OTEL_SERVICE_NAME=shopping_agent_mcp
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
+      - OTEL_EXPORTER_OTLP_INSECURE=true
+    networks:
+      - ap2_network
+    restart: unless-stopped
+
+  # Merchant Agent - 商品検索・CartMandate作成
+  merchant_agent:
+    build:
+      context: .
+      dockerfile: services/merchant_agent/Dockerfile
+    container_name: ap2_merchant_agent
+    ports:
+      - "8001:8001"
+    volumes:
+      - keys:/app/keys
+      - data:/app/data
+    env_file:
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+      - AGENT_ID=did:ap2:agent:merchant_agent
+      - AP2_KEYS_DIRECTORY=/app/keys
+      - DATABASE_URL=sqlite+aiosqlite:////app/data/merchant_agent.db
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_FORMAT=${LOG_FORMAT:-text}
+      - DMR_API_URL=${DMR_API_URL:-http://host.docker.internal:12434/engines/llama.cpp/v1}
+      - DMR_MODEL=${DMR_MODEL:-ai/qwen3}
+      - DMR_API_KEY=${DMR_API_KEY:-none}
+      - MERCHANT_AI_MODE=${MERCHANT_AI_MODE:-true}
+      - MERCHANT_MCP_URL=http://merchant_agent_mcp:8011
+      - LANGFUSE_ENABLED=${LANGFUSE_ENABLED:-false}
+      - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY:-}
+      - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY:-}
+      - LANGFUSE_HOST=${LANGFUSE_HOST:-https://cloud.langfuse.com}
+      # OpenTelemetry設定
+      - OTEL_ENABLED=${OTEL_ENABLED:-true}
+      - OTEL_SERVICE_NAME=merchant_agent
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
+      - OTEL_EXPORTER_OTLP_INSECURE=true
+    networks:
+      - ap2_network
+    depends_on:
+      init-seeds:
+        condition: service_completed_successfully
+      merchant_agent_mcp:
+        condition: service_started
+    restart: unless-stopped
+
+  # Merchant Agent MCP - MCPツール（LangGraphノード）
+  merchant_agent_mcp:
+    build:
+      context: .
+      dockerfile: services/merchant_agent_mcp/Dockerfile
+    container_name: ap2_merchant_agent_mcp
+    ports:
+      - "8011:8011"
+    volumes:
+      - data:/app/data
+    env_file:
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+      - MERCHANT_ID=did:ap2:merchant:mugibo_merchant
+      - MERCHANT_NAME=${MERCHANT_NAME:-むぎぼーショップ}
+      - MERCHANT_URL=http://merchant:8002
+      - DATABASE_URL=sqlite+aiosqlite:////app/data/merchant_agent.db
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_FORMAT=${LOG_FORMAT:-text}
+      - DMR_API_URL=${DMR_API_URL:-http://host.docker.internal:12434/engines/llama.cpp/v1}
+      - DMR_MODEL=${DMR_MODEL:-ai/qwen3}
+      - DMR_API_KEY=${DMR_API_KEY:-none}
+      # OpenTelemetry設定
+      - OTEL_ENABLED=${OTEL_ENABLED:-true}
+      - OTEL_SERVICE_NAME=merchant_agent_mcp
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
+      - OTEL_EXPORTER_OTLP_INSECURE=true
+    networks:
+      - ap2_network
+    restart: unless-stopped
+
+  # Merchant - CartMandate署名
+  merchant:
+    build:
+      context: .
+      dockerfile: services/merchant/Dockerfile
+    container_name: ap2_merchant
+    ports:
+      - "8002:8002"
+    volumes:
+      - keys:/app/keys
+      - data:/app/data
+    env_file:
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+      - AGENT_ID=did:ap2:agent:merchant
+      - AP2_KEYS_DIRECTORY=/app/keys
+      - DATABASE_URL=sqlite+aiosqlite:////app/data/merchant.db
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_FORMAT=${LOG_FORMAT:-text}
+      # OpenTelemetry設定
+      - OTEL_ENABLED=${OTEL_ENABLED:-true}
+      - OTEL_SERVICE_NAME=merchant
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
+      - OTEL_EXPORTER_OTLP_INSECURE=true
+    networks:
+      - ap2_network
+    depends_on:
+      init-seeds:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # Credential Provider 1 - WebAuthn検証・トークン発行（AP2完全準拠）
+  credential_provider:
+    build:
+      context: .
+      dockerfile: services/credential_provider/Dockerfile
+    container_name: ap2_credential_provider
+    ports:
+      - "8003:8003"
+    volumes:
+      - keys:/app/keys
+      - data:/app/data
+    env_file:
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+      - AGENT_ID=did:ap2:agent:credential_provider
+      - AP2_KEYS_DIRECTORY=/app/keys
+      - DATABASE_URL=sqlite+aiosqlite:////app/data/credential_provider.db
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_FORMAT=${LOG_FORMAT:-text}
+      - PAYMENT_NETWORK_URL=http://payment_network:8005
+      - REDIS_URL=redis://redis:6379/0
+      # OpenTelemetry設定
+      - OTEL_ENABLED=${OTEL_ENABLED:-true}
+      - OTEL_SERVICE_NAME=credential_provider
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
+      - OTEL_EXPORTER_OTLP_INSECURE=true
+    networks:
+      - ap2_network
+    depends_on:
+      init-seeds:
+        condition: service_completed_successfully
+      payment_network:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Credential Provider 2 - WebAuthn検証・トークン発行（AP2完全準拠: 複数CP対応）
+  credential_provider_2:
+    build:
+      context: .
+      dockerfile: services/credential_provider/Dockerfile
+    container_name: ap2_credential_provider_2
+    ports:
+      - "8006:8003"
+    volumes:
+      - keys:/app/keys
+      - data:/app/data
+    env_file:
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+      - AGENT_ID=did:ap2:agent:credential_provider_2
+      - AP2_KEYS_DIRECTORY=/app/keys
+      - DATABASE_URL=sqlite+aiosqlite:////app/data/credential_provider_2.db
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_FORMAT=${LOG_FORMAT:-text}
+      - PAYMENT_NETWORK_URL=http://payment_network:8005
+      - REDIS_URL=redis://redis:6379/1
+      # OpenTelemetry設定
+      - OTEL_ENABLED=${OTEL_ENABLED:-true}
+      - OTEL_SERVICE_NAME=credential_provider_2
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
+      - OTEL_EXPORTER_OTLP_INSECURE=true
+    networks:
+      - ap2_network
+    depends_on:
+      init-seeds:
+        condition: service_completed_successfully
+      payment_network:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Payment Processor - 決済処理
+  payment_processor:
+    build:
+      context: .
+      dockerfile: services/payment_processor/Dockerfile
+    container_name: ap2_payment_processor
+    ports:
+      - "8004:8004"
+    volumes:
+      - keys:/app/keys
+      - data:/app/data
+    env_file:
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+      - AGENT_ID=did:ap2:agent:payment_processor
+      - AP2_KEYS_DIRECTORY=/app/keys
+      - DATABASE_URL=sqlite+aiosqlite:////app/data/payment_processor.db
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_FORMAT=${LOG_FORMAT:-text}
+      # OpenTelemetry設定
+      - OTEL_ENABLED=${OTEL_ENABLED:-true}
+      - OTEL_SERVICE_NAME=payment_processor
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
+      - OTEL_EXPORTER_OTLP_INSECURE=true
+    networks:
+      - ap2_network
+    depends_on:
+      init-seeds:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # Payment Network - 決済ネットワーク（Agent Token発行）
+  payment_network:
+    build:
+      context: .
+      dockerfile: services/payment_network/Dockerfile
+    container_name: ap2_payment_network
+    ports:
+      - "8005:8005"
+    env_file:
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+      - NETWORK_NAME=DemoPaymentNetwork
+      - REDIS_URL=redis://redis:6379/2  # Payment Network専用DB (DB 2)
+    networks:
+      - ap2_network
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Frontend - Next.js
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: ap2_frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      # ブラウザから直接バックエンドにアクセス（プロキシなし）
+      - NEXT_PUBLIC_SHOPPING_AGENT_URL=http://localhost:8000
+      - NEXT_PUBLIC_CREDENTIAL_PROVIDER_URL=http://localhost:8003
+      - NEXT_PUBLIC_RP_ID=localhost
+      - NEXT_PUBLIC_RP_NAME=AP2 Demo App v2
+    networks:
+      - ap2_network
+    depends_on:
+      - shopping_agent
+      - merchant_agent
+      - merchant
+      - credential_provider
+      - payment_processor
+    restart: unless-stopped
+
+  # Meilisearch - 全文検索エンジン（商品検索用）
+  meilisearch:
+    image: getmeili/meilisearch:v1.11
+    container_name: ap2_meilisearch
+    ports:
+      - "7700:7700"
+    environment:
+      - MEILI_ENV=development
+      - MEILI_MASTER_KEY=masterKey123
+      - MEILI_NO_ANALYTICS=true
+    volumes:
+      - ./data/meilisearch:/meili_data
+    networks:
+      - ap2_network
+    restart: unless-stopped
+
+  # Jaeger - 分散トレーシングバックエンド（OpenTelemetry）
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: ap2_jaeger
+    ports:
+      - "16686:16686"  # Jaeger UI
+      - "4317:4317"    # OTLP gRPC receiver
+      - "4318:4318"    # OTLP HTTP receiver
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    networks:
+      - ap2_network
+    restart: unless-stopped
+
+  # Redis - KVストア（一時データ・セッション管理）
+  redis:
+    image: redis:7-alpine
+    container_name: ap2_redis
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - ./data/redis:/data
+    networks:
+      - ap2_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+networks:
+  ap2_network:
+    driver: bridge
+
+volumes:
+  keys:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./keys
+  data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./data
