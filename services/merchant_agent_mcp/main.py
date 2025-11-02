@@ -42,6 +42,37 @@ SHIPPING_FEE = float(os.getenv("SHIPPING_FEE", "500.0"))  # 送料（円）
 FREE_SHIPPING_THRESHOLD = float(os.getenv("FREE_SHIPPING_THRESHOLD", "5000.0"))  # 送料無料の閾値（円）
 TAX_RATE = float(os.getenv("TAX_RATE", "0.1"))  # 税率（10%）
 
+# AP2 & W3C Payment Request API完全準拠: サポートする支払い方法
+# 環境変数でカスタマイズ可能（デフォルト: AP2プロトコル準拠の支払い方法）
+SUPPORTED_PAYMENT_METHODS = json.loads(
+    os.getenv("SUPPORTED_PAYMENT_METHODS", json.dumps([
+        {
+            "supported_methods": "basic-card",  # W3C標準: クレジットカード
+            "data": {
+                "supportedNetworks": ["visa", "mastercard", "jcb", "amex"],
+                "supportedTypes": ["credit", "debit"]
+            }
+        },
+        {
+            "supported_methods": "https://a2a-protocol.org/payment-methods/ap2-payment",  # AP2準拠
+            "data": {
+                "version": "0.2",
+                "processor": "did:ap2:agent:payment_processor",
+                "supportedMethods": ["credential-based", "attestation-based"]
+            }
+        }
+    ]))
+)
+
+# W3C Payment Request API準拠: PaymentOptions設定
+PAYMENT_OPTIONS = {
+    "request_payer_name": os.getenv("REQUEST_PAYER_NAME", "true").lower() == "true",
+    "request_payer_email": os.getenv("REQUEST_PAYER_EMAIL", "true").lower() == "true",
+    "request_payer_phone": os.getenv("REQUEST_PAYER_PHONE", "false").lower() == "true",
+    "request_shipping": os.getenv("REQUEST_SHIPPING", "true").lower() == "true",
+    "shipping_type": os.getenv("SHIPPING_TYPE", "shipping")  # shipping, delivery, pickup
+}
+
 # データベース初期化
 db_manager = DatabaseManager(DATABASE_URL)
 
@@ -54,14 +85,16 @@ mcp = MCPServer(
     version="1.0.0"
 )
 
-# Helperクラス初期化
+# Helperクラス初期化（AP2 & W3C Payment Request API完全準拠）
 cart_mandate_helpers = CartMandateHelpers(
     merchant_id=MERCHANT_ID,
     merchant_name=MERCHANT_NAME,
     merchant_url=MERCHANT_URL,
     shipping_fee=SHIPPING_FEE,
     free_shipping_threshold=FREE_SHIPPING_THRESHOLD,
-    tax_rate=TAX_RATE
+    tax_rate=TAX_RATE,
+    supported_payment_methods=SUPPORTED_PAYMENT_METHODS,  # W3C準拠: 支払い方法
+    payment_options=PAYMENT_OPTIONS  # W3C準拠: PaymentOptions
 )
 product_helpers = ProductHelpers()
 
@@ -221,6 +254,10 @@ async def check_inventory(params: Dict[str, Any]) -> Dict[str, Any]:
             "shipping_address": {
                 "type": "object",
                 "description": "AP2準拠のContactAddress"
+            },
+            "intent_mandate_id": {
+                "type": "string",
+                "description": "IntentMandate ID（AP2準拠）"
             }
         },
         "required": ["cart_plan", "products"]
@@ -230,7 +267,7 @@ async def build_cart_mandates(params: Dict[str, Any]) -> Dict[str, Any]:
     """AP2準拠のCartMandateを構築
 
     Args:
-        params: {"cart_plan": {...}, "products": [...], "shipping_address": {...}}
+        params: {"cart_plan": {...}, "products": [...], "shipping_address": {...}, "intent_mandate_id": "..."}
 
     Returns:
         {"cart_mandate": {...}}  # 未署名
@@ -238,6 +275,7 @@ async def build_cart_mandates(params: Dict[str, Any]) -> Dict[str, Any]:
     cart_plan = params["cart_plan"]
     products = params["products"]
     shipping_address = params.get("shipping_address")
+    intent_mandate_id = params.get("intent_mandate_id")  # AP2準拠: IntentMandate IDを取得
 
     # 商品IDマッピング
     products_map = {p["id"]: p for p in products}
@@ -266,7 +304,7 @@ async def build_cart_mandates(params: Dict[str, Any]) -> Dict[str, Any]:
 
     # AP2準拠のCartMandate構築（ヘルパーメソッドに委譲）
     session_data = {
-        "intent_mandate_id": params.get("_session_data", {}).get("intent_mandate_id"),
+        "intent_mandate_id": intent_mandate_id,  # AP2準拠: IntentMandate IDを設定
         "cart_name": cart_plan.get("name", "カート"),
         "cart_description": cart_plan.get("description", "")
     }

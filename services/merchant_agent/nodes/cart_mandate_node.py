@@ -49,6 +49,8 @@ async def build_cart_mandates(agent: 'MerchantLangGraphAgent', state: 'MerchantA
     """AP2準拠のCartMandateを構築（MCP経由でベース作成、Merchant署名は別途）"""
     cart_plans = state["cart_plans"]
     products = state["available_products"]
+    shipping_address = state.get("shipping_address")  # AP2準拠: 配送先住所を取得
+    intent_mandate_id = state.get("intent_mandate", {}).get("id")  # AP2準拠: IntentMandate IDを取得
 
     # Langfuseトレーシング（MCPツール呼び出し）
     trace_id = state.get("session_id", "unknown")
@@ -80,7 +82,8 @@ async def build_cart_mandates(agent: 'MerchantLangGraphAgent', state: 'MerchantA
             result = await agent.mcp_client.call_tool("build_cart_mandates", {
                 "cart_plan": plan,
                 "products": products,
-                "shipping_address": None  # デフォルト配送先使用
+                "shipping_address": shipping_address,  # AP2準拠: 配送先住所を渡す
+                "intent_mandate_id": intent_mandate_id  # AP2準拠: IntentMandate IDを渡す
             })
 
             cart_mandate = result.get("cart_mandate")
