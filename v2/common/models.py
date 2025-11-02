@@ -272,7 +272,16 @@ class ServiceEndpoint(BaseModel):
 
     W3C DID仕様準拠：エンティティが提供するサービスの情報
 
-    Example:
+    A2A Endpoint の場合:
+    {
+      "id": "did:ap2:agent:shopping_agent#a2aendpoint",
+      "type": "A2AEndpoint",
+      "serviceEndpoint": "http://shopping_agent:8000/a2a",
+      "name": "Shopping Agent A2A Endpoint",
+      "description": "A2A通信エンドポイント（ユーザー購買代理エージェント）"
+    }
+
+    Merchant Agent の場合:
     {
       "id": "did:ap2:merchant:nike#merchant-agent",
       "type": "AP2MerchantAgent",
@@ -293,7 +302,7 @@ class ServiceEndpoint(BaseModel):
     }
     """
     id: str = Field(..., description="サービスID（DIDフラグメント形式）")
-    type: str = Field(..., description="サービスタイプ（例: AP2MerchantAgent, AP2CredentialProvider）")
+    type: str = Field(..., description="サービスタイプ（例: A2AEndpoint, AP2MerchantAgent, AP2CredentialProvider）")
     serviceEndpoint: str = Field(..., description="サービスエンドポイントURL")
     name: Optional[str] = Field(None, description="サービス名（人間可読）")
     description: Optional[str] = Field(None, description="サービスの説明")

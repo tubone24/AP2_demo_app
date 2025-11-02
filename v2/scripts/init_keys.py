@@ -49,19 +49,37 @@ AGENTS = [
         "agent_id": "shopping_agent",
         "did": "did:ap2:agent:shopping_agent",
         "name": "Shopping Agent",
-        "env_var": "AP2_SHOPPING_AGENT_PASSPHRASE"
+        "env_var": "AP2_SHOPPING_AGENT_PASSPHRASE",
+        "service_endpoint": {
+            "type": "A2AEndpoint",
+            "url": "http://shopping_agent:8000/a2a",
+            "name": "Shopping Agent A2A Endpoint",
+            "description": "A2A通信エンドポイント（ユーザー購買代理エージェント）"
+        }
     },
     {
         "agent_id": "merchant_agent",
         "did": "did:ap2:agent:merchant_agent",
         "name": "Merchant Agent",
-        "env_var": "AP2_MERCHANT_AGENT_PASSPHRASE"
+        "env_var": "AP2_MERCHANT_AGENT_PASSPHRASE",
+        "service_endpoint": {
+            "type": "A2AEndpoint",
+            "url": "http://merchant_agent:8001/a2a",
+            "name": "Merchant Agent A2A Endpoint",
+            "description": "A2A通信エンドポイント（マーチャント代理エージェント）"
+        }
     },
     {
         "agent_id": "merchant",
         "did": "did:ap2:merchant:mugibo_merchant",
         "name": "Merchant",
-        "env_var": "AP2_MERCHANT_PASSPHRASE"
+        "env_var": "AP2_MERCHANT_PASSPHRASE",
+        "service_endpoint": {
+            "type": "A2AEndpoint",
+            "url": "http://merchant:8002/a2a",
+            "name": "Merchant A2A Endpoint",
+            "description": "A2A通信エンドポイント（むぎぼーショップ）"
+        }
     },
     {
         "agent_id": "credential_provider",
@@ -95,7 +113,13 @@ AGENTS = [
         "agent_id": "payment_processor",
         "did": "did:ap2:agent:payment_processor",
         "name": "Payment Processor",
-        "env_var": "AP2_PAYMENT_PROCESSOR_PASSPHRASE"
+        "env_var": "AP2_PAYMENT_PROCESSOR_PASSPHRASE",
+        "service_endpoint": {
+            "type": "A2AEndpoint",
+            "url": "http://payment_processor:8004/a2a",
+            "name": "Payment Processor A2A Endpoint",
+            "description": "A2A通信エンドポイント（支払い処理プロセッサー）"
+        }
     }
 ]
 
@@ -277,17 +301,27 @@ class KeyInitializer:
         # AP2完全準拠: サービスエンドポイントを追加（存在する場合）
         if "service_endpoint" in agent_info:
             service_ep = agent_info["service_endpoint"]
-            did_doc["service"] = [
-                {
-                    "id": f"{did}#{service_ep['type'].lower().replace('ap2', '')}",
-                    "type": service_ep["type"],
-                    "serviceEndpoint": service_ep["url"],
-                    "name": service_ep["name"],
-                    "description": service_ep["description"],
-                    "supported_methods": service_ep["supported_methods"],
-                    "logo_url": service_ep["logo_url"]
-                }
-            ]
+
+            # W3C DID仕様準拠: serviceフィールドを構築
+            # 必須フィールド: id, type, serviceEndpoint
+            # オプショナルフィールド: name, description, supported_methods, logo_url
+            service_entry = {
+                "id": f"{did}#{service_ep['type'].lower().replace('ap2', '')}",
+                "type": service_ep["type"],
+                "serviceEndpoint": service_ep["url"]
+            }
+
+            # オプショナルフィールドを追加（存在する場合のみ）
+            if "name" in service_ep:
+                service_entry["name"] = service_ep["name"]
+            if "description" in service_ep:
+                service_entry["description"] = service_ep["description"]
+            if "supported_methods" in service_ep:
+                service_entry["supported_methods"] = service_ep["supported_methods"]
+            if "logo_url" in service_ep:
+                service_entry["logo_url"] = service_ep["logo_url"]
+
+            did_doc["service"] = [service_entry]
 
         return did_doc
 
