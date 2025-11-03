@@ -142,22 +142,29 @@ class PaymentHelpers:
         Returns:
             Dict: PaymentResponse
 
-        AP2完全準拠: PCI機密データを含めない
-        - カード番号、CVV、有効期限、カード名義人は含めない
+        AP2完全準拠 & PCI DSS準拠:
+        - tokenized=trueの場合、カード番号とCVVを含めない（PCI DSS 3.2.2項準拠）
         - トークンで決済を実行（Credential Providerが内部で保持）
+        - A2A通信では「認証済みトークンベース決済」を想定
+
+        PCI DSS コンプライアンス:
+        - cardSecurityCode（CVV/CVC）: 認証後の保持・送信は禁止（PCI DSS 3.2.2項）
+        - cardNumber: マスクしていても、トークン化済みなら不要（AP2仕様）
+        - token: ✅ 安全（tokenized=trueにより、カード情報は削除済みと見なされる）
         """
         return {
             "methodName": "basic-card",  # または "secure-payment-confirmation"
             "details": {
-                "cardNumber": f"****{tokenized_payment_method.get('last4', '0000')}",  # マスク済み
-                "cardSecurityCode": "***",  # マスク済み
+                # AP2完全準拠 & PCI DSS準拠:
+                # - cardNumber: マスク済みでも、トークン化済みなら不要（削除）
+                # - cardSecurityCode: PCI DSS 3.2.2項により禁止（削除）
                 "cardBrand": tokenized_payment_method.get("brand", "unknown"),
                 # AP2拡張：トークン（Credential Providerで実際のカード情報と紐付け）
                 "token": tokenized_payment_method["token"],
                 "tokenized": True
-                # AP2完全準拠 & PCI DSS準拠:
-                # - cardholderName: 含めない（PCI機密データ）
-                # - expiryMonth/Year: 含めない（トークン化により内部管理）
+                # PCI DSS準拠により除外:
+                # - cardholderName: 除外（PCI機密データ）
+                # - expiryMonth/Year: 除外（トークン化により内部管理）
             }
         }
 
