@@ -2025,10 +2025,6 @@ class ShoppingAgent(BaseAgent):
             await AgentSessionCRUD.update_session_data(db_session, session_id, session_data)
             logger.debug(f"[ShoppingAgent] Updated session in DB: {session_id}, step={session_data.get('step')}")
 
-    def _determine_transaction_type(self, session: Dict[str, Any]) -> str:
-        """取引タイプ判定（ヘルパーメソッドに委譲）"""
-        return self.payment_helpers.determine_transaction_type(session)
-
     def _validate_cart_and_payment_method(self, session: Dict[str, Any]) -> tuple[Dict[str, Any], Dict[str, Any]]:
         """カート情報と支払い方法の検証（ヘルパーメソッドに委譲）"""
         return self.payment_helpers.validate_cart_and_payment_method(session)
@@ -2127,34 +2123,28 @@ class ShoppingAgent(BaseAgent):
 
         # 6. PaymentMandateの構築
         payment_mandate = {
-            # AP2公式：payment_mandate_contents
+            # AP2公式フィールド（refs/AP2-main/src/ap2/types/mandate.py:165-201準拠）
             "payment_mandate_contents": payment_mandate_contents,
-
-            # AP2公式：user_authorization（WebAuthn署名から生成）
             "user_authorization": user_authorization,
 
-            # AP2拡張フィールド：AI Agent visibility（仕様で必須）
-            "agent_involved": True,  # AI Agent関与シグナル（AP2仕様で必須）
-            "transaction_type": self._determine_transaction_type(session),  # Human-Present/Not-Present
-
-            # 後方互換性・内部処理用フィールド（既存コードとの互換性維持）
-            "id": payment_mandate_id,  # 後方互換性
-            "cart_mandate_id": cart_mandate.get("contents", {}).get("id"),  # AP2準拠
-            "intent_mandate_id": session.get("intent_mandate", {}).get("id"),
-            "payer_id": session.get("user_id") or os.getenv("DEFAULT_USER_ID", "user_demo_001"),
-            "payee_id": cart_mandate.get("_metadata", {}).get("merchant_id", "did:ap2:merchant:mugibo_merchant"),  # AP2準拠
+            # 内部処理用フィールド（Payment Processorとの互換性維持）
+            "id": payment_mandate_id,  # ログ出力用
+            "cart_mandate_id": cart_mandate.get("contents", {}).get("id"),  # Mandate連鎖検証
+            "intent_mandate_id": session.get("intent_mandate", {}).get("id"),  # Mandate連鎖検証
+            "payer_id": session.get("user_id") or os.getenv("DEFAULT_USER_ID", "user_demo_001"),  # リスク評価
+            "payee_id": cart_mandate.get("_metadata", {}).get("merchant_id", "did:ap2:merchant:mugibo_merchant"),  # トランザクション記録
             "amount": {
                 "value": total_amount.get("value", "0.00"),
                 "currency": total_amount.get("currency", "JPY")
-            },
+            },  # リスク評価・レシート生成
             "payment_method": {
-                "type": tokenized_payment_method.get("type", "card"),
+                "type": tokenized_payment_method.get("type", "https://a2a-protocol.org/payment-methods/ap2-payment"),
                 "token": tokenized_payment_method["token"],
                 "last4": tokenized_payment_method.get("last4", "0000"),
                 "brand": tokenized_payment_method.get("brand", "unknown")
                 # AP2完全準拠 & PCI DSS準拠: 有効期限は含めない
                 # トークン化により、Credential Provider内部で管理される
-            }
+            }  # Payment Processor決済処理
         }
 
         # 7. リスク評価を実施

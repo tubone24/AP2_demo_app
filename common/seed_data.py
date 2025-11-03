@@ -433,7 +433,7 @@ SAMPLE_PAYMENT_METHODS = [
         "id": "pm_demo_visa_4242",
         "user_id": "user_demo_001",
         "payment_method": {
-            "type": "basic-card",
+            "type": "https://a2a-protocol.org/payment-methods/ap2-payment",
             "display_name": "Visaカード (****4242)",
             "card_last4": "4242",
             "card_brand": "Visa",
@@ -448,7 +448,7 @@ SAMPLE_PAYMENT_METHODS = [
         "id": "pm_demo_amex_8005",
         "user_id": "user_demo_001",
         "payment_method": {
-            "type": "basic-card",
+            "type": "https://a2a-protocol.org/payment-methods/ap2-payment",
             "display_name": "American Expressカード (****8005)",
             "card_last4": "8005",
             "card_brand": "Amex",
@@ -463,7 +463,7 @@ SAMPLE_PAYMENT_METHODS = [
         "id": "pm_demo_jcb_9999",
         "user_id": "user_demo_001",
         "payment_method": {
-            "type": "basic-card",
+            "type": "https://a2a-protocol.org/payment-methods/ap2-payment",
             "display_name": "JCBカード (****9999)",
             "card_last4": "9999",
             "card_brand": "JCB",

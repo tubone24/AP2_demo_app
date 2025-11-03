@@ -42,23 +42,19 @@ SHIPPING_FEE = float(os.getenv("SHIPPING_FEE", "500.0"))  # 送料（円）
 FREE_SHIPPING_THRESHOLD = float(os.getenv("FREE_SHIPPING_THRESHOLD", "5000.0"))  # 送料無料の閾値（円）
 TAX_RATE = float(os.getenv("TAX_RATE", "0.1"))  # 税率（10%）
 
-# AP2 & W3C Payment Request API完全準拠: サポートする支払い方法
-# 環境変数でカスタマイズ可能（デフォルト: AP2プロトコル準拠の支払い方法）
+# AP2完全準拠: サポートする支払い方法
+# 環境変数でカスタマイズ可能（デフォルト: AP2公式のpayment method）
+# 注意: basic-cardは非推奨（2022年以降）→ AP2公式のpayment methodのみを使用
 SUPPORTED_PAYMENT_METHODS = json.loads(
     os.getenv("SUPPORTED_PAYMENT_METHODS", json.dumps([
         {
-            "supported_methods": "basic-card",  # W3C標準: クレジットカード
-            "data": {
-                "supportedNetworks": ["visa", "mastercard", "jcb", "amex"],
-                "supportedTypes": ["credit", "debit"]
-            }
-        },
-        {
-            "supported_methods": "https://a2a-protocol.org/payment-methods/ap2-payment",  # AP2準拠
+            "supported_methods": "https://a2a-protocol.org/payment-methods/ap2-payment",
             "data": {
                 "version": "0.2",
                 "processor": "did:ap2:agent:payment_processor",
-                "supportedMethods": ["credential-based", "attestation-based"]
+                "supportedMethods": ["credential-based", "attestation-based"],
+                "supportedNetworks": ["visa", "mastercard", "jcb", "amex"],
+                "supportedTypes": ["credit", "debit"]
             }
         }
     ]))
