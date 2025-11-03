@@ -207,7 +207,8 @@ class PaymentHelpers:
         self,
         payment_mandate: Dict[str, Any],
         cart_mandate: Dict[str, Any],
-        intent_mandate: Optional[Dict[str, Any]]
+        intent_mandate: Optional[Dict[str, Any]],
+        session: Optional[Dict[str, Any]] = None
     ) -> Tuple[int, list]:
         """
         リスク評価を実施してリスクスコアと不正指標を返す
@@ -216,6 +217,7 @@ class PaymentHelpers:
             payment_mandate: PaymentMandate
             cart_mandate: CartMandate
             intent_mandate: IntentMandate（オプション）
+            session: セッションデータ（max_amount制約取得用）
 
         Returns:
             tuple: (risk_score, fraud_indicators)
@@ -225,7 +227,8 @@ class PaymentHelpers:
             risk_result = self.risk_engine.assess_payment_mandate(
                 payment_mandate=payment_mandate,
                 cart_mandate=cart_mandate,
-                intent_mandate=intent_mandate
+                intent_mandate=intent_mandate,
+                session=session  # sessionを渡す
             )
 
             logger.info(

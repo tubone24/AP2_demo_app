@@ -67,7 +67,8 @@ class RiskAssessmentEngine:
         self,
         payment_mandate: Dict,
         cart_mandate: Optional[Dict] = None,
-        intent_mandate: Optional[Dict] = None
+        intent_mandate: Optional[Dict] = None,
+        session: Optional[Dict] = None
     ) -> RiskAssessmentResult:
         """
         Payment Mandateのリスクを評価
@@ -76,6 +77,7 @@ class RiskAssessmentEngine:
             payment_mandate: 評価対象のPayment Mandate
             cart_mandate: 関連するCart Mandate（オプション）
             intent_mandate: 関連するIntent Mandate（オプション）
+            session: セッションデータ（max_amount制約取得用）
 
         Returns:
             RiskAssessmentResult: リスク評価結果
@@ -89,12 +91,15 @@ class RiskAssessmentEngine:
         if amount_risk > 30:
             fraud_indicators.append("high_transaction_amount")
 
-        # 2. Intent制約違反チェック（intent_mandateがある場合のみ）
-        if intent_mandate:
+        # 2. Intent制約違反チェック（sessionからmax_amountを取得）
+        # AP2完全準拠: IntentMandateにはconstraintsフィールドが存在しないため、
+        # sessionから直接max_amountを取得する
+        if session:
             constraint_risk = self._assess_constraint_compliance(
                 payment_mandate,
                 cart_mandate,
-                intent_mandate
+                intent_mandate,
+                session  # sessionを渡す
             )
             risk_factors["constraint_risk"] = constraint_risk
             if constraint_risk > 0:
@@ -257,10 +262,20 @@ class RiskAssessmentEngine:
         self,
         payment_mandate: Dict,
         cart_mandate: Optional[Dict],
-        intent_mandate: Dict
+        intent_mandate: Optional[Dict],
+        session: Dict
     ) -> int:
         """
         Intent制約への準拠を評価（AP2完全準拠）
+
+        AP2完全準拠: IntentMandateにはconstraintsフィールドが存在しないため、
+        sessionから直接max_amountを取得する
+
+        Args:
+            payment_mandate: PaymentMandate
+            cart_mandate: CartMandate
+            intent_mandate: IntentMandate（未使用、後方互換性のため保持）
+            session: セッションデータ（max_amount取得用）
 
         Returns:
             0または50（違反があれば高リスク）
@@ -273,10 +288,16 @@ class RiskAssessmentEngine:
         payment_value_str = str(payment_amount.get("value", "0"))
         payment_currency = payment_amount.get("currency", "JPY")
 
-        # IntentMandateの制約から最大金額を取得
-        max_amount = intent_mandate.get("constraints", {}).get("max_amount", {})
-        max_value_str = str(max_amount.get("value", "0"))
-        max_currency = max_amount.get("currency", "JPY")
+        # AP2完全準拠: sessionから最大金額を取得
+        # （IntentMandateにはconstraintsフィールドが存在しない）
+        max_amount_value = session.get("max_amount")
+        if not max_amount_value:
+            # max_amountが設定されていない場合は制約なし
+            logger.info("[RiskAssessmentEngine] No max_amount constraint found in session")
+            return 0
+
+        max_value_str = str(max_amount_value)
+        max_currency = "JPY"  # sessionのmax_amountは常にJPY
 
         try:
             # AP2完全準拠: PaymentItemのvalueはfloatまたはint（円単位）
@@ -301,6 +322,7 @@ class RiskAssessmentEngine:
                 f"[RiskAssessmentEngine] Failed to parse amounts for constraint check: "
                 f"payment_value={payment_value_str}, max_value={max_value_str}, error={e}"
             )
+            return 0  # パース失敗時は制約チェックをスキップ
 
         # 通貨不一致
         if payment_currency != max_currency:
