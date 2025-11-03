@@ -200,29 +200,3 @@ class PaymentMandate(BaseModel):
         ),
         examples=["eyJhbGciOiJFUzI1NksiLCJraWQiOiJkaWQ6ZXhhbXBsZ..."],
     )
-    agent_involved: bool = Field(
-        True,
-        description=(
-            """
-            AP2仕様で必須：AI Agentがトランザクションに関与していることを示すシグナル。
-            PaymentエコシステムにAgenticトランザクションへの可視性を提供します。
-            常にTrueである必要があります（AP2プロトコル使用時）。
-            """
-        ),
-    )
-    transaction_type: str = Field(
-        ...,
-        description=(
-            """
-            AP2仕様で必須：トランザクションの実行方法を示すシグナル。
-
-            - "human_present": ユーザーが認証デバイスで直接承認した場合
-              （WebAuthn/Passkey、生体認証、デバイスPIN/パターン認証）
-            - "human_not_present": 上記以外
-              （パスワード認証のみ、認証なし、エージェント自律実行）
-
-            PaymentエコシステムにHuman-Present/Not-Present情報を提供します。
-            """
-        ),
-        examples=["human_present", "human_not_present"],
-    )

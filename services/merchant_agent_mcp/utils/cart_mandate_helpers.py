@@ -37,12 +37,16 @@ class CartMandateHelpers:
         self.free_shipping_threshold = free_shipping_threshold
         self.tax_rate = tax_rate
 
-        # W3C Payment Request API準拠: デフォルトの支払い方法
+        # AP2完全準拠: デフォルトの支払い方法
+        # basic-cardは非推奨（2022年以降）→ AP2公式のpayment methodのみを使用
         self.supported_payment_methods = supported_payment_methods or [
             {
-                "supported_methods": "basic-card",
+                "supported_methods": "https://a2a-protocol.org/payment-methods/ap2-payment",
                 "data": {
-                    "supportedNetworks": ["visa", "mastercard", "jcb"],
+                    "version": "0.2",
+                    "processor": "did:ap2:agent:payment_processor",
+                    "supportedMethods": ["credential-based", "attestation-based"],
+                    "supportedNetworks": ["visa", "mastercard", "jcb", "amex"],
                     "supportedTypes": ["credit", "debit"]
                 }
             }

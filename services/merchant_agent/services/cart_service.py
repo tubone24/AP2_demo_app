@@ -297,10 +297,15 @@ async def create_cart_from_products(
     }
 
     # PaymentRequest.method_data (支払い方法)
+    # AP2完全準拠: AP2公式のpayment method URL（basic-cardは非推奨）
     payment_method_data = [
         {
-            "supported_methods": "basic-card",
-            "data": {}
+            "supported_methods": "https://a2a-protocol.org/payment-methods/ap2-payment",
+            "data": {
+                "version": "0.2",
+                "processor": "did:ap2:agent:payment_processor",
+                "supportedMethods": ["credential-based", "attestation-based"]
+            }
         }
     ]
 

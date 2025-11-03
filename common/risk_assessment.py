@@ -103,13 +103,17 @@ class RiskAssessmentEngine:
             risk_factors["constraint_risk"] = 0
 
         # 3. Agent関与によるリスク
-        agent_risk = self._assess_agent_involvement(
-            payment_mandate.get("agent_involved", False)
-        )
+        # AP2完全準拠：AP2プロトコル使用時は常にAgent関与
+        # （PaymentMandateが存在すること自体がAgent関与の証明）
+        agent_risk = self._assess_agent_involvement(True)
         risk_factors["agent_risk"] = agent_risk
 
         # 4. 取引タイプリスク（CNP vs CP）
-        transaction_type = payment_mandate.get("transaction_type", "human_not_present")
+        # AP2完全準拠：user_authorizationの有無から判定
+        # - user_authorization あり（WebAuthn署名）→ human_present
+        # - user_authorization なし → human_not_present
+        user_authorization = payment_mandate.get("user_authorization")
+        transaction_type = "human_present" if user_authorization else "human_not_present"
         transaction_type_risk = self._assess_transaction_type(transaction_type)
         risk_factors["transaction_type_risk"] = transaction_type_risk
         if transaction_type == "human_not_present":
@@ -345,56 +349,102 @@ class RiskAssessmentEngine:
         """
         支払い方法のリスクを評価
 
+        AP2完全準拠 & PCI DSS準拠:
+        - 引数payment_methodは実際にはPaymentResponse（W3C Payment Request API準拠）
+        - トークン化された支払い方法（tokenized=true）の場合、有効期限チェックは不要
+        - Credential Providerが内部でトークンと紐付けられたカード情報を管理
+        - A2A通信には有効期限を含めない（PCI DSS 3.2.2項準拠）
+
+        Args:
+            payment_method: PaymentResponse（W3C Payment Request API形式）
+                {
+                  "methodName": "https://a2a-protocol.org/payment-methods/ap2-payment",
+                  "details": {
+                    "cardBrand": "Visa",
+                    "token": "tok_...",
+                    "tokenized": true
+                  }
+                }
+
         Returns:
             0-25のリスクスコア
         """
         risk = 0
 
-        payment_type = payment_method.get("type", "card")
-        if payment_type == "card":
-            # カードの有効期限をチェック
-            current_year = datetime.now().year
-            current_month = datetime.now().month
+        # W3C Payment Request API準拠: PaymentResponseからdetailsを取得
+        details = payment_method.get("details", {})
+        method_name = payment_method.get("methodName", "")
 
-            expiry_year = payment_method.get("expiry_year")
-            expiry_month = payment_method.get("expiry_month")
+        # カード決済の場合のみリスク評価
+        # AP2完全準拠: AP2公式payment method URLを優先
+        # 注意: basic-cardは非推奨だが、既存データとの互換性のため判定は維持
+        is_card_payment = (
+            method_name == "https://a2a-protocol.org/payment-methods/ap2-payment" or
+            method_name == "basic-card" or  # 既存データとの互換性
+            method_name == "card"  # 既存データとの互換性
+        )
 
-            # AP2完全準拠：有効期限が設定されていない場合は高リスク
-            if not expiry_year or not expiry_month:
-                logger.error(
-                    f"[_assess_payment_method] Invalid payment method: "
-                    f"missing expiry_year or expiry_month. "
-                    f"expiry_year={expiry_year}, expiry_month={expiry_month}"
+        if is_card_payment:
+            # AP2 & PCI DSS準拠：トークン化済みの場合は有効期限チェックをスキップ
+            is_tokenized = details.get("tokenized", False)
+
+            if is_tokenized:
+                # トークン化された支払い方法：有効期限はCredential Provider内部で管理
+                logger.info(
+                    "[_assess_payment_method] Tokenized payment method detected. "
+                    "Skipping expiry date validation (managed by Credential Provider)."
                 )
-                raise ValueError(
-                    "Invalid payment method: expiry_year and expiry_month are required for card payments. "
-                    "Please register a valid payment method with proper expiration date."
-                )
+                # トークンの存在確認のみ
+                token = details.get("token")
+                if not token or token == '':
+                    logger.warning("[_assess_payment_method] Tokenized payment method missing token")
+                    risk += 15
+                else:
+                    logger.debug(f"[_assess_payment_method] Token found: {token[:20]}...")
+            else:
+                # 非トークン化の支払い方法：有効期限チェックが必要
+                current_year = datetime.now().year
+                current_month = datetime.now().month
 
-            # 有効期限が近い（3ヶ月以内）
-            try:
-                months_until_expiry = (int(expiry_year) - current_year) * 12 + (int(expiry_month) - current_month)
-            except (TypeError, ValueError) as e:
-                logger.error(
-                    f"[_assess_payment_method] Invalid expiry date format: "
-                    f"expiry_year={expiry_year}, expiry_month={expiry_month}, error={e}"
-                )
-                raise ValueError(
-                    f"Invalid payment method expiry date format: "
-                    f"expiry_year={expiry_year}, expiry_month={expiry_month}. "
-                    f"Expected numeric values."
-                )
-            if months_until_expiry <= 3:
-                risk += 10
+                expiry_year = details.get("expiry_year") or details.get("expiryYear")
+                expiry_month = details.get("expiry_month") or details.get("expiryMonth")
 
-            # 有効期限が切れている
-            if months_until_expiry < 0:
-                risk += 50
+                # 有効期限が設定されていない場合は高リスク
+                if not expiry_year or not expiry_month:
+                    logger.error(
+                        f"[_assess_payment_method] Invalid payment method: "
+                        f"missing expiry_year or expiry_month. "
+                        f"expiry_year={expiry_year}, expiry_month={expiry_month}"
+                    )
+                    raise ValueError(
+                        "Invalid payment method: expiry_year and expiry_month are required for card payments. "
+                        "Please register a valid payment method with proper expiration date."
+                    )
 
-            # トークン化されていない場合
-            token = payment_method.get("token")
-            if not token or token == '':
-                risk += 15
+                # 有効期限が近い（3ヶ月以内）
+                try:
+                    months_until_expiry = (int(expiry_year) - current_year) * 12 + (int(expiry_month) - current_month)
+                except (TypeError, ValueError) as e:
+                    logger.error(
+                        f"[_assess_payment_method] Invalid expiry date format: "
+                        f"expiry_year={expiry_year}, expiry_month={expiry_month}, error={e}"
+                    )
+                    raise ValueError(
+                        f"Invalid payment method expiry date format: "
+                        f"expiry_year={expiry_year}, expiry_month={expiry_month}. "
+                        f"Expected numeric values."
+                    )
+                if months_until_expiry <= 3:
+                    risk += 10
+
+                # 有効期限が切れている
+                if months_until_expiry < 0:
+                    risk += 50
+
+                # トークン化されていない場合
+                token = details.get("token")
+                if not token or token == '':
+                    risk += 15
 
         return min(risk, 25)
 

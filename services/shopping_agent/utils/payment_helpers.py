@@ -25,58 +25,6 @@ class PaymentHelpers:
         """
         self.risk_engine = risk_engine
 
-    def determine_transaction_type(self, session: Dict[str, Any]) -> str:
-        """
-        AP2仕様準拠のtransaction_type（Human-Present/Not-Present）を判定
-
-        AP2仕様では、AI Agent関与とHuman-Present/Not-Presentシグナルを
-        必ず含める必要があります。
-
-        判定基準：
-        - human_present: ユーザーが認証デバイスで直接承認した場合
-          - WebAuthn/Passkey認証完了
-          - 生体認証（指紋、顔認証等）
-          - デバイスPIN/パターン認証
-        - human_not_present: 上記以外
-          - パスワード認証のみ
-          - 認証なし
-          - エージェント自律実行
-
-        Args:
-            session: ユーザーセッション
-
-        Returns:
-            str: "human_present" または "human_not_present"
-        """
-        # 1. WebAuthn assertion完了確認（最優先：実際の認証完了）
-        cart_webauthn_assertion = session.get("cart_webauthn_assertion")
-        payment_webauthn_assertion = session.get("payment_webauthn_assertion")
-        if cart_webauthn_assertion or payment_webauthn_assertion:
-            logger.info("[ShoppingAgent] transaction_type=human_present (WebAuthn assertion completed)")
-            return "human_present"
-
-        # 2. WebAuthn/Passkey認証トークン確認
-        attestation_token = session.get("attestation_token")
-        if attestation_token:
-            logger.info("[ShoppingAgent] transaction_type=human_present (WebAuthn attestation token found)")
-            return "human_present"
-
-        # 3. will_use_passkeyフラグ確認（WebAuthn使用予定）
-        will_use_passkey = session.get("will_use_passkey", False)
-        if will_use_passkey:
-            logger.info("[ShoppingAgent] transaction_type=human_present (WebAuthn flow initiated)")
-            return "human_present"
-
-        # 4. WebAuthn challengeが存在する場合（認証フロー進行中）
-        webauthn_challenge = session.get("webauthn_challenge")
-        if webauthn_challenge:
-            logger.info("[ShoppingAgent] transaction_type=human_present (WebAuthn challenge active)")
-            return "human_present"
-
-        # デフォルト: human_not_present
-        logger.info("[ShoppingAgent] transaction_type=human_not_present (no strong authentication detected)")
-        return "human_not_present"
-
     @staticmethod
     def validate_cart_and_payment_method(session: Dict[str, Any]) -> tuple[Dict[str, Any], Dict[str, Any]]:
         """
@@ -151,9 +99,13 @@ class PaymentHelpers:
         - cardSecurityCode（CVV/CVC）: 認証後の保持・送信は禁止（PCI DSS 3.2.2項）
         - cardNumber: マスクしていても、トークン化済みなら不要（AP2仕様）
         - token: ✅ 安全（tokenized=trueにより、カード情報は削除済みと見なされる）
+
+        W3C Payment Request API準拠:
+        - methodName: AP2公式のpayment method URL（basic-cardは非推奨）
+        - https://a2a-protocol.org/payment-methods/ap2-payment
         """
         return {
-            "methodName": "basic-card",  # または "secure-payment-confirmation"
+            "methodName": "https://a2a-protocol.org/payment-methods/ap2-payment",
             "details": {
                 # AP2完全準拠 & PCI DSS準拠:
                 # - cardNumber: マスク済みでも、トークン化済みなら不要（削除）

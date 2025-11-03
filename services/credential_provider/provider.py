@@ -1691,11 +1691,17 @@ class CredentialProviderService(BaseAgent):
             # PaymentMandate IDを取得
             payment_mandate_id = payment_mandate.get("id")
             payer_id = payment_mandate.get("payer_id", "unknown")
-            transaction_type = payment_mandate.get("transaction_type", "human_not_present")
+
+            # AP2完全準拠：user_authorizationの有無から取引タイプを判定
+            # - user_authorization あり（WebAuthn署名）→ human_present
+            # - user_authorization なし → human_not_present
+            user_authorization = payment_mandate.get("user_authorization")
+            transaction_type = "human_present" if user_authorization else "human_not_present"
 
             logger.info(
                 f"[CredentialProvider] Processing PaymentMandate: "
-                f"id={payment_mandate_id}, payer_id={payer_id}, transaction_type={transaction_type}"
+                f"id={payment_mandate_id}, payer_id={payer_id}, transaction_type={transaction_type} "
+                f"(inferred from user_authorization)"
             )
 
             # Human Present（ユーザーが認証可能）の場合はWebAuthn attestationが必要
