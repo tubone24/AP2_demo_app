@@ -92,7 +92,6 @@ export async function signWithPasskey(
   } catch (error: any) {
     console.error("[WebAuthn] Authentication error:", error);
 
-    // AP2完全準拠：エラーメッセージを日本語化
     let errorMessage = "Passkey認証に失敗しました";
     if (error.name === "NotAllowedError") {
       errorMessage = "認証がキャンセルされました。もう一度お試しください。";

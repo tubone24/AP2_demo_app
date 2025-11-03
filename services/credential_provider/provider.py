@@ -490,7 +490,6 @@ class CredentialProviderService(BaseAgent):
             """
             POST /verify/attestation - WebAuthn attestation検証
 
-            demo_app_v2.md:
             リクエスト： { payment_mandate: {...}, attestation: {...} }
 
             処理： WebAuthn attestation の検証（公開鍵検証・authenticatorData, clientDataJSONの検証等）
