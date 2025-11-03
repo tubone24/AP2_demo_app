@@ -1802,8 +1802,13 @@ class ShoppingAgent(BaseAgent):
         #   - user_id: セッション管理およびMerchant Agent処理用
         #   - created_at: 監査ログ用
         #
+        # AP2完全準拠：
+        # - constraintsフィールドはAP2仕様に存在しないため含めない
+        # - max_amount制約はsessionで管理し、リスク評価時に参照
+        #
         # 将来的には、これらのメタデータをA2Aメッセージエンベロープや
         # 別のデータ構造で管理することが望ましいです。
+
         intent_mandate_with_metadata = {
             "id": f"intent_{uuid.uuid4().hex[:8]}",
             "type": "IntentMandate",
@@ -2083,10 +2088,18 @@ class ShoppingAgent(BaseAgent):
         self,
         payment_mandate: Dict[str, Any],
         cart_mandate: Dict[str, Any],
-        intent_mandate: Optional[Dict[str, Any]]
+        intent_mandate: Optional[Dict[str, Any]],
+        session: Optional[Dict[str, Any]] = None
     ) -> tuple[int, list[str]]:
-        """リスク評価実施（ヘルパーメソッドに委譲）"""
-        return self.payment_helpers.perform_risk_assessment(payment_mandate, cart_mandate, intent_mandate)
+        """リスク評価実施（ヘルパーメソッドに委譲）
+
+        Args:
+            payment_mandate: PaymentMandate
+            cart_mandate: CartMandate
+            intent_mandate: IntentMandate
+            session: セッションデータ（max_amount制約取得用）
+        """
+        return self.payment_helpers.perform_risk_assessment(payment_mandate, cart_mandate, intent_mandate, session)
 
     async def _create_payment_mandate(self, session: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -2147,11 +2160,12 @@ class ShoppingAgent(BaseAgent):
             }  # Payment Processor決済処理
         }
 
-        # 7. リスク評価を実施
+        # 7. リスク評価を実施（sessionを渡してmax_amount制約を取得）
         risk_score, fraud_indicators = self._perform_risk_assessment(
             payment_mandate,
             session.get("cart_mandate"),
-            session.get("intent_mandate")
+            session.get("intent_mandate"),
+            session  # sessionを渡す（max_amount制約取得用）
         )
         payment_mandate["risk_score"] = risk_score
         payment_mandate["fraud_indicators"] = fraud_indicators
