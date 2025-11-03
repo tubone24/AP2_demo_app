@@ -116,15 +116,24 @@ class RiskAssessmentEngine:
             fraud_indicators.append("card_not_present_transaction")
 
         # 5. 支払い方法リスク
-        payment_method = payment_mandate.get("payment_method", {})
-        payment_method_risk = self._assess_payment_method(payment_method)
+        # AP2完全準拠: PaymentResponseから支払い方法を取得
+        payment_mandate_contents = payment_mandate.get("payment_mandate_contents", {})
+        payment_response = payment_mandate_contents.get("payment_response", {})
+        payment_method_risk = self._assess_payment_method(payment_response)
         risk_factors["payment_method_risk"] = payment_method_risk
         if payment_method_risk > 20:
             fraud_indicators.append("payment_method_risk")
 
         # 6. 取引パターンリスク
-        payer_id = payment_mandate.get("payer_id", "unknown")
-        amount_value = payment_mandate.get("amount", {}).get("value", "0")
+        # AP2完全準拠: PaymentResponseから支払者情報を取得
+        payment_mandate_contents = payment_mandate.get("payment_mandate_contents", {})
+        payment_response = payment_mandate_contents.get("payment_response", {})
+        payer_id = payment_response.get("payer_id", "unknown")
+
+        # 金額を取得（既に_assess_amount_riskで計算済みだが、再取得）
+        payment_details_total = payment_mandate_contents.get("payment_details_total", {})
+        amount_value = str(payment_details_total.get("amount", {}).get("value", "0"))
+
         pattern_risk = self._assess_transaction_pattern(payer_id, amount_value)
         risk_factors["pattern_risk"] = pattern_risk
         if pattern_risk > 30:
@@ -141,9 +150,11 @@ class RiskAssessmentEngine:
 
         # 8. 時間的リスク（Intent Mandateがある場合のみ）
         if intent_mandate:
+            # AP2完全準拠: PaymentMandateContentsからタイムスタンプを取得
+            payment_timestamp = payment_mandate_contents.get("timestamp")
             temporal_risk = self._assess_temporal_risk(
                 intent_mandate.get("created_at"),
-                payment_mandate.get("created_at")
+                payment_timestamp
             )
             risk_factors["temporal_risk"] = temporal_risk
             if temporal_risk > 20:
@@ -179,20 +190,24 @@ class RiskAssessmentEngine:
         intent_mandate: Optional[Dict]
     ) -> int:
         """
-        取引金額のリスクを評価
+        取引金額のリスクを評価（AP2完全準拠）
 
         Returns:
             0-80のリスクスコア
         """
-        amount = payment_mandate.get("amount", {})
-        amount_value_str = amount.get("value", "0")
+        # AP2完全準拠: PaymentMandateの正しい構造からデータを取得
+        payment_mandate_contents = payment_mandate.get("payment_mandate_contents", {})
+        payment_details_total = payment_mandate_contents.get("payment_details_total", {})
+        amount = payment_details_total.get("amount", {})
+        amount_value_str = str(amount.get("value", "0"))
 
-        # 値を整数に変換（cent単位と仮定）
+        # 値を整数に変換（cent単位）
+        # AP2完全準拠: PaymentItemのvalueはfloatまたはint（円単位）
         try:
             if "." in amount_value_str:
                 amount_value = int(float(amount_value_str) * 100)
             else:
-                amount_value = int(amount_value_str)
+                amount_value = int(amount_value_str) * 100  # 円→セント変換
         except (ValueError, TypeError):
             logger.warning(f"[RiskAssessmentEngine] Invalid amount value: {amount_value_str}")
             amount_value = 0
@@ -241,39 +256,47 @@ class RiskAssessmentEngine:
         intent_mandate: Dict
     ) -> int:
         """
-        Intent制約への準拠を評価
+        Intent制約への準拠を評価（AP2完全準拠）
 
         Returns:
             0または50（違反があれば高リスク）
         """
-        # 金額オーバー
-        payment_amount = payment_mandate.get("amount", {})
-        payment_value_str = payment_amount.get("value", "0")
+        # AP2完全準拠: PaymentMandateの正しい構造からデータを取得
+        # payment_mandate["payment_mandate_contents"]["payment_details_total"]["amount"]
+        payment_mandate_contents = payment_mandate.get("payment_mandate_contents", {})
+        payment_details_total = payment_mandate_contents.get("payment_details_total", {})
+        payment_amount = payment_details_total.get("amount", {})
+        payment_value_str = str(payment_amount.get("value", "0"))
         payment_currency = payment_amount.get("currency", "JPY")
 
+        # IntentMandateの制約から最大金額を取得
         max_amount = intent_mandate.get("constraints", {}).get("max_amount", {})
-        max_value_str = max_amount.get("value", "0")
+        max_value_str = str(max_amount.get("value", "0"))
         max_currency = max_amount.get("currency", "JPY")
 
         try:
+            # AP2完全準拠: PaymentItemのvalueはfloatまたはint（円単位）
             if "." in payment_value_str:
                 payment_value = int(float(payment_value_str) * 100)
             else:
-                payment_value = int(payment_value_str)
+                payment_value = int(payment_value_str) * 100  # 円→セント変換
 
             if "." in max_value_str:
                 max_value = int(float(max_value_str) * 100)
             else:
-                max_value = int(max_value_str)
+                max_value = int(max_value_str) * 100  # 円→セント変換
 
             if payment_value > max_value:
                 logger.warning(
                     f"[RiskAssessmentEngine] Amount exceeds constraint: "
-                    f"{payment_value} > {max_value}"
+                    f"{payment_value/100}円 > {max_value/100}円"
                 )
                 return 50
-        except (ValueError, TypeError):
-            logger.warning("[RiskAssessmentEngine] Failed to parse amounts for constraint check")
+        except (ValueError, TypeError) as e:
+            logger.warning(
+                f"[RiskAssessmentEngine] Failed to parse amounts for constraint check: "
+                f"payment_value={payment_value_str}, max_value={max_value_str}, error={e}"
+            )
 
         # 通貨不一致
         if payment_currency != max_currency:
