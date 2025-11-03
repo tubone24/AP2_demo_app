@@ -113,13 +113,15 @@ def create_user_authorization_vp(
     payment_processor_id: str = "did:ap2:agent:payment_processor"
 ) -> str:
     """
-    WebAuthn assertionからSD-JWT-VC形式のuser_authorizationを生成（AP2仕様完全準拠）
+    WebAuthn assertionからSD-JWT+KB標準形式のuser_authorizationを生成（IETF RFC準拠、AP2完全準拠）
 
-    AP2仕様（refs/AP2-main/src/ap2/types/mandate.py:181-200）に基づき、
+    IETF SD-JWT-VC標準とAP2仕様（refs/AP2-main/src/ap2/types/mandate.py:181-200）に基づき、
     以下の構造のVerifiable Presentationを生成します：
 
     1. Issuer-signed JWT: ユーザーデバイスの公開鍵を含む（cnf claim）
-    2. Key-binding JWT: transaction_data（ハッシュ）を含み、デバイス鍵で署名
+    2. Key-binding JWT: transaction_data（ハッシュ）とWebAuthn assertionデータを含み、デバイス鍵で署名
+
+    形式: "issuer_jwt~kb_jwt" (チルダ区切り、IETF標準)
 
     Args:
         webauthn_assertion: フロントエンドから受信したWebAuthn assertion
@@ -130,7 +132,7 @@ def create_user_authorization_vp(
         payment_processor_id: Payment ProcessorのDID（デフォルト: did:ap2:agent:payment_processor）
 
     Returns:
-        str: base64url-encoded SD-JWT-VC形式のuser_authorization
+        str: SD-JWT+KB標準形式（チルダ区切り）のuser_authorization
 
     Raises:
         ValueError: VP生成に失敗した場合
@@ -223,7 +225,7 @@ def create_user_authorization_vp(
             base64url_encode(json.dumps(issuer_jwt_payload, separators=(',', ':')).encode())
         )
 
-        # Step 5: Key-binding JWT を生成（transaction_data含む）
+        # Step 5: Key-binding JWT を生成（transaction_data + WebAuthn assertion含む）
         kb_jwt_header = {
             "alg": "ES256",
             "typ": "kb+jwt"  # Key-binding JWT
@@ -231,39 +233,44 @@ def create_user_authorization_vp(
 
         nonce = secrets.token_urlsafe(32)  # リプレイ攻撃対策
 
+        # AP2完全準拠: kb_jwtにWebAuthn assertionデータを含める
         kb_jwt_payload = {
             "aud": payment_processor_id,
             "nonce": nonce,
             "iat": int(now.timestamp()),
             "sd_hash": hashlib.sha256(issuer_jwt_str.encode()).hexdigest(),  # Issuer JWTのハッシュ
-            "transaction_data": [cart_hash, payment_hash]  # AP2仕様: CartとPaymentのハッシュ
+            "transaction_data": [cart_hash, payment_hash],  # AP2仕様: CartとPaymentのハッシュ
+            # WebAuthn assertionの検証に必要なデータをクレームとして含める
+            "webauthn": {
+                "credential_id": webauthn_assertion.get("id"),
+                "authenticator_data": webauthn_assertion.get("response", {}).get("authenticatorData"),
+                "client_data_json": webauthn_assertion.get("response", {}).get("clientDataJSON"),
+                "user_handle": webauthn_assertion.get("response", {}).get("userHandle")
+            }
         }
 
-        kb_jwt_str = (
+        # kb_jwtのヘッダーとペイロードをエンコード
+        kb_jwt_unsigned = (
             base64url_encode(json.dumps(kb_jwt_header, separators=(',', ':')).encode()) +
             "." +
             base64url_encode(json.dumps(kb_jwt_payload, separators=(',', ':')).encode())
         )
 
-        # Step 6: WebAuthn署名を使用（デバイス鍵による署名の代わり）
+        # Step 6: WebAuthn署名をKey-binding JWTの署名として使用
         # WebAuthn assertionの署名は authenticatorData + SHA256(clientDataJSON) に対する署名
-        # これをKey-binding JWTの署名として流用
+        # この署名をそのままkb_jwtの署名として流用
+        webauthn_signature_b64url = webauthn_assertion.get("response", {}).get("signature", "")
 
-        # VP形式: issuer_jwt + "~" + kb_jwt + "~" + webauthn_signature
-        # 簡略化版: WebAuthn assertion全体をbase64url-encodeして含める
-        vp = {
-            "issuer_jwt": issuer_jwt_str,
-            "kb_jwt": kb_jwt_str,
-            "webauthn_assertion": webauthn_assertion,  # 完全なWebAuthn assertionを含める
-            "cart_hash": cart_hash,
-            "payment_hash": payment_hash
-        }
+        # kb_jwt完成: header.payload.signature
+        kb_jwt_str = f"{kb_jwt_unsigned}.{webauthn_signature_b64url}"
 
-        # base64url-encodeしてuser_authorizationとして返却
-        user_authorization = base64url_encode(json.dumps(vp, separators=(',', ':')).encode())
+        # Step 7: SD-JWT+KB標準形式（IETF RFC準拠）
+        # 形式: <Issuer-signed JWT>~<Disclosure 1>~<Disclosure 2>~...~<KB-JWT>
+        # 今回はDisclosureなし（Selective Disclosure不要）なので: issuer_jwt~kb_jwt
+        user_authorization = f"{issuer_jwt_str}~{kb_jwt_str}"
 
         logger.info(
-            f"[create_user_authorization_vp] Generated user_authorization VP: "
+            f"[create_user_authorization_vp] Generated SD-JWT+KB user_authorization (IETF standard): "
             f"length={len(user_authorization)}, cart_hash={cart_hash[:16]}..., payment_hash={payment_hash[:16]}..."
         )
 
@@ -327,10 +334,10 @@ def verify_user_authorization_vp(
     expected_audience: str = "did:ap2:agent:payment_processor"
 ) -> Dict[str, Any]:
     """
-    SD-JWT-VC形式のuser_authorizationを検証（AP2仕様完全準拠）
+    SD-JWT+KB標準形式のuser_authorizationを検証（IETF RFC準拠、AP2完全準拠）
 
     Args:
-        user_authorization: base64url-encoded VP
+        user_authorization: SD-JWT+KB標準形式（チルダ区切り）: "issuer_jwt~kb_jwt"
         expected_cart_hash: 期待されるCartMandateのハッシュ（Noneの場合はスキップ）
         expected_payment_hash: 期待されるPaymentMandateのハッシュ（Noneの場合はスキップ）
         expected_audience: 期待されるAudience（デフォルト: Payment Processor）
@@ -342,21 +349,40 @@ def verify_user_authorization_vp(
         ValueError: 検証失敗時
     """
     try:
-        # Step 1: base64url-decodeしてVPを取得
-        vp_bytes = base64url_decode(user_authorization)
-        vp = json.loads(vp_bytes.decode('utf-8'))
+        # Step 1: SD-JWT+KB標準形式をパース（チルダ区切り）
+        parts = user_authorization.split('~')
+        if len(parts) < 2:
+            raise ValueError(
+                f"Invalid SD-JWT+KB format: expected 'issuer_jwt~kb_jwt', got {len(parts)} parts"
+            )
 
-        logger.info("[verify_user_authorization_vp] Decoded VP successfully")
+        issuer_jwt_str = parts[0]
+        kb_jwt_str = parts[1]
 
-        # Step 2: WebAuthn assertionを抽出
-        webauthn_assertion = vp.get("webauthn_assertion")
-        if not webauthn_assertion:
-            raise ValueError("webauthn_assertion not found in VP")
+        logger.info("[verify_user_authorization_vp] Parsed SD-JWT+KB format successfully")
+
+        # Step 2: Key-binding JWTからtransaction_dataとWebAuthn assertionを抽出
+        kb_jwt_parts = kb_jwt_str.split(".")
+        if len(kb_jwt_parts) < 2:
+            raise ValueError("Invalid kb_jwt format")
+
+        kb_payload_bytes = base64url_decode(kb_jwt_parts[1])
+        kb_payload = json.loads(kb_payload_bytes.decode('utf-8'))
+
+        # transaction_dataからハッシュを取得
+        transaction_data = kb_payload.get("transaction_data", [])
+        if len(transaction_data) < 2:
+            raise ValueError("transaction_data must contain [cart_hash, payment_hash]")
+
+        cart_hash = transaction_data[0]
+        payment_hash = transaction_data[1]
+
+        # WebAuthn assertionをクレームから取得
+        webauthn_data = kb_payload.get("webauthn", {})
+        if not webauthn_data:
+            raise ValueError("webauthn data not found in kb_jwt")
 
         # Step 3: transaction_dataのハッシュを検証
-        cart_hash = vp.get("cart_hash")
-        payment_hash = vp.get("payment_hash")
-
         if expected_cart_hash and cart_hash != expected_cart_hash:
             raise ValueError(
                 f"Cart hash mismatch: expected {expected_cart_hash[:16]}..., "
@@ -376,7 +402,6 @@ def verify_user_authorization_vp(
 
         # Step 4: WebAuthn assertionの署名を検証（AP2仕様完全準拠）
         # 公開鍵はIssuer JWTのcnf claimから取得
-        issuer_jwt_str = vp.get("issuer_jwt")
         if issuer_jwt_str:
             try:
                 # Issuer JWTをデコード（署名検証なし、公開鍵抽出のため）
@@ -408,11 +433,11 @@ def verify_user_authorization_vp(
                         public_numbers = EllipticCurvePublicNumbers(x_int, y_int, SECP256R1())
                         public_key = public_numbers.public_key(default_backend())
 
-                        # WebAuthn assertionの署名を検証
-                        response = webauthn_assertion.get("response", {})
-                        authenticator_data_b64 = response.get("authenticatorData")
-                        client_data_json_b64 = response.get("clientDataJSON")
-                        signature_b64 = response.get("signature")
+                        # WebAuthn assertionの署名を検証（kb_jwtのクレームから取得）
+                        authenticator_data_b64 = webauthn_data.get("authenticator_data")
+                        client_data_json_b64 = webauthn_data.get("client_data_json")
+                        # signature_b64はkb_jwtの署名部分として既に含まれている
+                        signature_b64 = kb_jwt_parts[2] if len(kb_jwt_parts) >= 3 else None
 
                         if authenticator_data_b64 and client_data_json_b64 and signature_b64:
                             # 署名対象データ: authenticatorData + SHA256(clientDataJSON)
@@ -450,40 +475,41 @@ def verify_user_authorization_vp(
                 logger.error(f"[verify_user_authorization_vp] Failed to verify WebAuthn signature: {e}")
                 raise ValueError(f"WebAuthn signature verification failed: {e}")
 
-        # Step 5: Key-binding JWTのペイロードを検証
-        kb_jwt_str = vp.get("kb_jwt")
-        if kb_jwt_str:
-            # base64url-decodeしてペイロードを取得
-            kb_jwt_parts = kb_jwt_str.split(".")
-            if len(kb_jwt_parts) >= 2:
-                kb_payload_bytes = base64url_decode(kb_jwt_parts[1])
-                kb_payload = json.loads(kb_payload_bytes.decode('utf-8'))
+        # Step 5: Key-binding JWTのペイロード検証（既に取得済みのkb_payloadを使用）
+        # Audience検証
+        if kb_payload.get("aud") != expected_audience:
+            logger.warning(
+                f"[verify_user_authorization_vp] Unexpected audience: {kb_payload.get('aud')}, "
+                f"expected {expected_audience}"
+            )
 
-                # Audience検証
-                if kb_payload.get("aud") != expected_audience:
-                    logger.warning(
-                        f"[verify_user_authorization_vp] Unexpected audience: {kb_payload.get('aud')}, "
-                        f"expected {expected_audience}"
-                    )
+        # transaction_dataの整合性を再確認（既にStep 3で検証済み）
+        if len(transaction_data) >= 2:
+            if transaction_data[0] != cart_hash:
+                raise ValueError("Cart hash in transaction_data does not match")
+            if transaction_data[1] != payment_hash:
+                raise ValueError("Payment hash in transaction_data does not match")
 
-                # transaction_data検証
-                transaction_data = kb_payload.get("transaction_data", [])
-                if len(transaction_data) >= 2:
-                    if transaction_data[0] != cart_hash:
-                        raise ValueError("Cart hash in transaction_data does not match")
-                    if transaction_data[1] != payment_hash:
-                        raise ValueError("Payment hash in transaction_data does not match")
+        logger.info("[verify_user_authorization_vp] Key-binding JWT payload verified")
+        logger.info("[verify_user_authorization_vp] ✓ SD-JWT+KB verification passed (IETF standard)")
 
-                logger.info("[verify_user_authorization_vp] Key-binding JWT payload verified")
-
-        logger.info("[verify_user_authorization_vp] ✓ VP verification passed")
+        # WebAuthn assertion構造を復元（後方互換性のため）
+        webauthn_assertion = {
+            "id": webauthn_data.get("credential_id"),
+            "response": {
+                "authenticatorData": webauthn_data.get("authenticator_data"),
+                "clientDataJSON": webauthn_data.get("client_data_json"),
+                "userHandle": webauthn_data.get("user_handle")
+            }
+        }
 
         return {
             "verified": True,
             "webauthn_assertion": webauthn_assertion,
             "cart_hash": cart_hash,
             "payment_hash": payment_hash,
-            "vp": vp
+            "issuer_jwt": issuer_jwt_str,
+            "kb_jwt": kb_jwt_str
         }
 
     except Exception as e:
