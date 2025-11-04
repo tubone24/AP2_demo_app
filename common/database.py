@@ -456,7 +456,9 @@ class ProductCRUD:
     async def create(session: AsyncSession, product_data: Dict[str, Any]) -> Product:
         """商品作成"""
         metadata = product_data.get("metadata", {})
-        image_url = metadata.get("image_url") if metadata else None
+        # AP2完全準拠: image_urlはトップレベルから取得（seed_data.pyと一貫性）
+        # フォールバック: metadataにもある場合はそちらを優先
+        image_url = product_data.get("image_url") or (metadata.get("image_url") if metadata else None)
 
         product = Product(
             id=product_data.get("id", str(uuid.uuid4())),

@@ -30,7 +30,8 @@ from typing import Dict, Any, List
 # プロジェクトルートをパスに追加
 project_root = Path(__file__).parent.parent.parent
 # データディレクトリ（Docker Volumeマウント想定）
-DATA_DIR = Path("/app/v2/data")
+# AP2完全準拠: docker-compose.ymlのvolumeマウント（data:/app/data）に合わせる
+DATA_DIR = Path("/app/data")
 
 # サンプル商品データをインポート（common/seed_data.pyから）
 try:
@@ -103,7 +104,8 @@ class SeedInitializer:
 
         try:
             # 1. 商品データ投入（merchant_agent.db）
-            await self.seed_products("sqlite+aiosqlite:////app/v2/data/merchant_agent.db")
+            # AP2完全準拠: docker-compose.ymlのDATABASE_URLに合わせる
+            await self.seed_products("sqlite+aiosqlite:////app/data/merchant_agent.db")
 
         except Exception as e:
             print(f"\n❌ エラー: シードデータ投入に失敗しました")

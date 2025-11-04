@@ -1,9 +1,11 @@
 "use client";
 
+import { useState } from "react";
 import Image from "next/image";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { ShoppingCart, Info } from "lucide-react";
 
 // AP2準拠の型定義
@@ -83,6 +85,7 @@ export function CartCard({
   onViewDetails,
 }: CartCardProps) {
   const { cart_mandate, artifact_name } = cartCandidate;
+  const [selectedImage, setSelectedImage] = useState<{ url: string; label: string } | null>(null);
 
   // AP2準拠の構造から情報を取得
   const { contents, _metadata } = cart_mandate;
@@ -136,7 +139,11 @@ export function CartCard({
                 className="flex items-center gap-2 p-2 bg-muted/30 rounded-md"
               >
                 {/* AP2完全準拠: 商品画像を常に表示（ユーザビリティ向上） */}
-                <div className="relative w-10 h-10 flex-shrink-0">
+                <div
+                  className="relative w-10 h-10 flex-shrink-0 cursor-pointer hover:ring-2 hover:ring-primary rounded transition-all"
+                  onClick={() => setSelectedImage({ url: imageUrl, label: item.label })}
+                  title="クリックして拡大表示"
+                >
                   <Image
                     src={imageUrl}
                     alt={item.label}
@@ -199,6 +206,27 @@ export function CartCard({
           </Button>
         </div>
       </CardContent>
+
+      {/* 画像拡大表示モーダル */}
+      <Dialog open={!!selectedImage} onOpenChange={() => setSelectedImage(null)}>
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>{selectedImage?.label}</DialogTitle>
+          </DialogHeader>
+          <div className="relative w-full aspect-square">
+            {selectedImage && (
+              <Image
+                src={selectedImage.url}
+                alt={selectedImage.label}
+                fill
+                className="object-contain"
+                sizes="(max-width: 768px) 100vw, 768px"
+                unoptimized={selectedImage.url.startsWith("/")}
+              />
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
     </Card>
   );
 }
