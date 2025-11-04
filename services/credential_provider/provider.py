@@ -531,6 +531,16 @@ class CredentialProviderService(BaseAgent):
                             attestation=attestation,
                             payment_method_token=payment_method_token  # PaymentMandateから取得したトークンを使用
                         )
+
+                        # agent_tokenをトークンストアに保存（Payment Processor用）
+                        if agent_token:
+                            token_data = await self.token_store.get_token(payment_method_token)
+                            if token_data:
+                                token_data["agent_token"] = agent_token
+                                await self.token_store.save_token(payment_method_token, token_data)
+                                logger.info(f"[verify_attestation] Saved agent_token to token store for token: {payment_method_token[:20]}...")
+                            else:
+                                logger.warning(f"[verify_attestation] Token not found in store, cannot save agent_token: {payment_method_token[:20]}...")
                     else:
                         logger.info(f"[verify_attestation] No payment_method.token in mandate (likely IntentMandate signature), skipping Payment Network call")
 
@@ -614,6 +624,16 @@ class CredentialProviderService(BaseAgent):
                                 attestation=attestation,
                                 payment_method_token=payment_method_token  # PaymentMandateから取得したトークンを使用
                             )
+
+                            # agent_tokenをトークンストアに保存（Payment Processor用）
+                            if agent_token:
+                                token_data = await self.token_store.get_token(payment_method_token)
+                                if token_data:
+                                    token_data["agent_token"] = agent_token
+                                    await self.token_store.save_token(payment_method_token, token_data)
+                                    logger.info(f"[verify_attestation] Saved agent_token to token store for token: {payment_method_token[:20]}...")
+                                else:
+                                    logger.warning(f"[verify_attestation] Token not found in store, cannot save agent_token: {payment_method_token[:20]}...")
                         else:
                             logger.info(f"[verify_attestation] No payment_method.token in mandate (likely IntentMandate signature), skipping Payment Network call")
 
@@ -1645,7 +1665,18 @@ class CredentialProviderService(BaseAgent):
                 # トークンから正確な支払い方法を取得
                 payment_method = token_data["payment_method"]
 
-                logger.info(f"[verify_credentials] Token verified: payment_method_id={payment_method['id']}, user_id={payer_id}")
+                # Agent Token取得（AP2 Step 26-27）
+                agent_token = token_data.get("agent_token")
+                if not agent_token:
+                    logger.warning(
+                        f"[verify_credentials] No agent_token found for token: {token[:20]}... "
+                        f"This may occur if PaymentMandate was not signed or Payment Network call failed."
+                    )
+
+                logger.info(
+                    f"[verify_credentials] Token verified: payment_method_id={payment_method['id']}, "
+                    f"user_id={payer_id}, agent_token={'present' if agent_token else 'missing'}"
+                )
 
                 return {
                     "verified": True,
@@ -1656,7 +1687,8 @@ class CredentialProviderService(BaseAgent):
                         "last4": payment_method.get("last4", "0000"),
                         "holder_name": payment_method.get("holder_name", "Unknown"),
                         "expiry_month": payment_method.get("expiry_month"),
-                        "expiry_year": payment_method.get("expiry_year")
+                        "expiry_year": payment_method.get("expiry_year"),
+                        "agent_token": agent_token
                     }
                 }
 

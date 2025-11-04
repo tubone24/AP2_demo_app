@@ -77,8 +77,11 @@ class PaymentProcessorService(BaseAgent):
         # Credential Providerエンドポイント（Docker Compose環境想定）
         self.credential_provider_url = "http://credential_provider:8003"
 
-        # 領収書送信を有効化するかどうか（環境変数で制御可能）
+        # Payment Networkエンドポイント（Docker Compose環境想定）
         import os
+        self.payment_network_url = os.getenv("PAYMENT_NETWORK_URL", "http://payment_network:8005")
+
+        # 領収書送信を有効化するかどうか（環境変数で制御可能）
         self.enable_receipt_notification = os.getenv("ENABLE_RECEIPT_NOTIFICATION", "true").lower() == "true"
 
         # ヘルパークラスの初期化
@@ -789,16 +792,16 @@ class PaymentProcessorService(BaseAgent):
         credential_token: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        決済処理（モック）
+        決済処理（Payment Network連携）
 
         AP2仕様準拠（Step 26-27）：
         1. PaymentMandateからトークンを抽出
-        2. Credential Providerにトークン検証・認証情報要求
-        3. 検証成功後、決済処理を実行
+        2. Credential Providerにトークン検証・agent_token要求
+        3. Payment Networkに決済実行を依頼
 
-        本番環境では実際の決済ゲートウェイ（Stripe, Square等）と統合
+        Payment Network連携により、実際の決済ネットワーク（スタブ）を使用
         """
-        logger.info(f"[PaymentProcessor] Processing payment (mock): {transaction_id}")
+        logger.info(f"[PaymentProcessor] Processing payment: {transaction_id}")
 
         amount = payment_mandate.get("amount", {})
         payment_method = payment_mandate.get("payment_method", {})
@@ -822,6 +825,18 @@ class PaymentProcessorService(BaseAgent):
             )
 
             logger.info(f"[PaymentProcessor] Credential verified: {credential_info.get('payment_method_id')}")
+
+            # Agent Token取得（CPレスポンスに含まれる）
+            agent_token = credential_info.get("agent_token")
+            if not agent_token:
+                logger.error(f"[PaymentProcessor] No agent_token returned from Credential Provider")
+                return {
+                    "status": "failed",
+                    "transaction_id": transaction_id,
+                    "error": "Credential Provider did not return agent_token"
+                }
+
+            logger.info(f"[PaymentProcessor] Agent token received from CP: {agent_token[:20]}...")
 
         except Exception as e:
             logger.error(f"[PaymentProcessor] Credential verification failed: {e}")
@@ -853,26 +868,95 @@ class PaymentProcessorService(BaseAgent):
             # 中リスク：通常は要確認だが、デモ環境では承認
             logger.info(f"[PaymentProcessor] Medium risk detected ({risk_score}), proceeding with authorization (demo mode)")
 
-        # 承認・キャプチャ処理
-        # 本番環境では実際の決済ゲートウェイ（Stripe, Square等）と統合
-        result = {
-            "status": "captured",
-            "transaction_id": transaction_id,
-            "amount": amount,
-            "payment_method": payment_method,
-            "payer_id": payment_mandate.get("payer_id"),
-            "payee_id": payment_mandate.get("payee_id"),
-            "cart_mandate_id": payment_mandate.get("cart_mandate_id"),
-            "intent_mandate_id": payment_mandate.get("intent_mandate_id"),
-            "authorized_at": datetime.now(timezone.utc).isoformat(),
-            "captured_at": datetime.now(timezone.utc).isoformat(),
-            "credential_verified": True,  # AP2 Step 26-27で検証済み
-            "risk_score": risk_score,
-            "fraud_indicators": fraud_indicators
-        }
-        logger.info(f"[PaymentProcessor] Payment succeeded: {transaction_id}, amount={amount}, risk_score={risk_score}")
+        # Payment Networkに決済実行を依頼（AP2仕様準拠）
+        try:
+            logger.info(f"[PaymentProcessor] Requesting charge from Payment Network: transaction_id={transaction_id}")
 
-        return result
+            # OpenTelemetry 手動トレーシング: Payment Network通信
+            with create_http_span(
+                tracer,
+                "POST",
+                f"{self.payment_network_url}/network/charge",
+                **{
+                    "payment_network.operation": "charge",
+                    "payment_network.transaction_id": transaction_id
+                }
+            ) as span:
+                response = await self.http_client.post(
+                    f"{self.payment_network_url}/network/charge",
+                    json={
+                        "agent_token": agent_token,
+                        "transaction_id": transaction_id,
+                        "amount": amount,
+                        "payment_mandate_id": payment_mandate.get("id"),
+                        "payer_id": payment_mandate.get("payer_id")
+                    },
+                    timeout=SHORT_HTTP_TIMEOUT
+                )
+                response.raise_for_status()
+                span.set_attribute("http.status_code", response.status_code)
+                charge_result = response.json()
+
+            # Payment Networkレスポンスを処理
+            if charge_result.get("status") == "captured":
+                logger.info(
+                    f"[PaymentProcessor] Payment captured by Payment Network: "
+                    f"transaction_id={transaction_id}, "
+                    f"network_transaction_id={charge_result.get('network_transaction_id')}, "
+                    f"authorization_code={charge_result.get('authorization_code')}"
+                )
+
+                result = {
+                    "status": "captured",
+                    "transaction_id": transaction_id,
+                    "amount": amount,
+                    "payment_method": payment_method,
+                    "payer_id": payment_mandate.get("payer_id"),
+                    "payee_id": payment_mandate.get("payee_id"),
+                    "cart_mandate_id": payment_mandate.get("cart_mandate_id"),
+                    "intent_mandate_id": payment_mandate.get("intent_mandate_id"),
+                    "authorized_at": datetime.now(timezone.utc).isoformat(),
+                    "captured_at": datetime.now(timezone.utc).isoformat(),
+                    "credential_verified": True,  # AP2 Step 26-27で検証済み
+                    "risk_score": risk_score,
+                    "fraud_indicators": fraud_indicators,
+                    "network_transaction_id": charge_result.get("network_transaction_id"),
+                    "authorization_code": charge_result.get("authorization_code")
+                }
+                logger.info(f"[PaymentProcessor] Payment succeeded: {transaction_id}, amount={amount}, risk_score={risk_score}")
+                return result
+            else:
+                # Payment Network側で失敗
+                logger.error(
+                    f"[PaymentProcessor] Payment Network charge failed: "
+                    f"{charge_result.get('error', 'Unknown error')}"
+                )
+                return {
+                    "status": "failed",
+                    "transaction_id": transaction_id,
+                    "error": f"Payment Network charge failed: {charge_result.get('error', 'Unknown error')}",
+                    "risk_score": risk_score,
+                    "fraud_indicators": fraud_indicators
+                }
+
+        except httpx.HTTPError as e:
+            logger.error(f"[PaymentProcessor] Payment Network HTTP error: {e}")
+            return {
+                "status": "failed",
+                "transaction_id": transaction_id,
+                "error": f"Payment Network communication failed: {str(e)}",
+                "risk_score": risk_score,
+                "fraud_indicators": fraud_indicators
+            }
+        except Exception as e:
+            logger.error(f"[PaymentProcessor] Payment Network error: {e}", exc_info=True)
+            return {
+                "status": "failed",
+                "transaction_id": transaction_id,
+                "error": f"Payment processing error: {str(e)}",
+                "risk_score": risk_score,
+                "fraud_indicators": fraud_indicators
+            }
 
     async def _save_transaction(
         self,
