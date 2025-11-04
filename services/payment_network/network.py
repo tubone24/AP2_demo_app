@@ -69,6 +69,28 @@ class VerifyTokenResponse(BaseModel):
     error: Optional[str] = None
 
 
+class ChargeRequest(BaseModel):
+    """
+    決済実行リクエスト（Payment Processorから受信）
+    """
+    agent_token: str  # Agent Token（Payment Networkが発行）
+    transaction_id: str  # トランザクションID
+    amount: Dict[str, Any]  # {"value": 1000.0, "currency": "JPY"}
+    payment_mandate_id: str  # PaymentMandate ID
+    payer_id: str  # 支払者ID
+
+
+class ChargeResponse(BaseModel):
+    """
+    決済実行レスポンス（Payment Processorに返却）
+    """
+    status: str  # "authorized" | "captured" | "failed"
+    transaction_id: str
+    network_transaction_id: str  # ネットワーク側のトランザクションID
+    authorization_code: Optional[str] = None  # 承認コード
+    error: Optional[str] = None
+
+
 # ========================================
 # Payment Network Service
 # ========================================
@@ -270,3 +292,87 @@ class PaymentNetworkService:
                 "agent_transactions_supported": True,
                 "timestamp": datetime.now(timezone.utc).isoformat()
             }
+
+        @self.app.post("/network/charge", response_model=ChargeResponse)
+        async def charge_payment(request: ChargeRequest):
+            """
+            POST /network/charge - 決済実行
+
+            Payment Processorからの決済実行リクエストを処理
+
+            処理フロー:
+            1. Agent Tokenを検証
+            2. トークン情報から支払い方法を取得
+            3. 決済ネットワークで決済を実行（スタブ実装）
+            4. 決済結果を返却
+
+            リクエスト:
+            {
+              "agent_token": "agent_tok_xxx",
+              "transaction_id": "txn_xxx",
+              "amount": {"value": 1000.0, "currency": "JPY"},
+              "payment_mandate_id": "payment_xxx",
+              "payer_id": "user_xxx"
+            }
+
+            レスポンス:
+            {
+              "status": "captured",
+              "transaction_id": "txn_xxx",
+              "network_transaction_id": "net_txn_xxx",
+              "authorization_code": "AUTH123456"
+            }
+            """
+            try:
+                import uuid
+
+                agent_token = request.agent_token
+                transaction_id = request.transaction_id
+                amount = request.amount
+
+                logger.info(
+                    f"[{self.network_name}] Charge request: "
+                    f"transaction_id={transaction_id}, "
+                    f"amount={amount.get('value')} {amount.get('currency')}"
+                )
+
+                # Agent Token検証
+                valid, token_info, error = await self.token_helpers.verify_agent_token(agent_token)
+                if not valid:
+                    logger.error(f"[{self.network_name}] Invalid agent token: {error}")
+                    return ChargeResponse(
+                        status="failed",
+                        transaction_id=transaction_id,
+                        network_transaction_id="",
+                        error=f"Invalid agent token: {error}"
+                    )
+
+                # 決済実行（スタブ実装）
+                # 実際の決済ネットワークでは、ここでカード決済APIを呼び出す
+                network_transaction_id = f"net_txn_{uuid.uuid4().hex[:12]}"
+                authorization_code = f"AUTH{uuid.uuid4().hex[:6].upper()}"
+
+                logger.info(
+                    f"[{self.network_name}] Payment captured: "
+                    f"transaction_id={transaction_id}, "
+                    f"network_transaction_id={network_transaction_id}, "
+                    f"authorization_code={authorization_code}"
+                )
+
+                return ChargeResponse(
+                    status="captured",
+                    transaction_id=transaction_id,
+                    network_transaction_id=network_transaction_id,
+                    authorization_code=authorization_code
+                )
+
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"[{self.network_name}] Charge error: {e}", exc_info=True)
+                return ChargeResponse(
+                    status="failed",
+                    transaction_id=request.transaction_id,
+                    network_transaction_id="",
+                    error=str(e)
+                )
