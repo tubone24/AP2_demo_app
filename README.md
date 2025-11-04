@@ -1,12 +1,45 @@
-# AP2 Demo App v2
+# AP2 Demo Application v2
 
-**完全実装版** - AP2プロトコルのマイクロサービスアーキテクチャ実装。FastAPI + Docker Compose + Next.js + LangGraph + MCP + Meilisearch + Redis + WebAuthn + OpenTelemetryで構築。
+**Production-Ready Implementation** - Complete AP2 Protocol (Agent Payments Protocol v0.2) implementation with microservices architecture. Built with FastAPI, Docker Compose, Next.js, LangGraph, MCP, Meilisearch, Redis, WebAuthn, and OpenTelemetry.
 
-🎉 **完全実装！本番レベルのフルスタックデモアプリ稼働中！**
+🎉 **Fully Operational Production-Grade Full-Stack Demo Application**
 
-## 🏗️ アーキテクチャ概要
+## Overview
 
-このアプリケーションは、AP2（Agent Payments Protocol）仕様に完全準拠したマイクロサービスアーキテクチャで構築されています。**12のサービス**（Backend 5 + MCP 2 + Frontend 1 + Redis 1 + Meilisearch 1 + Jaeger 1 + Payment Network 1）が相互に連携し、LangGraphによるAI対話機能、MCPによるツール統合、Meilisearch全文検索、Redis KVストア、WebAuthn/Passkey認証、OpenTelemetry分散トレーシングを提供します。
+This application is a complete implementation of the AP2 (Agent Payments Protocol) specification using a microservices architecture. It features **15 services** (7 Backend + 2 MCP + 1 Frontend + 1 Redis + 1 Meilisearch + 1 Jaeger + 1 Payment Network + 1 Init Services) that work together to provide:
+
+- **LangGraph AI Conversations** - Intelligent dialogue management with OpenAI GPT-4
+- **MCP (Model Context Protocol) Integration** - Tool orchestration for AI agents
+- **Full-text Search** - Product search powered by Meilisearch
+- **KV Store** - Session and token management with Redis
+- **WebAuthn/Passkey Authentication** - Secure passwordless authentication
+- **OpenTelemetry Distributed Tracing** - Complete observability with Jaeger
+- **AP2 Mandate Chain** - Intent → Cart → Payment mandate verification
+- **Payment Network Integration** - Complete agent token lifecycle
+
+### Key Features
+
+✅ **AP2 Specification Compliant**
+- Complete mandate chain: IntentMandate → CartMandate → PaymentMandate
+- WebAuthn-based user authorization (SD-JWT+KB format)
+- Merchant authorization with JWT signatures
+- Risk-based payment assessment
+- Agent Token lifecycle (tokenization, verification, charge)
+
+✅ **Production-Grade Architecture**
+- Microservices with A2A (Agent-to-Agent) messaging
+- Ed25519/ECDSA cryptographic signatures
+- Redis-backed session management with TTL
+- OpenTelemetry distributed tracing
+- Docker Compose orchestration
+
+✅ **AI-Powered Experience**
+- LangGraph conversation flows
+- Intent extraction and cart optimization
+- Natural language product search
+- Multi-step dialogue management
+
+## Architecture Diagram
 
 ```mermaid
 graph TB
@@ -15,20 +48,21 @@ graph TB
     end
 
     subgraph "Backend Services"
-        SA[Shopping Agent<br/>Port 8000<br/>LangGraph統合]
-        SA_MCP[Shopping Agent MCP<br/>Port 8010<br/>MCPツール×6]
-        MA[Merchant Agent<br/>Port 8001<br/>LangGraph統合]
-        MA_MCP[Merchant Agent MCP<br/>Port 8011<br/>MCPツール×3]
-        M[Merchant<br/>Port 8002<br/>CartMandate署名]
-        CP[Credential Provider<br/>Port 8003<br/>WebAuthn検証]
-        PP[Payment Processor<br/>Port 8004<br/>決済処理]
-        PN[Payment Network<br/>Port 8005<br/>Agent Token発行]
+        SA[Shopping Agent<br/>Port 8000<br/>LangGraph Integration]
+        SA_MCP[Shopping Agent MCP<br/>Port 8010<br/>6 MCP Tools]
+        MA[Merchant Agent<br/>Port 8001<br/>LangGraph Integration]
+        MA_MCP[Merchant Agent MCP<br/>Port 8011<br/>3 MCP Tools]
+        M[Merchant<br/>Port 8002<br/>CartMandate Signing]
+        CP[Credential Provider<br/>Port 8003<br/>WebAuthn Verification]
+        CP2[Credential Provider 2<br/>Port 8006<br/>Multi-CP Support]
+        PP[Payment Processor<br/>Port 8004<br/>Payment Processing]
+        PN[Payment Network<br/>Port 8005<br/>Agent Token Issuance]
     end
 
     subgraph "Infrastructure Services"
-        REDIS[(Redis<br/>Port 6379<br/>KV Store)]
-        MEILI[(Meilisearch<br/>Port 7700<br/>全文検索)]
-        JAEGER[Jaeger<br/>Port 16686<br/>分散トレーシング]
+        REDIS[(Redis<br/>Port 6379<br/>KV Store & Sessions)]
+        MEILI[(Meilisearch<br/>Port 7700<br/>Full-text Search)]
+        JAEGER[Jaeger<br/>Port 16686<br/>Distributed Tracing]
     end
 
     subgraph "External Services"
@@ -37,8 +71,8 @@ graph TB
     end
 
     subgraph "Data Layer"
-        DB[(SQLite Database<br/>永続データ×5)]
-        Keys[Keys Directory<br/>Ed25519 + ECDSA]
+        DB[(SQLite Databases<br/>Per-Service Storage)]
+        Keys[Encrypted Keys<br/>Ed25519 + ECDSA]
     end
 
     UI -->|SSE Chat| SA
@@ -50,16 +84,19 @@ graph TB
 
     MA -->|LangGraph Tools| MA_MCP
     MA_MCP -->|search_products<br/>check_inventory<br/>build_cart_mandates| MA
-    MA_MCP -->|全文検索| MEILI
+    MA_MCP -->|Full-text Search| MEILI
 
     SA -->|A2A Message| MA
     MA -->|A2A Message| M
     M -->|A2A Message| SA
     SA -->|A2A Message| PP
     SA -->|A2A Message| CP
-    CP -->|Agent Token| PN
+    CP -->|POST /network/tokenize| PN
+    PP -->|POST /credentials/verify| CP
+    PP -->|POST /network/charge| PN
 
-    CP -->|Token/Session/Challenge<br/>TTL: 15min/10min/60sec| REDIS
+    CP -->|Token/Session<br/>TTL: 15min/10min| REDIS
+    PN -->|Agent Token<br/>TTL: 1hour| REDIS
 
     SA & MA & M & CP & PP -->|Read/Write| DB
     SA & MA & M & CP & PP -->|Load Keys| Keys
@@ -77,6 +114,7 @@ graph TB
     style MA_MCP fill:#e1bee7
     style M fill:#fff4e6
     style CP fill:#e8f5e9
+    style CP2 fill:#e8f5e9
     style PP fill:#e8f5e9
     style PN fill:#b2dfdb
     style REDIS fill:#fce4ec
@@ -84,37 +122,39 @@ graph TB
     style JAEGER fill:#c8e6c9
 ```
 
-### マイクロサービス一覧
+### Services Overview
 
-| サービス | ポート | 種別 | 役割 | 技術スタック |
-|---------|-------|------|------|-------------|
-| **Frontend** | 3000 | UI | ユーザーインターフェース | Next.js 15, TypeScript, shadcn/ui |
-| **Shopping Agent** | 8000 | Backend | ユーザー代理人 | FastAPI, LangGraph, A2A通信 |
-| **Shopping Agent MCP** | 8010 | MCP | MCPツールサーバー（×6） | FastAPI, MCP Server |
-| **Merchant Agent** | 8001 | Backend | 商品検索・Cart作成 | FastAPI, LangGraph, A2A通信 |
-| **Merchant Agent MCP** | 8011 | MCP | MCPツールサーバー（×3） | FastAPI, MCP Server, Meilisearch統合 |
-| **Merchant** | 8002 | Backend | 販売者 | FastAPI, CartMandate署名 |
-| **Credential Provider** | 8003 | Backend | 認証・トークン発行 | FastAPI, WebAuthn, Redis統合 |
-| **Payment Processor** | 8004 | Backend | 決済処理 | FastAPI, 領収書生成 |
-| **Payment Network** | 8005 | Backend | 決済ネットワーク | FastAPI, Agent Token発行 |
-| **Redis** | 6379 | Infra | KVストア | Redis 7-alpine, TTL管理 |
-| **Meilisearch** | 7700 | Infra | 全文検索エンジン | Meilisearch v1.11 |
-| **Jaeger** | 16686 | Infra | 分散トレーシング | Jaeger All-in-One, OpenTelemetry |
+| Service | Port | Type | Role | Technology Stack |
+|---------|------|------|------|-----------------|
+| **Frontend** | 3000 | UI | User Interface | Next.js 15, TypeScript, shadcn/ui |
+| **Shopping Agent** | 8000 | Backend | User's AI Agent | FastAPI, LangGraph, A2A Protocol |
+| **Shopping Agent MCP** | 8010 | MCP | MCP Tool Server (×6) | FastAPI, MCP Server |
+| **Merchant Agent** | 8001 | Backend | Product Search & Cart Creation | FastAPI, LangGraph, A2A Protocol |
+| **Merchant Agent MCP** | 8011 | MCP | MCP Tool Server (×3) | FastAPI, MCP Server, Meilisearch |
+| **Merchant** | 8002 | Backend | Cart Signing & Inventory | FastAPI, CartMandate Signing |
+| **Credential Provider** | 8003 | Backend | WebAuthn & Token Issuance | FastAPI, WebAuthn, Redis |
+| **Credential Provider 2** | 8006 | Backend | Multi-CP Support | FastAPI, WebAuthn, Redis |
+| **Payment Processor** | 8004 | Backend | Payment Processing | FastAPI, Receipt Generation |
+| **Payment Network** | 8005 | Backend | Agent Token Lifecycle | FastAPI, Token Issuance & Verification |
+| **Redis** | 6379 | Infra | KV Store & Sessions | Redis 7-alpine, TTL Management |
+| **Meilisearch** | 7700 | Infra | Full-text Search Engine | Meilisearch v1.11 |
+| **Jaeger** | 16686 | Infra | Distributed Tracing | Jaeger All-in-One, OpenTelemetry |
 
-### AP2準拠の6エンティティ（コアプロトコル）
+### AP2-Compliant Entities
 
-| エンティティ | サービス | ポート | 役割 | AP2仕様準拠 |
-|------------|---------|-------|------|------------|
-| **User** | Frontend | 3000 | エンドユーザー | ✅ WebAuthn署名 |
-| **Shopping Agent** | Shopping Agent | 8000 | ユーザー代理人 | ✅ IntentMandate/PaymentMandate |
-| **Merchant Agent** | Merchant Agent | 8001 | 商品検索・Cart作成 | ✅ A2A通信 |
-| **Merchant** | Merchant | 8002 | 販売者 | ✅ CartMandate署名 |
-| **Credential Provider** | Credential Provider | 8003 | 認証・トークン発行 | ✅ WebAuthn検証 |
-| **Payment Processor** | Payment Processor | 8004 | 決済処理 | ✅ Mandate検証・決済実行 |
+| Entity | Service | Port | Role | AP2 Compliance |
+|--------|---------|------|------|---------------|
+| **User** | Frontend | 3000 | End User | ✅ WebAuthn Signing (SD-JWT+KB) |
+| **Shopping Agent** | Shopping Agent | 8000 | User's Agent | ✅ IntentMandate/PaymentMandate |
+| **Merchant Agent** | Merchant Agent | 8001 | Product Search | ✅ A2A Protocol |
+| **Merchant** | Merchant | 8002 | Seller | ✅ CartMandate Signing |
+| **Credential Provider** | Credential Provider | 8003 | Authentication | ✅ WebAuthn Verification |
+| **Payment Processor** | Payment Processor | 8004 | Payment Processing | ✅ Mandate Verification |
+| **Payment Network** | Payment Network | 8005 | Token Issuance | ✅ Agent Token Lifecycle |
 
-## 🔄 完全な購入フロー（シーケンス図）
+## Complete Purchase Flow - Sequence Diagram
 
-以下は、ユーザーが商品を購入する際の完全なシーケンス図です。AP2仕様に完全準拠した3つのMandate（Intent → Cart → Payment）の流れを示しています。
+This diagram shows the complete AP2-compliant purchase flow from user intent to payment completion, including all service interactions.
 
 ```mermaid
 sequenceDiagram
@@ -122,1124 +162,607 @@ sequenceDiagram
     participant User as 👤 User<br/>(Browser)
     participant UI as 🖥️ Frontend<br/>(Next.js)
     participant SA as 🤖 Shopping Agent<br/>(LangGraph)
+    participant SAMCP as 🔧 Shopping Agent MCP<br/>(Tools)
     participant DMR as 🧠 LLM<br/>(DMR/GPT)
     participant MA as 🛍️ Merchant Agent<br/>(LangGraph)
+    participant MAMCP as 🔧 Merchant Agent MCP<br/>(Tools)
+    participant MEILI as 🔍 Meilisearch<br/>(Search)
     participant M as 🏪 Merchant
     participant CP as 🔐 Credential Provider
-    participant PP as 💳 Payment Processor
+    participant PN as 💳 Payment Network
+    participant PP as 💰 Payment Processor
+    participant REDIS as 🗄️ Redis
     participant DB as 💾 Database
 
-    %% Phase 1: 対話とIntent生成
+    %% Phase 1: Dialogue and Intent Collection
     rect rgb(240, 248, 255)
-        Note over User,DMR: Phase 1: LangGraph対話フロー（Intent収集）
-        User->>UI: "かわいいグッズがほしい"
+        Note over User,DMR: Phase 1: LangGraph Dialogue Flow (Intent Collection)
+        User->>UI: "I want cute merchandise"
         UI->>SA: POST /chat/stream (SSE)
         SA->>DMR: LangGraph: extract_info
-        DMR-->>SA: {"intent": "かわいいグッズ", "max_amount": null}
-        SA-->>UI: SSE: "最大金額を教えてください"
-        User->>UI: "3000円まで"
+        DMR-->>SA: {"intent": "cute merchandise", "max_amount": null}
+        SA-->>UI: SSE: "What's your maximum budget?"
+        User->>UI: "Up to 3000 yen"
         UI->>SA: POST /chat/stream
-        SA->>DMR: LangGraph: extract_info (累積)
-        DMR-->>SA: {"intent": "かわいいグッズ", "max_amount": 3000}
-        SA->>SA: check_completeness (必須情報揃った)
-        SA->>DMR: LangGraph: IntentMandate生成
-        DMR-->>SA: IntentMandate (unsigned)
+        SA->>DMR: LangGraph: extract_info (cumulative)
+        DMR-->>SA: {"intent": "cute merchandise", "max_amount": 3000}
+        SA->>SA: check_completeness (all required fields collected)
+        SA->>SAMCP: MCP: build_intent
+        SAMCP->>DMR: Generate IntentMandate
+        DMR-->>SAMCP: IntentMandate (unsigned)
+        SAMCP-->>SA: IntentMandate
         SA-->>UI: SSE: IntentMandate preview
     end
 
-    %% Phase 2: Passkey署名（IntentMandate）
+    %% Phase 2: Passkey Signing (IntentMandate)
     rect rgb(255, 250, 240)
-        Note over User,SA: Phase 2: WebAuthn署名（IntentMandate）
-        UI->>SA: GET /webauthn/options
-        SA-->>UI: challenge + options
-        UI->>User: Passkeyで署名してください
+        Note over User,CP: Phase 2: WebAuthn Signing (IntentMandate)
+        UI->>CP: GET /webauthn/options
+        CP->>REDIS: Store challenge (TTL: 60s)
+        CP-->>UI: challenge + options
+        UI->>User: Please sign with Passkey
         User->>UI: 👆 Fingerprint/FaceID
         UI->>UI: navigator.credentials.get()
-        UI->>SA: POST /sign-mandate<br/>{attestation, challenge}
-        SA->>SA: verify challenge
-        SA->>SA: add user_signature to IntentMandate
-        SA->>DB: save IntentMandate
-        DB-->>SA: saved
-        SA-->>UI: signed IntentMandate
+        UI->>CP: POST /attestations/verify<br/>{intent_mandate, attestation}
+        CP->>REDIS: Verify challenge (replay protection)
+        CP->>CP: Verify WebAuthn signature (ECDSA)
+        CP->>CP: Create SD-JWT+KB user_authorization
+        CP->>DB: Save attestation
+        CP-->>UI: {verified: true, token: "..."}
+        UI->>SA: POST /sign-mandate<br/>{intent_mandate, user_authorization}
+        SA->>SA: Add user_authorization to IntentMandate
+        SA->>DB: Save signed IntentMandate
+        SA-->>UI: Signed IntentMandate
     end
 
-    %% Phase 3: A2A通信とCartMandate生成
+    %% Phase 3: A2A Communication and CartMandate Generation
     rect rgb(240, 255, 240)
-        Note over SA,M: Phase 3: A2A通信とCartMandate生成（LangGraph）
-        SA->>MA: A2A Message<br/>{IntentMandate, shipping_address}
-        MA->>MA: verify A2A signature
+        Note over SA,M: Phase 3: A2A Communication & CartMandate Generation
+        SA->>SAMCP: MCP: request_carts
+        SAMCP->>MA: A2A Message<br/>{IntentMandate, shipping_address}
+        MA->>MA: Verify A2A signature (Ed25519)
         MA->>DMR: LangGraph: _analyze_intent
-        DMR-->>MA: extracted keywords
-        MA->>DB: ProductCRUD.search(keywords)
-        DB-->>MA: products (8 items)
-        MA->>DMR: LangGraph: _optimize_cart<br/>Rule-based then LLM
+        DMR-->>MA: Extract keywords
+        MA->>MAMCP: MCP: search_products
+        MAMCP->>MEILI: Full-text search (keywords)
+        MEILI-->>MAMCP: Products (20 items)
+        MAMCP->>DB: Filter in-stock products
+        MAMCP-->>MA: Products (8 items)
+        MA->>DMR: LangGraph: _optimize_cart<br/>Rule-based + LLM optimization
         DMR-->>MA: 3 cart candidates
-        loop 各カート候補
-            MA->>MA: create unsigned CartMandate<br/>AP2準拠 PaymentCurrencyAmount
-            MA->>M: POST /sign/cart
-            M->>M: validate & sign (ECDSA + JWT)
-            M-->>MA: signed CartMandate
-            MA->>MA: wrap in Artifact format
+        loop Each cart candidate
+            MA->>MAMCP: MCP: build_cart_mandates
+            MAMCP->>M: POST /sign/cart (unsigned CartMandate)
+            M->>M: Validate & sign (ECDSA + JWT)
+            M->>DB: Save unsigned CartMandate
+            M-->>MAMCP: Signed CartMandate
+            MAMCP->>MAMCP: Wrap in Artifact format
+            MAMCP-->>MA: CartMandate (Artifact)
         end
-        MA-->>SA: A2A Response<br/>{cart_candidates: [Artifact, ...]}
+        MA-->>SAMCP: A2A Response<br/>{cart_candidates: [Artifact, ...]}
+        SAMCP-->>SA: Cart candidates
         SA-->>UI: SSE: cart_candidates
     end
 
-    %% Phase 4: カート選択とCart署名
+    %% Phase 4: Cart Selection and Signing
     rect rgb(255, 245, 240)
-        Note over User,SA: Phase 4: Cart選択とWebAuthn署名
-        UI->>User: カート候補を表示（カルーセル）
-        User->>UI: カート選択
-        UI->>SA: GET /webauthn/options
-        SA-->>UI: challenge
-        UI->>User: Passkeyで署名
+        Note over User,SA: Phase 4: Cart Selection & WebAuthn Signing
+        UI->>User: Display cart options (carousel)
+        User->>UI: Select cart
+        UI->>SAMCP: MCP: select_cart
+        SAMCP->>SA: Selected cart_id
+        UI->>CP: GET /webauthn/options
+        CP->>REDIS: Store challenge (TTL: 60s)
+        CP-->>UI: challenge
+        UI->>User: Please sign with Passkey
         User->>UI: 👆 Authenticate
-        UI->>SA: POST /sign-cart<br/>{cart_id, attestation}
-        SA->>SA: add user_signature to CartMandate
-        SA->>DB: save signed CartMandate
-        SA-->>UI: signed CartMandate
+        UI->>CP: POST /attestations/verify<br/>{cart_mandate, attestation}
+        CP->>REDIS: Verify challenge
+        CP->>CP: Verify WebAuthn signature
+        CP->>CP: Create SD-JWT+KB user_authorization
+        CP-->>UI: {verified: true, token: "..."}
+        UI->>SA: POST /sign-cart<br/>{cart_id, user_authorization}
+        SA->>SA: Add user_authorization to CartMandate
+        SA->>DB: Save signed CartMandate
+        SA-->>UI: Signed CartMandate
     end
 
-    %% Phase 5: 決済
+    %% Phase 5: Payment Processing (AP2 Step 17-29)
     rect rgb(255, 240, 245)
-        Note over User,PP: Phase 5: Payment処理
-        UI->>User: 支払い方法選択
-        User->>UI: "クレジットカード xxxx-1234"
-        UI->>SA: POST /create-payment
-        SA->>SA: create PaymentMandate<br/>+ risk_assessment
-        SA->>CP: GET /payment-methods
-        CP->>DB: fetch payment methods
-        DB-->>CP: methods
-        CP-->>SA: payment methods
-        SA->>UI: PaymentMandate preview
-        UI->>User: Passkeyで最終署名
+        Note over User,PP: Phase 5: Payment Processing (AP2 Steps 17-29)
+
+        %% Step 17-19: Payment Method Selection & Tokenization
+        UI->>User: Select payment method
+        User->>UI: "Credit Card xxxx-1234"
+        UI->>CP: GET /payment-methods?user_id=...
+        CP->>DB: Fetch payment methods
+        DB-->>CP: Payment methods
+        CP-->>UI: Payment methods
+        UI->>CP: POST /payment-methods/tokenize<br/>{payment_method_id}
+        CP->>REDIS: Generate secure token (TTL: 15min)
+        CP-->>UI: {token: "tok_xxx", expires_at: "..."}
+
+        %% Step 20-22: PaymentMandate Creation
+        UI->>SAMCP: MCP: build_payment<br/>{cart_mandate, payment_method_token}
+        SAMCP->>SAMCP: Risk assessment (amount, method, history)
+        SAMCP->>SAMCP: Create PaymentMandate
+        SAMCP-->>UI: PaymentMandate preview
+
+        %% Step 23: WebAuthn Signing & Agent Token Request
+        UI->>CP: GET /webauthn/options
+        CP->>REDIS: Store challenge (TTL: 60s)
+        CP-->>UI: challenge
+        UI->>User: Final Passkey confirmation
         User->>UI: 👆 Confirm
-        UI->>SA: POST /sign-payment
-        SA->>SA: add user_signature
-        SA->>CP: POST /verify/attestation
-        CP->>CP: verify WebAuthn
-        CP->>CP: issue credential_token
-        CP-->>SA: credential_token
-        SA->>PP: POST /process<br/>{PaymentMandate, credential_token}
-        PP->>PP: validate Mandate Chain<br/>(Intent → Cart → Payment)
-        PP->>DB: create Transaction (authorized)
-        PP->>PP: capture payment
-        PP->>DB: update Transaction (captured)
-        PP->>PP: generate PDF receipt
-        PP-->>SA: {transaction_id, receipt_url}
-        SA-->>UI: payment success + receipt
-        UI-->>User: ✅ 購入完了！領収書ダウンロード
+        UI->>CP: POST /attestations/verify<br/>{payment_mandate, attestation}
+        CP->>REDIS: Verify challenge
+        CP->>CP: Verify WebAuthn signature
+        CP->>CP: Create SD-JWT+KB user_authorization
+        CP->>CP: Extract payment_method_token from PaymentMandate
+        CP->>PN: POST /network/tokenize<br/>{payment_mandate, payment_method_token}
+        PN->>PN: Validate PaymentMandate
+        PN->>PN: Generate agent_token (cryptographically secure)
+        PN->>REDIS: Store agent_token (TTL: 1 hour)
+        PN-->>CP: {agent_token: "agent_tok_xxx", expires_at: "..."}
+        CP->>REDIS: Save agent_token to token_data
+        CP->>DB: Save attestation
+        CP-->>UI: {verified: true, token: "cred_xxx"}
+
+        %% Step 24-25: Execute Payment
+        UI->>SAMCP: MCP: execute_payment<br/>{payment_mandate, credential_token}
+        SAMCP->>PP: POST /process<br/>{payment_mandate, cart_mandate, credential_token}
+        PP->>PP: Validate PaymentMandate
+        PP->>PP: Validate Mandate Chain<br/>(Intent → Cart → Payment)
+        PP->>PP: Verify user_authorization (SD-JWT+KB)
+        PP->>PP: Verify merchant_authorization (JWT)
+
+        %% Step 26-27: Credential Verification & Agent Token Retrieval
+        PP->>CP: POST /credentials/verify<br/>{token, payer_id, amount}
+        CP->>REDIS: Retrieve token_data
+        CP->>CP: Verify token validity
+        CP->>CP: Extract agent_token from token_data
+        CP-->>PP: {verified: true, credential_info: {..., agent_token: "agent_tok_xxx"}}
+
+        %% Step 28: Payment Network Charge
+        PP->>PP: Check risk score (decline if > 80)
+        PP->>PN: POST /network/charge<br/>{agent_token, transaction_id, amount}
+        PN->>REDIS: Verify agent_token
+        PN->>PN: Execute payment (stub implementation)
+        PN->>PN: Generate network_transaction_id & authorization_code
+        PN-->>PP: {status: "captured", network_transaction_id, authorization_code}
+
+        %% Step 29: Receipt Generation
+        PP->>DB: Create Transaction (captured)
+        PP->>PP: Generate PDF receipt
+        PP->>DB: Save receipt metadata
+        PP-->>SAMCP: {transaction_id, status: "captured", receipt_url}
+        SAMCP-->>UI: Payment success + receipt
+
+        %% Optional: Receipt Notification to CP
+        PP->>CP: POST /receipts<br/>{transaction_id, receipt_url}
+        CP->>DB: Save receipt notification
+
+        UI-->>User: ✅ Purchase completed! Download receipt
     end
 ```
 
-### フローの主要ポイント
+### Sequence Flow Key Points
 
-1. **LangGraph対話フロー（Phase 1）**
-   - Shopping Agentの`langgraph_conversation.py`が対話を管理
-   - `extract_info` → `check_completeness` → `generate_question`のノード構成
-   - 必須情報（intent, max_amount）を段階的に収集
+#### Phase 1: LangGraph Dialogue Flow
+- **Intent Collection**: Shopping Agent uses LangGraph to gradually collect required information
+- **State Management**: `extract_info` → `check_completeness` → `generate_question`
+- **Required Fields**: `intent`, `max_amount`
 
-2. **A2A通信（Phase 3）**
-   - Shopping Agent → Merchant Agent間でEd25519/ECDSA署名付きメッセージ（デフォルト: Ed25519）
-   - Merchant AgentがLangGraphで商品検索とカート最適化
-   - Rule-based filtering → LLM-based optimization（2段階最適化）
+#### Phase 2-4: Mandate Chain Creation
+- **IntentMandate**: User signs with WebAuthn (SD-JWT+KB format)
+- **CartMandate**: Merchant signs with ECDSA + JWT, User signs with WebAuthn
+- **Challenge Management**: Redis-backed with 60-second TTL (replay attack prevention)
 
-3. **AP2準拠のMandate Chain（Phase 5）**
-   - IntentMandate（ユーザー署名）
-   - CartMandate（Merchant署名 + User署名）
-   - PaymentMandate（Risk評価 + User署名）
-   - Payment Processorが3つのMandateを検証
+#### Phase 5: AP2 Payment Flow (Steps 17-29)
 
-## 📁 ディレクトリ構造
+**Step 17-19: Tokenization**
+- User selects payment method
+- Credential Provider tokenizes payment method
+- Token stored in Redis (TTL: 15 minutes)
 
-```
-v2/
-├── common/                      # 共通モジュール
-│   ├── models.py                # Pydanticモデル（A2Aメッセージ、API型）
-│   ├── a2a_handler.py           # A2Aメッセージ処理・署名検証・ルーティング
-│   ├── base_agent.py            # 全エージェントの基底クラス（POST /a2a/message実装）
-│   ├── database.py              # SQLAlchemyモデル＋CRUD操作（Receipt追加）
-│   ├── redis_client.py          # Redis KVストアクライアント（TokenStore, SessionStore）
-│   ├── crypto.py                # 暗号化・署名・鍵管理（Ed25519/ECDSA, AES-256-CBC）
-│   ├── logger.py                # 統一ロギングシステム（JSON/Text対応）
-│   ├── seed_data.py             # サンプルデータ投入スクリプト
-│   └── receipt_generator.py    # PDF領収書生成（AP2準拠）
-│
-├── services/                    # 各マイクロサービス
-│   ├── shopping_agent/          # ✅ 完全実装
-│   │   ├── agent.py             # ShoppingAgentビジネスロジック
-│   │   ├── langgraph_conversation.py  # LangGraph対話フロー
-│   │   ├── main.py              # FastAPIエントリーポイント
-│   │   └── Dockerfile           # コンテナ定義
-│   ├── merchant_agent/          # ✅ 完全実装
-│   │   ├── agent.py             # 商品検索・CartMandate作成（AP2準拠）
-│   │   ├── main.py
-│   │   └── Dockerfile
-│   ├── merchant/                # ✅ 完全実装
-│   │   ├── service.py           # CartMandate署名・在庫管理
-│   │   ├── main.py
-│   │   └── Dockerfile
-│   ├── credential_provider/     # ✅ 完全実装
-│   │   ├── provider.py          # WebAuthn検証・Step-up認証・Redis統合
-│   │   ├── main.py
-│   │   └── Dockerfile
-│   └── payment_processor/       # ✅ 完全実装
-│       ├── processor.py         # 決済処理・領収書生成
-│       ├── main.py
-│       └── Dockerfile
-│
-├── frontend/                    # Next.js フロントエンド（✅ 完全実装）
-│   ├── app/                     # App Router
-│   │   ├── page.tsx             # ホームページ
-│   │   ├── chat/page.tsx        # Chat UI（SSE/Streaming対応）
-│   │   └── merchant/page.tsx    # Merchant Dashboard
-│   ├── components/              # Reactコンポーネント
-│   │   ├── auth/                # WebAuthn認証コンポーネント
-│   │   ├── cart/                # カート表示（AP2準拠）
-│   │   ├── chat/                # チャットUI・署名モーダル
-│   │   ├── product/             # 商品カルーセル
-│   │   └── ui/                  # shadcn/ui コンポーネント
-│   ├── hooks/                   # カスタムフック
-│   │   └── useSSEChat.ts        # SSE Streaming対応チャットフック
-│   ├── lib/                     # ユーティリティ
-│   │   ├── webauthn.ts          # WebAuthn Passkey署名
-│   │   └── types/               # TypeScript型定義
-│   └── Dockerfile               # フロントエンドコンテナ
-│
-├── scripts/                     # ユーティリティスクリプト
-│   └── init_db.py               # データベース初期化
-│
-├── data/                        # 永続化データ（Docker Volume）
-│   ├── *.db                     # SQLiteデータベース（各サービス）
-│   ├── receipts/                # PDF領収書
-│   └── did_documents/           # DID Documents
-│
-├── keys/                        # 暗号鍵格納（Docker Volume）
-│   └── *_private.pem            # Ed25519/ECDSA秘密鍵（AES-256暗号化）
-│
-├── docker-compose.yml           # 全サービスオーケストレーション（Redis含む）
-├── pyproject.toml               # Python依存関係（uv管理、redis>=5.0.0追加）
-└── README.md                    # このファイル
-```
+**Step 20-22: PaymentMandate Creation**
+- Shopping Agent creates PaymentMandate
+- Risk assessment performed (amount, method, user history)
 
-## ✅ 実装済み機能（Phase 1 & 2 完了）
+**Step 23: Agent Token Issuance**
+- User signs PaymentMandate with WebAuthn
+- Credential Provider requests Agent Token from Payment Network
+- Payment Network issues Agent Token (stored in Redis, TTL: 1 hour)
+- Agent Token associated with payment_method_token
 
-### 🎯 コア機能
-- ✅ **完全なAP2準拠フロー** - Intent → Cart → Payment → Receipt
-- ✅ **LangGraph対話エンジン** - OpenAI GPT-4統合、段階的情報収集
-- ✅ **WebAuthn/Passkey署名** - ブラウザ認証デバイスによる安全な署名
-- ✅ **SSE Streaming** - リアルタイムチャット体験
-- ✅ **A2A通信** - マイクロサービス間Ed25519/ECDSA署名付きメッセージング（デフォルト: Ed25519）
-- ✅ **Step-up認証** - 高額決済時の追加認証フロー
-- ✅ **PDF領収書生成** - ReportLabによるAP2準拠領収書
+**Step 26-27: Credential Verification**
+- Payment Processor verifies credential token with Credential Provider
+- Credential Provider returns agent_token from token_data
 
-### 🛠️ 共通モジュール
-- ✅ **models.py** - Pydanticモデル（A2A, API, AP2 Mandates）
-- ✅ **a2a_handler.py** - A2Aメッセージ処理・ECDSA署名検証・ルーティング
-- ✅ **base_agent.py** - 全エージェントの基底クラス（POST /a2a/message実装）
-- ✅ **database.py** - SQLAlchemyモデル＋非同期CRUD操作（Receipt追加）
-- ✅ **redis_client.py** - Redis KVストアクライアント（TokenStore, SessionStore、TTL管理）
-- ✅ **crypto.py** - ECDSA鍵生成・署名・検証、AES-256-CBC暗号化
-- ✅ **logger.py** - 統一ロギング（JSON/Text、機密データマスキング）
-- ✅ **seed_data.py** - サンプルデータ（商品8点、ユーザー2人）
-- ✅ **receipt_generator.py** - PDF領収書生成（AP2 CartMandate準拠）
+**Step 28: Payment Execution**
+- Payment Processor calls Payment Network with agent_token
+- Payment Network verifies agent_token
+- Payment Network executes charge (stub implementation)
+- Returns network_transaction_id and authorization_code
 
-### 🚀 マイクロサービス（全5サービス完全稼働）
+**Step 29: Receipt Generation**
+- Payment Processor generates PDF receipt
+- Receipt URL sent to Credential Provider
+- User receives receipt download link
 
-#### Shopping Agent (Port 8000)
-- ✅ LangGraph対話フロー（Intent収集、カート選択、決済）
-- ✅ SSE/Streaming対応チャット
-- ✅ IntentMandate生成・署名
-- ✅ PaymentMandate生成・リスク評価
-- ✅ WebAuthn Challenge生成・検証
-- ✅ トランザクション管理
+### Security Features
 
-#### Merchant Agent (Port 8001)
-- ✅ 商品検索（キーワード、カテゴリ、ブランド）
-- ✅ CartMandate作成（AP2準拠PaymentRequest構造）
-- ✅ 配送先住所管理（ContactAddress形式）
-- ✅ 価格計算（小計、税金、送料）
+- **Cryptographic Signatures**: All A2A messages signed with Ed25519/ECDSA
+- **WebAuthn Authentication**: Passwordless authentication with Passkey
+- **SD-JWT+KB**: Selective Disclosure JWT with Key Binding for user authorization
+- **Challenge-Response**: Redis-backed challenges with TTL (replay attack prevention)
+- **Token Lifecycle**: Proper TTL management (payment_method_token: 15min, agent_token: 1hour)
+- **Mandate Chain Verification**: Complete validation of Intent → Cart → Payment chain
 
-#### Merchant (Port 8002)
-- ✅ CartMandate署名（ECDSA + JWT）
-- ✅ 在庫検証・予約
-- ✅ 商品CRUD API
-- ✅ 署名モード切替（自動/手動）
-- ✅ 手動承認ワークフロー
+## Getting Started
 
-#### Credential Provider (Port 8003)
-- ✅ WebAuthn attestation検証
-- ✅ Credential Token発行（Redis KV、TTL: 15分）
-- ✅ Step-up認証フロー（Redis セッション、TTL: 10分）
-- ✅ WebAuthn Challenge管理（Redis、TTL: 60秒、リプレイ攻撃防止）
-- ✅ 支払い方法管理（カード、銀行口座）
-- ✅ 領収書永続化（DB保存）
-- ✅ 外部認証画面（/step-up-auth）
+### Prerequisites
 
-#### Payment Processor (Port 8004)
-- ✅ 決済処理（Authorize → Capture）
-- ✅ Mandate Chain検証（Intent → Cart → Payment）
-- ✅ トランザクション管理（状態遷移）
-- ✅ PDF領収書生成（AP2準拠）
-- ✅ 返金処理（Refund API）
-
-### 🎨 フロントエンド（Next.js 15 + TypeScript）
-
-#### Chat UI (`/chat`)
-- ✅ SSE Streaming対応チャット
-- ✅ LLM思考過程表示（agent_thinking）
-- ✅ 「考え中...」ローディングUI
-- ✅ 商品カルーセル表示
-- ✅ カート候補選択UI（AP2準拠）
-- ✅ SignaturePromptModal（Intent/Cart/Payment署名）
-- ✅ WebAuthn/Passkey統合
-- ✅ 配送先フォーム
-- ✅ 決済完了・領収書表示
-
-#### Merchant Dashboard (`/merchant`)
-- ✅ 商品管理（CRUD、在庫調整）
-- ✅ 署名待ちCartMandate一覧（AP2準拠金額表示）
-- ✅ 手動承認/却下フロー
-- ✅ トランザクション履歴
-- ✅ 署名モード設定（自動/手動）
-- ✅ リアルタイム更新（5秒ポーリング）
-
-#### UI/UXコンポーネント
-- ✅ shadcn/ui + TailwindCSS
-- ✅ Passkey登録・認証フロー
-- ✅ カート詳細モーダル（AP2準拠）
-- ✅ レスポンシブデザイン
-
-### 🐳 インフラ
-- ✅ **Docker Compose** - 全サービス（Backend 5 + Frontend 1 + Redis 1 + Meilisearch 1 + Jaeger 1）
-- ✅ **SQLite永続化** - Dockerボリュームマウント（永続データ）
-- ✅ **Redis KVストア** - 一時データ・TTL管理（トークン、セッション、チャレンジ）
-- ✅ **環境変数管理** - `.env`対応
-- ✅ **ヘルスチェック** - 全サービスliveness probe実装（Redis含む）
-
-## 🛠️ セットアップ手順
-
-### 🚀 クイックスタート（Docker Compose推奨）
-
-最も簡単な方法は、Docker Composeを使用して全6サービス（Backend 5 + Frontend 1）を一括起動することです。
-
-#### 前提条件
 - Docker & Docker Compose
-- OpenAI API Key（LangGraph用）
+- OpenAI API Key (for LangGraph) or DMR endpoint
 
-#### 1. 環境変数設定
+### Quick Start
+
+#### 1. Environment Setup
 
 ```bash
-cd v2/
+cd /path/to/ap2/
 
-# .envファイルを作成
+# Create .env file
 cat > .env << 'EOF'
-# OpenAI API（必須）
+# OpenAI API (Required for LangGraph)
 OPENAI_API_KEY=sk-proj-your-api-key-here
 
-# オプション設定
+# Optional: DMR Endpoint (alternative to OpenAI)
+DMR_API_URL=http://host.docker.internal:12434/engines/llama.cpp/v1
+DMR_MODEL=ai/qwen3
+DMR_API_KEY=none
+
+# Logging
 LOG_LEVEL=INFO
 LOG_FORMAT=text
+
+# Langfuse (Optional)
+LANGFUSE_ENABLED=false
+LANGFUSE_PUBLIC_KEY=
+LANGFUSE_SECRET_KEY=
+LANGFUSE_HOST=https://cloud.langfuse.com
+
+# OpenTelemetry
+OTEL_ENABLED=true
 EOF
 ```
 
-#### 2. データベース初期化（初回のみ）
+#### 2. Start All Services
 
 ```bash
-# プロジェクトルートから実行
-python v2/scripts/init_db.py
-```
-
-#### 3. 全サービス起動
-
-```bash
-# 全サービスをビルド＆起動
+# Build and start all services
 docker compose up --build
 
-# または、バックグラウンドで起動
+# Or run in background
 docker compose up --build -d
 ```
 
-#### 4. 動作確認
+This will start all 15 services:
+- **7 Backend Services**: Shopping Agent, Merchant Agent, Merchant, Credential Provider (×2), Payment Processor, Payment Network
+- **2 MCP Services**: Shopping Agent MCP, Merchant Agent MCP
+- **1 Frontend**: Next.js
+- **3 Infrastructure Services**: Redis, Meilisearch, Jaeger
+- **2 Init Services**: init-keys, init-seeds (run once at startup)
+
+#### 3. Verify Services
 
 ```bash
-# 各サービスのヘルスチェック
+# Check service health
 curl http://localhost:8000/health  # Shopping Agent
 curl http://localhost:8001/health  # Merchant Agent
 curl http://localhost:8002/health  # Merchant
 curl http://localhost:8003/health  # Credential Provider
 curl http://localhost:8004/health  # Payment Processor
-curl http://localhost:3000/        # Frontend
+curl http://localhost:8005/health  # Payment Network
 
-# ブラウザでアクセス
-open http://localhost:3000         # ホームページ
-open http://localhost:3000/chat    # Chat UI（メインデモ）
-open http://localhost:3000/merchant  # Merchant Dashboard
+# Access web interfaces
+open http://localhost:3000          # Frontend
+open http://localhost:3000/chat     # Chat UI (main demo)
+open http://localhost:3000/merchant # Merchant Dashboard
+open http://localhost:16686         # Jaeger UI (tracing)
+open http://localhost:7700          # Meilisearch UI
 ```
 
-#### 5. デモフロー体験
+#### 4. Demo Flow
 
-1. **Passkey登録** - `/chat`で初回訪問時に登録
-2. **商品検索** - 「かわいいグッズがほしい」と入力
-3. **Intent署名** - 最大金額などを入力してPasskey署名
-4. **カート選択** - LLMが提案するカートを選択
-5. **Cart署名** - カート内容を確認してPasskey署名
-6. **決済** - 支払い方法を選択してPayment署名
-7. **領収書取得** - 決済完了後、PDF領収書ダウンロード
+1. **Passkey Registration** - Register at `/chat` on first visit
+2. **Product Search** - Enter "I want cute merchandise"
+3. **Intent Signing** - Enter max budget and sign with Passkey
+4. **Cart Selection** - LLM proposes carts, select one
+5. **Cart Signing** - Review cart contents and sign with Passkey
+6. **Payment** - Select payment method and sign
+7. **Receipt** - Download PDF receipt after payment completion
 
-**ログ確認：**
+#### 5. View Logs
+
 ```bash
-# 全サービスのログを表示
+# All services
 docker compose logs -f
 
-# 特定サービスのログを表示
+# Specific service
 docker compose logs -f shopping_agent
+docker compose logs -f payment_processor
+docker compose logs -f payment_network
+
+# Filter for Payment Network integration
+docker compose logs -f payment_processor payment_network credential_provider | grep -E "(agent_token|charge|tokenize)"
 ```
 
-**停止：**
+#### 6. Stop Services
+
 ```bash
-# 停止（コンテナは保持）
+# Stop (keep containers)
 docker compose stop
 
-# 停止＆削除
+# Stop and remove containers
 docker compose down
 
-# ボリュームも含めて完全削除
+# Remove everything including volumes
 docker compose down -v
 ```
 
----
+### Development Setup (Local Execution)
 
-### 📦 開発環境セットアップ（ローカル実行）
-
-Docker Composeを使わず、各サービスを個別に実行する場合の手順です。
-
-#### 1. 依存関係のインストール（uv使用）
+For local development without Docker:
 
 ```bash
-cd v2/
+# Install Python dependencies
+cd /path/to/ap2/
+pip install -e .
 
-# uvがインストールされていない場合
-pip install uv
-
-# 依存関係をインストール
-uv pip install -e .
-
-# フロントエンド依存関係
+# Frontend dependencies
 cd frontend/
 npm install
-```
 
-#### 2. 環境変数設定
-
-```bash
-# バックエンド用
+# Set environment variables
 export OPENAI_API_KEY=sk-proj-your-api-key-here
 export LOG_LEVEL=INFO
 
-# フロントエンド用（frontend/.env.local）
-cat > frontend/.env.local << 'EOF'
-NEXT_PUBLIC_SHOPPING_AGENT_URL=http://localhost:8000
-NEXT_PUBLIC_MERCHANT_URL=http://localhost:8002
-NEXT_PUBLIC_CREDENTIAL_PROVIDER_URL=http://localhost:8003
-NEXT_PUBLIC_RP_ID=localhost
-EOF
-```
-
-#### 3. データベース初期化
-
-```bash
-# プロジェクトルートから実行
-python v2/scripts/init_db.py
-```
-
-#### 4. 各サービスを個別起動
-
-```bash
+# Start services in separate terminals
 # Terminal 1: Shopping Agent
-cd v2/services/shopping_agent/
-python main.py  # Port 8000
+cd services/shopping_agent && python main.py
 
 # Terminal 2: Merchant Agent
-cd v2/services/merchant_agent/
-python main.py  # Port 8001
+cd services/merchant_agent && python main.py
 
 # Terminal 3: Merchant
-cd v2/services/merchant/
-python main.py  # Port 8002
+cd services/merchant && python main.py
 
 # Terminal 4: Credential Provider
-cd v2/services/credential_provider/
-python main.py  # Port 8003
+cd services/credential_provider && python main.py
 
 # Terminal 5: Payment Processor
-cd v2/services/payment_processor/
-python main.py  # Port 8004
+cd services/payment_processor && python main.py
 
-# Terminal 6: Frontend
-cd v2/frontend/
-npm run dev  # Port 3000
+# Terminal 6: Payment Network
+cd services/payment_network && python main.py
+
+# Terminal 7: Frontend
+cd frontend && npm run dev
 ```
 
-## 📡 API エンドポイント
+## Technology Stack
 
-### 共通エンドポイント（全サービス）
-
-すべてのサービスが以下のエンドポイントを持ちます：
-
-- `GET /` - ヘルスチェック（agent_id, agent_name, status, versionを返す）
-- `GET /health` - ヘルスチェック（Docker向け）
-- `POST /a2a/message` - A2Aメッセージ受信（BaseAgentで自動実装）
-
----
-
-### Shopping Agent (Port 8000)
-
-ユーザーとの対話を担当するエージェント。
-
-**固有エンドポイント：**
-
-- `POST /chat/stream` - ユーザーとの対話（SSE Streaming）
-  - リクエスト: `{ "user_input": "ランニングシューズが欲しい", "session_id"?: "..." }`
-  - レスポンス: Server-Sent Events（JSON lines）
-  ```
-  data: {"type": "agent_text", "content": "こんにちは！"}
-  data: {"type": "product_list", "products": [...]}
-  data: {"type": "done"}
-  ```
-
-- `POST /create-intent` - IntentMandate作成
-  - リクエスト: `{ "user_id": "user_demo_001", "max_amount": {...}, ... }`
-  - レスポンス: IntentMandate（署名付き）
-
-- `POST /create-payment` - PaymentMandate作成
-  - リクエスト: `{ "cart_mandate": {...}, "intent_mandate": {...}, ... }`
-  - レスポンス: PaymentMandate（リスクスコア付き）
-
-- `GET /transactions/{transaction_id}` - トランザクション取得
-
----
-
-### Merchant Agent (Port 8001)
-
-商品検索とCartMandate作成を担当。
-
-**固有エンドポイント：**
-
-- `GET /products?query=...&limit=10` - 商品検索
-  - レスポンス: `{ "products": [...], "total": N }`
-
-- `POST /create-cart` - CartMandate作成（未署名）
-  - リクエスト: `{ "items": [...], "merchant_id": "...", ... }`
-  - レスポンス: CartMandate（merchant_signature = null）
-
----
-
-### Merchant (Port 8002)
-
-CartMandateの署名・在庫検証を担当。
-
-**固有エンドポイント：**
-
-- `POST /sign/cart` - CartMandate署名
-  - リクエスト: `{ "cart_mandate": {...} }`
-  - レスポンス: CartMandate（merchant_signature付き）
-
-- `GET /inventory/{sku}` - 在庫確認
-  - レスポンス: `{ "sku": "...", "available": N }`
-
----
-
-### Credential Provider (Port 8003)
-
-WebAuthn検証とトークン発行を担当。
-
-**固有エンドポイント：**
-
-- `POST /verify/attestation` - WebAuthn attestation検証
-  - リクエスト: `{ "payment_mandate": {...}, "attestation": {...} }`
-  - レスポンス: `{ "verified": true, "token": "cred_token_...", "details": {...} }`
-
-- `GET /payment-methods?user_id=...` - 支払い方法一覧
-  - レスポンス: `{ "user_id": "...", "payment_methods": [...] }`
-
-- `POST /payment-methods` - 支払い方法追加
-  - リクエスト: `{ "user_id": "...", "payment_method": {...} }`
-  - レスポンス: 追加された支払い方法
-
----
-
-### Payment Processor (Port 8004)
-
-決済処理とトランザクション管理を担当。
-
-**固有エンドポイント：**
-
-- `POST /process` - 支払い処理実行
-  - リクエスト: `{ "payment_mandate": {...}, "credential_token"?: "..." }`
-  - レスポンス: `{ "transaction_id": "txn_...", "status": "captured", "receipt_url": "..." }`
-
-- `GET /transactions/{transaction_id}` - トランザクション取得
-
-- `POST /refund` - 返金処理
-  - リクエスト: `{ "transaction_id": "txn_...", "reason": "..." }`
-  - レスポンス: `{ "refund_id": "refund_...", "status": "refunded" }`
-
-## 🧪 テスト方法
-
-### 1. ヘルスチェック
-
-```bash
-curl http://localhost:8000/
-```
-
-### 2. チャット対話（SSE Streaming）
-
-```bash
-# curlでSSEをテスト
-curl -N -H "Content-Type: application/json" \
-  -d '{"user_input": "こんにちは"}' \
-  http://localhost:8000/chat/stream
-```
-
-**期待される出力（SSE形式）：**
-```
-data: {"type":"agent_text","content":"こんにちは！AP2 Shopping Agentです。"}
-
-data: {"type":"agent_text","content":"何をお探しですか？例えば「かわいいグッズがほしい」のように教えてください。"}
-
-data: {"type":"done"}
-```
-
-### 3. A2Aメッセージテスト（Postman推奨）
-
-```bash
-# A2Aメッセージを送信（署名付き）
-curl -X POST http://localhost:8000/a2a/message \
-  -H "Content-Type: application/json" \
-  -d '{
-    "header": {
-      "message_id": "test-123",
-      "sender": "did:ap2:agent:merchant_agent",
-      "recipient": "did:ap2:agent:shopping_agent",
-      "timestamp": "2025-10-16T00:00:00Z",
-      "schema_version": "0.2"
-    },
-    "dataPart": {
-      "@type": "ap2/ProductList",
-      "id": "prod-list-001",
-      "payload": {
-        "products": []
-      }
-    }
-  }'
-```
-
-## 📚 技術スタック
-
-### バックエンド
-- **FastAPI** 0.115.0 - 高速なWebフレームワーク
+### Backend
+- **FastAPI** 0.115.0 - High-performance web framework
 - **SQLAlchemy** 2.0.35 - ORM
-- **aiosqlite** 0.20.0 - 非同期SQLite
-- **cryptography** 43.0.0 - ECDSA署名・AES-256-CBC暗号化
-- **fido2** 1.1.3 - WebAuthn検証
+- **aiosqlite** 0.20.0 - Async SQLite
+- **cryptography** 43.0.0 - ECDSA signing & AES-256-CBC encryption
+- **fido2** 1.1.3 - WebAuthn verification
 - **sse-starlette** 2.1.0 - Server-Sent Events
-- **httpx** 0.27.0 - 非同期HTTPクライアント
-- **LangGraph** - LLM対話フロー管理（StateGraph）
-- **LangChain** 0.3.0+ - LLM統合（OpenAI互換API）
-- **Langfuse** 2.0.0+ - LLM Observability（トレーシング）
-- **OpenAI** - ChatOpenAI（DMR endpoint対応）
-- **ReportLab** - PDF生成
-- **PyJWT** - JWT署名
+- **httpx** 0.27.0 - Async HTTP client
+- **LangGraph** - LLM conversation flow management
+- **LangChain** 0.3.0+ - LLM integration (OpenAI-compatible API)
+- **Langfuse** 2.0.0+ - LLM Observability
+- **ReportLab** - PDF generation
+- **PyJWT** - JWT signing
+- **redis** 5.0.0+ - Redis KV client
 
-## 🧠 LangGraph統合の詳細
-
-このアプリケーションは、2つのエージェント（Shopping AgentとMerchant Agent）でLangGraphを活用しています。
-
-### Shopping Agent - 2つのLangGraphエンジン
-
-#### 1. `langgraph_conversation.py` - 対話フロー管理
-
-**目的**: ユーザーとの段階的な対話でIntent Mandateに必要な情報を収集
-
-**StateGraph構成**:
-```python
-ConversationState = {
-    "intent": str | None,           # 購買意図（必須）
-    "max_amount": float | None,     # 最大金額（必須）
-    "categories": List[str],        # カテゴリー（オプション）
-    "brands": List[str],            # ブランド（オプション）
-    "conversation_history": List[Dict],
-    "missing_fields": List[str],
-    "is_complete": bool
-}
-```
-
-**ノードフロー**:
-```
-extract_info → check_completeness → generate_question → END
-```
-
-1. **extract_info**: LLMでユーザー入力から情報抽出（JSON形式）
-2. **check_completeness**: 必須フィールド（intent, max_amount）が揃ったか確認
-3. **generate_question**: 不足情報を質問、または完了メッセージ
-
-**実装ファイル**: `v2/services/shopping_agent/langgraph_conversation.py`
-
-**使用LLM**: DMR endpoint（OpenAI互換API）
-- Model: `ai/qwen3` or `ai/smollm2`
-- Temperature: 0.3（決定論的）
-- Max tokens: 512
-
-#### 2. `langgraph_agent.py` - Intent Mandate生成
-
-**目的**: 対話完了後、AP2準拠のIntentMandateデータを生成
-
-**StateGraph構成**:
-```python
-IntentExtractionState = {
-    "user_prompt": str,
-    "intent_data": Optional[Dict[str, Any]],
-    "error": Optional[str]
-}
-```
-
-**ノードフロー**:
-```
-extract_intent → format_intent → END
-```
-
-1. **extract_intent**: LLMでAP2準拠フィールドを抽出
-   - `natural_language_description`
-   - `user_cart_confirmation_required`
-   - `merchants`, `skus`, `requires_refundability`
-2. **format_intent**: Pydantic `IntentMandate`型でバリデーション
-
-**実装ファイル**: `v2/services/shopping_agent/langgraph_agent.py`
-
-**Langfuseトレーシング**:
-- Span名: `shopping_agent_intent_extraction`
-- Metadata: `user_prompt`, `natural_language_description`
-
-### Merchant Agent - CartMandate生成エンジン
-
-#### `langgraph_merchant.py` - AI-Powered Cart最適化
-
-**目的**: Intent Mandateから複数のカート候補を生成（Rule-based + LLM最適化）
-
-**StateGraph構成**:
-```python
-MerchantState = {
-    "intent_mandate": Dict,
-    "user_id": str,
-    "session_id": str,
-    "shipping_address": Optional[Dict],
-    "search_results": List[Dict],
-    "cart_candidates": List[Dict],
-    "error": Optional[str]
-}
-```
-
-**ノードフロー**:
-```
-_analyze_intent → _search_products → _optimize_cart → _create_cart_mandates → END
-```
-
-1. **_analyze_intent**: LLMでIntent Mandateから検索キーワード抽出
-   - `natural_language_description`から商品カテゴリ、特徴を抽出
-
-2. **_search_products**: データベースから商品検索
-   - `ProductCRUD.search(keywords, limit=20)`
-   - 在庫状況を確認
-
-3. **_optimize_cart**: 2段階最適化
-   - **Rule-based**: 価格フィルタリング、カテゴリマッチング
-   - **LLM-based**: 商品の組み合わせ最適化（LLMに3つのカート候補を生成させる）
-   - Timeout: 180秒、Retries: 2
-
-4. **_create_cart_mandates**: 各カート候補をAP2準拠CartMandateに変換
-   - `PaymentCurrencyAmount` (float, JPY)
-   - Merchantに署名リクエスト
-   - Artifact形式でラップ
-
-**実装ファイル**: `v2/services/merchant_agent/langgraph_merchant.py`
-
-**使用LLM**: DMR endpoint（OpenAI互換API）
-- Model: `ai/qwen3`
-- Temperature: 0.5（創造性とバランス）
-- Max tokens: 2048（詳細な推論用）
-- Timeout: 180秒（LLMに十分な思考時間）
-
-**Langfuseトレーシング**:
-- Span名: `merchant_agent_cart_generation`
-- Metadata: `intent_mandate_id`, `user_id`, `product_count`
-
-### LangGraph設定
-
-**共通設定**:
-- LLM Endpoint: 環境変数 `DMR_API_URL`（デフォルト: `http://host.docker.internal:12434/engines/llama.cpp/v1`）
-- Model: 環境変数 `DMR_MODEL`（デフォルト: `ai/qwen3`）
-- API Key: 環境変数 `DMR_API_KEY`（デフォルト: `none`）
-
-**Langfuse設定**:
-```bash
-LANGFUSE_ENABLED=true
-LANGFUSE_PUBLIC_KEY=your-public-key
-LANGFUSE_SECRET_KEY=your-secret-key
-LANGFUSE_HOST=https://cloud.langfuse.com
-```
-
-**Timeout設定**:
-- Shopping Agent → Merchant Agent: 300秒（5分）
-- LLM呼び出し: 180秒（3分）+ 2リトライ
-- 理由: `_optimize_cart`は重要な処理で、LLMに十分な思考時間が必要
-
-### LangGraph State Management
-
-```mermaid
-stateDiagram-v2
-    [*] --> extract_info: User Input
-    extract_info --> check_completeness: Extract Intent Data
-    check_completeness --> generate_question: Check Required Fields
-
-    state check_completeness <<choice>>
-    check_completeness --> generate_question: Missing Fields
-    check_completeness --> [*]: Complete
-
-    generate_question --> [*]: Ask Question or Done
-```
-
-### AP2準拠の重要実装
-
-#### PaymentCurrencyAmount型（完全準拠）
-
-**W3C仕様**: https://www.w3.org/TR/payment-request/#dom-paymentcurrencyamount
-
-```python
-class PaymentCurrencyAmount(BaseModel):
-    currency: str  # ISO 4217（例: "JPY", "USD"）
-    value: float   # ★ float型、基本通貨単位（円、ドル）
-```
-
-**重要**: `value`は**float型**で、**基本通貨単位**（セント/銭ではない）
-
-**実装例**（`langgraph_merchant.py:523-530`）:
-```python
-cart_items.append({
-    "product_id": product_id,
-    "name": product["name"],
-    "quantity": quantity,
-    "unit_price": {
-        "value": unit_price_cents / 100,  # AP2準拠: float型、円単位
-        "currency": "JPY"
-    },
-    "total_price": {
-        "value": total_price_cents / 100,  # AP2準拠: float型、円単位
-        "currency": "JPY"
-    },
-    # ...
-})
-```
-
-#### IntentMandate構造（AP2準拠）
-
-**参照**: `v2/common/mandate_types.py:39-86`
-
-```python
-class IntentMandate(BaseModel):
-    user_cart_confirmation_required: bool  # カート確認が必要か
-    natural_language_description: str      # ★ AP2準拠フィールド
-    merchants: Optional[list[str]]         # 許可されたMerchantリスト
-    skus: Optional[list[str]]              # 特定のSKUリスト
-    requires_refundability: Optional[bool] # 返金可能性が必要か
-    intent_expiry: str                     # 有効期限（ISO 8601）
-```
-
-**重要**: `natural_language_description`はAP2仕様で**必須**フィールド
-
-#### CartMandate構造（AP2準拠 + Artifact Wrapping）
-
-**参照**: `v2/common/mandate_types.py:117-148`, `langgraph_merchant.py:721-733`
-
-```python
-# Artifact形式でラップ（A2A仕様準拠）
-artifact = {
-    "artifactId": f"artifact_{uuid.uuid4().hex[:8]}",
-    "name": "カート名",
-    "parts": [
-        {
-            "kind": "data",
-            "data": {
-                "ap2.mandates.CartMandate": {  # ★ AP2データキー
-                    "contents": {
-                        "id": "cart_abc123",
-                        "user_cart_confirmation_required": true,
-                        "payment_request": {
-                            "details": {
-                                "display_items": [...],  # PaymentItem[]
-                                "total": {...}           # PaymentItem
-                            },
-                            "shipping_address": {...}  # ContactAddress
-                        },
-                        "cart_expiry": "2025-10-23T12:00:00Z",
-                        "merchant_name": "Demo Store"
-                    },
-                    "merchant_authorization": "eyJhbGc..."  # JWT署名
-                }
-            }
-        }
-    ]
-}
-```
-
-### フロントエンド
+### Frontend
 - **Next.js** 15.1.4 (App Router)
 - **React** 19.0.0
 - **TypeScript** 5.x
 - **TailwindCSS** 3.4.1
-- **shadcn/ui** - UIコンポーネントライブラリ
-- **Lucide React** - アイコン
-- **WebAuthn API** - Passkey署名
+- **shadcn/ui** - UI component library
+- **WebAuthn API** - Passkey signing
 
-### インフラ
-- **Docker** + **Docker Compose** - コンテナオーケストレーション
-- **SQLite** - 開発環境データベース
-- **Volume Mount** - データ永続化
+### Infrastructure
+- **Docker** + **Docker Compose** - Container orchestration
+- **SQLite** - Development database
+- **Redis** 7-alpine - KV store & session management
+- **Meilisearch** v1.11 - Full-text search engine
+- **Jaeger** - Distributed tracing (OpenTelemetry)
 
-## 🔐 セキュリティ
+## Project Structure
 
-### 鍵管理
-- 各エージェントはECDSA鍵ペアを自動生成
-- 秘密鍵はAES-256-CBCで暗号化して`./keys/`に保存
-- パスフレーズは環境変数または`AgentPassphraseManager`から取得
+```
+ap2/
+├── common/                      # Shared modules
+│   ├── models.py                # Pydantic models (A2A messages, API types)
+│   ├── a2a_handler.py           # A2A message handling
+│   ├── base_agent.py            # Base class for all agents
+│   ├── database.py              # SQLAlchemy models + CRUD
+│   ├── redis_client.py          # Redis KV client (TokenStore, SessionStore)
+│   ├── crypto.py                # Ed25519/ECDSA signing, AES-256 encryption
+│   ├── logger.py                # Unified logging (JSON/text)
+│   ├── user_authorization.py    # SD-JWT+KB verification
+│   ├── risk_assessment.py       # Risk assessment engine
+│   └── receipt_generator.py    # PDF receipt generation
+│
+├── services/                    # Microservices
+│   ├── shopping_agent/          # Shopping Agent (Port 8000)
+│   ├── shopping_agent_mcp/      # Shopping Agent MCP (Port 8010)
+│   ├── merchant_agent/          # Merchant Agent (Port 8001)
+│   ├── merchant_agent_mcp/      # Merchant Agent MCP (Port 8011)
+│   ├── merchant/                # Merchant (Port 8002)
+│   ├── credential_provider/     # Credential Provider (Port 8003)
+│   ├── payment_processor/       # Payment Processor (Port 8004)
+│   └── payment_network/         # Payment Network (Port 8005)
+│
+├── frontend/                    # Next.js frontend (Port 3000)
+│   ├── app/                     # App Router
+│   │   ├── page.tsx             # Home page
+│   │   ├── chat/page.tsx        # Chat UI (SSE/Streaming)
+│   │   └── merchant/page.tsx    # Merchant Dashboard
+│   ├── components/              # React components
+│   └── lib/                     # Utilities & types
+│
+├── scripts/                     # Utility scripts
+│   ├── init_keys.py             # Key pair initialization
+│   └── init_seeds.py            # Seed data injection
+│
+├── data/                        # Persistent data (Docker Volume)
+│   ├── *.db                     # SQLite databases (per service)
+│   ├── receipts/                # PDF receipts
+│   └── did_documents/           # DID Documents
+│
+├── keys/                        # Encrypted keys (Docker Volume)
+│   └── *_private.pem            # Ed25519/ECDSA private keys (AES-256)
+│
+├── docker-compose.yml           # Service orchestration
+├── pyproject.toml               # Python dependencies (uv)
+└── README.md                    # This file
+```
 
-### A2A署名検証
-- 全A2Aメッセージは署名付き
-- `a2a_handler.py`で自動的に署名検証
-- 署名検証失敗時は400エラー
+## API Endpoints
 
-### ロギング設定
+### Common Endpoints (All Services)
 
-統一ロギングシステムを使用しており、環境変数で制御可能です。
+All services expose these endpoints:
+- `GET /` - Health check (returns agent_id, agent_name, status, version)
+- `GET /health` - Health check (for Docker)
+- `POST /a2a/message` - A2A message reception (auto-implemented by BaseAgent)
 
-**環境変数:**
+### Shopping Agent (Port 8000)
+
+**User Interaction:**
+- `POST /chat/stream` - Chat dialogue (SSE Streaming)
+- `POST /create-intent` - Create IntentMandate
+- `POST /create-payment` - Create PaymentMandate
+- `GET /transactions/{transaction_id}` - Get transaction
+
+### Merchant Agent (Port 8001)
+
+**Product Search & Cart Creation:**
+- `GET /products?query=...&limit=10` - Product search
+- `POST /create-cart` - Create CartMandate (unsigned)
+
+### Merchant (Port 8002)
+
+**Cart Signing & Inventory:**
+- `POST /sign/cart` - Sign CartMandate
+- `GET /inventory/{sku}` - Check inventory
+- `GET /products` - List products
+- `POST /products` - Add product
+
+### Credential Provider (Port 8003)
+
+**WebAuthn & Token Issuance:**
+- `POST /attestations/verify` - Verify WebAuthn attestation
+- `GET /payment-methods?user_id=...` - List payment methods
+- `POST /payment-methods` - Add payment method
+- `POST /payment-methods/tokenize` - Tokenize payment method
+- `POST /credentials/verify` - Verify credential token (returns agent_token)
+- `GET /webauthn/options` - Get WebAuthn challenge
+
+### Payment Processor (Port 8004)
+
+**Payment Processing:**
+- `POST /process` - Execute payment
+- `GET /transactions/{transaction_id}` - Get transaction
+- `POST /refund` - Process refund
+- `GET /receipts/{transaction_id}.pdf` - Download PDF receipt (JWT-authenticated)
+
+### Payment Network (Port 8005)
+
+**Agent Token Lifecycle:**
+- `POST /network/tokenize` - Issue Agent Token (AP2 Step 23)
+- `POST /network/verify-token` - Verify Agent Token
+- `POST /network/charge` - Execute payment charge (AP2 Step 28)
+- `GET /network/info` - Get network information
+
+## AP2 Specification Compliance
+
+This application fully implements the AP2 (Agent Payments Protocol) v0.2 specification:
+
+### Mandate Chain
+
+1. **IntentMandate** - User's purchase intent (max_amount, categories)
+2. **CartMandate** - Specific cart contents (Merchant signature + User signature)
+3. **PaymentMandate** - Payment information (payment method, risk score)
+
+### Payment Flow (AP2 Steps 17-29)
+
+- **Step 17-19**: Payment method selection & tokenization
+- **Step 20-22**: PaymentMandate creation with risk assessment
+- **Step 23**: Agent Token issuance from Payment Network
+- **Step 24-25**: Payment execution request
+- **Step 26-27**: Credential verification & agent token retrieval
+- **Step 28**: Payment charge via Payment Network
+- **Step 29**: Receipt generation & notification
+
+### Security Features
+
+- **SD-JWT+KB**: Selective Disclosure JWT with Key Binding for user_authorization
+- **Merchant Authorization**: ECDSA + JWT signatures for CartMandate
+- **WebAuthn**: FIDO2-based passwordless authentication
+- **Challenge-Response**: Replay attack prevention with Redis TTL
+- **Token Lifecycle**: Proper TTL management for all tokens
+
+## References
+
+- [AP2 Official Specification](https://ap2-protocol.org/specification/)
+- [Google AP2 Samples](https://github.com/google-agentic-commerce/AP2)
+- [W3C Payment Request API](https://www.w3.org/TR/payment-request/)
+- [WebAuthn Specification](https://www.w3.org/TR/webauthn/)
+
+## Troubleshooting
+
+### Database Errors
+
 ```bash
-# ログレベル（DEBUG/INFO/WARNING/ERROR/CRITICAL）
-LOG_LEVEL=INFO  # デフォルト: INFO
+# Reset databases
+rm -rf data/*.db
 
-# ログフォーマット（text/json）
-LOG_FORMAT=text  # デフォルト: text
+# Reinitialize
+docker compose up init-seeds
 ```
 
-**ログレベルの説明:**
-- `DEBUG`: 詳細なデバッグ情報（HTTPペイロード、A2Aメッセージ、署名操作等）
-- `INFO`: 一般的な情報メッセージ（鍵生成、トランザクション開始等）
-- `WARNING`: 警告メッセージ（チャレンジ失敗、タイムスタンプずれ等）
-- `ERROR`: エラーメッセージ（検証失敗、データベースエラー等）
-- `CRITICAL`: 致命的なエラー（サービス起動失敗等）
+### Key Generation Errors
 
-**フォーマットの説明:**
-- `text`: 人間が読みやすい形式（開発環境向け）
-  ```
-  [2025-10-21 12:34:56] INFO     common.crypto                  | Generating new key pair: shopping_agent
-  ```
-- `json`: 構造化JSON形式（本番環境向け、ログ集約ツールと連携）
-  ```json
-  {"timestamp":"2025-10-21T12:34:56Z","level":"INFO","logger":"common.crypto","message":"Generating new key pair: shopping_agent"}
-  ```
-
-**使用例:**
 ```bash
-# デバッグモードで起動（すべてのHTTPペイロードを表示）
-LOG_LEVEL=DEBUG docker compose up
+# Reset keys
+rm -rf keys/*
 
-# 本番環境（JSON形式、WARNINGレベル以上のみ）
-LOG_LEVEL=WARNING LOG_FORMAT=json docker compose up
+# Services will auto-generate keys on restart
+docker compose restart
 ```
 
-**機能:**
-- 機密データの自動マスキング（password, token, private_key等）
-- HTTPリクエスト/レスポンスの自動ログ（DEBUGレベル）
-- A2Aメッセージペイロードの自動ログ（DEBUGレベル）
-- 暗号化操作の詳細ログ（署名、検証、鍵生成）
-- サービス別ログタグ（shopping_agent, merchant等）
+### Port Conflicts
 
-## 🎯 AP2準拠の重要実装
-
-このデモアプリは、[AP2公式仕様](https://ap2-protocol.org/specification/)に完全準拠しています。
-
-### CartMandate構造（AP2準拠）
-
-```typescript
-// AP2準拠のCartMandate構造
-{
-  "contents": {
-    "id": "cart_abc123",
-    "user_cart_confirmation_required": true,
-    "payment_request": {
-      "method_data": [...],
-      "details": {
-        "id": "cart_abc123",
-        "display_items": [
-          {
-            "label": "商品名",
-            "amount": { "value": 10000, "currency": "JPY" },
-            "refund_period": 2592000  // 30日（商品の識別子）
-          },
-          {
-            "label": "税金",
-            "amount": { "value": 800, "currency": "JPY" },
-            "refund_period": 0  // 非商品アイテム
-          },
-          {
-            "label": "送料",
-            "amount": { "value": 500, "currency": "JPY" },
-            "refund_period": 0
-          }
-        ],
-        "total": {
-          "label": "合計",
-          "amount": { "value": 11300, "currency": "JPY" }
-        },
-        "shipping_options": [...]
-      },
-      "shipping_address": {
-        "recipient_name": "山田太郎",
-        "address_line": ["東京都渋谷区", "神南1-2-3"],  // AP2準拠の配列形式
-        "postal_code": "150-0041",
-        "country": "JP"
-      }
-    },
-    "cart_expiry": "2025-10-22T12:00:00Z",
-    "merchant_name": "デモストア"
-  },
-  "merchant_authorization": "eyJhbGc...",  // Merchant署名（JWT）
-  "_metadata": {
-    "cart_name": "カート名",
-    "raw_items": [...],  // 元の商品情報（数量など）
-    "merchant_id": "merchant_demo_001"
-  }
-}
-```
-
-### Mandate Chain検証
-
-Payment Processorは、以下の3つのMandateを検証します：
-
-1. **IntentMandate** - ユーザーの購買意図（最大金額、カテゴリなど）
-2. **CartMandate** - 具体的なカート内容（Merchant署名 + User署名）
-3. **PaymentMandate** - 決済情報（支払い方法、リスクスコア）
-
-```python
-# v2/services/payment_processor/processor.py:755-764
-def _validate_mandate_chain(cart_mandate, payment_mandate):
-    cart_id = cart_mandate.get("contents", {}).get("id")
-    assert payment_mandate["cart_mandate_id"] == cart_id
-    # ... さらなる検証
-```
-
-## 🚧 今後の拡張予定
-
-### Phase 3: 高度な機能
-- ⏳ **MCP（Model Context Protocol）統合** - 外部ツール連携
-- ⏳ **マルチテナント対応** - 複数店舗サポート
-- ⏳ **Risk Assessment強化** - 機械学習モデル統合
-- ⏳ **返金フロー完全実装** - UI統合
-- ⏳ **サブスクリプション決済** - RecurringMandate対応
-
-### Phase 4: 本番運用準備
-- ⏳ **PostgreSQL移行** - SQLiteからの移行
-- ⏳ **Kubernetes/ECS対応** - コンテナオーケストレーション
-- ⏳ **監視・ログ集約** - Prometheus + Grafana + ELK
-- ⏳ **CI/CD パイプライン** - GitHub Actions
-- ⏳ **セキュリティ強化** - Vault統合、シークレット管理
-
-## 📖 参考資料
-
-- [demo_app_v2.md](../demo_app_v2.md) - v2要件書
-- [CLAUDE.md](../CLAUDE.md) - プロジェクト概要
-- [AP2 Official Spec](https://ap2-protocol.org/specification/)
-- [Google AP2 Samples](./refs/AP2-main/)
-
-## 🐛 トラブルシューティング
-
-### データベースエラー
 ```bash
-# データベースをリセット
-rm v2/data/ap2.db
-
-# 再初期化
-python v2/common/seed_data.py
+# Check port usage
+lsof -ti:8000 | xargs kill -9  # Kill process on port 8000
 ```
 
-### 鍵生成エラー
+### Redis Connection Errors
+
 ```bash
-# 鍵ディレクトリをリセット
-rm -rf keys/
+# Restart Redis
+docker compose restart redis
 
-# サービスを再起動すると自動生成されます
+# Check Redis health
+docker compose exec redis redis-cli ping
 ```
 
-### ポート競合
-```bash
-# ポート8000が使用中の場合
-lsof -ti:8000 | xargs kill -9
-```
-
-## 🎬 デモ動画・スクリーンショット
-
-### Chat UI（メインデモフロー）
-
-1. **Passkey登録**
-   - 初回訪問時に自動表示
-   - デバイス認証を使用した安全な登録
-
-2. **LangGraph対話フロー**
-   - 「かわいいグッズがほしい」と入力
-   - LLMが段階的に必要情報を収集（Intent、最大金額、カテゴリ）
-   - 思考過程がリアルタイム表示
-
-3. **Intent署名**
-   - 収集した情報を確認
-   - Passkeyで署名
-
-4. **商品検索・カート提案**
-   - LLMが複数のカートを提案
-   - カルーセルUIで選択
-
-5. **Cart署名**
-   - カート内容（商品、金額、配送先）を確認
-   - AP2準拠の金額表示（¥0ではなく実際の金額）
-   - Passkeyで署名
-
-6. **決済・領収書**
-   - 支払い方法選択
-   - Payment署名
-   - PDF領収書ダウンロード
-
-### Merchant Dashboard
-
-- 商品管理（在庫調整、追加、削除）
-- 署名待ちCartMandate一覧（AP2準拠金額表示）
-- 手動承認/却下フロー
-- トランザクション履歴
-
-## 📝 ライセンス
-
-このプロジェクトはAP2プロトコルのデモ実装です。
-
-## 👥 コントリビューター
-
-このプロジェクトは、AP2プロトコル（Google主導）の公式仕様に基づいて実装されています。
-
-- **AP2仕様**: https://ap2-protocol.org/
-- **Google AP2サンプル**: https://github.com/google-agentic-commerce/AP2
-
----
-
-**作成日**: 2025-10-16
-**最終更新**: 2025-10-22
-**バージョン**: v2.1.0
-**ステータス**: ✅ Phase 1 & 2 完了 - フル機能デモアプリ稼働中！
-
-🎉 **完全実装版リリース！** - LangGraph + WebAuthn + AP2準拠CartMandate + PDF領収書 + Merchant Dashboard
