@@ -1,210 +1,305 @@
 # Shopping Agent
 
-**AP2 Protocol - ユーザー代理エージェント**
+**User's AI Agent** - Handles user dialogue, intent collection, cart selection, and payment execution using LangGraph conversation flows.
 
-Shopping Agentは、ユーザーに代わって購買プロセスを管理するAIエージェントです。ユーザーとの対話からIntent Mandateを作成し、商品検索、Cart選択、決済処理までをエンドツーエンドで実行します。
+## Overview
 
-## 📋 目次
+The Shopping Agent is the primary interface between users and the AP2 protocol. It orchestrates the complete purchase flow from initial intent to payment completion, coordinating with other services via A2A (Agent-to-Agent) messaging.
 
-- [概要](#概要)
-- [役割と責務](#役割と責務)
-- [主要機能](#主要機能)
-- [エンドポイント一覧](#エンドポイント一覧)
-- [実装詳細](#実装詳細)
-- [データフロー](#データフロー)
-- [セキュリティ](#セキュリティ)
-- [開発者向け情報](#開発者向け情報)
+**Port**: 8000
+**Role**: User's AI Agent
+**Protocol**: AP2 v0.2
 
----
+## Key Features
 
-## 概要
+- **LangGraph Dialogue Flow** - 14-node StateGraph for conversation management
+- **SSE Streaming** - Real-time responses via Server-Sent Events
+- **Intent Collection** - Gradual extraction of purchase requirements
+- **A2A Communication** - Secure Ed25519-signed messaging with other agents
+- **Mandate Management** - Creation and signing of Intent/Cart/Payment mandates
+- **Risk Assessment** - Transaction risk evaluation (0-100 score)
+- **JWT Authentication** - Layer 1 HTTP session authentication
+- **WebAuthn Integration** - Passkey-based user authorization (SD-JWT+KB)
+- **MCP Integration** - 6 tools via Shopping Agent MCP (Port 8010)
 
-### AP2での役割
+## Sequence Diagram
 
-- **AP2 Role**: `shopper`
-- **DID**: `did:ap2:agent:shopping_agent`
-- **Port**: `8000`
-- **Database**: `v2/data/shopping_agent.db`
-
-### 主要な責務
-
-1. **ユーザー対話**: SSEストリーミングによるリアルタイムチャット
-2. **Intent Mandate管理**: ユーザーの購買意図を構造化
-3. **A2A通信**: 他エージェント（Merchant Agent、Credential Provider）との通信
-4. **決済オーケストレーション**: Payment Mandateの作成と署名管理
-5. **リスク評価**: 取引のリスクスコア計算
-
----
-
-## 役割と責務
-
-### 1. ユーザーインターフェース
-
-```
-ユーザー ←→ Shopping Agent ←→ 他エージェント
-          (SSE Stream)      (A2A Messages)
-```
-
-- **入力**: ユーザーの自然言語入力（"むぎぼーのグッズが欲しい"）
-- **出力**: SSEストリーミングイベント（agent_text、cart_options、signature_request等）
-- **LangGraph StateGraph統合**: 14ノードの会話フロー管理（`langgraph_shopping_flow.py`）
-- **MCP統合**: Shopping Agent MCP（Port 8010）の6ツールを活用
-
-### 2. Mandateライフサイクル管理
+This diagram shows the Shopping Agent's internal processing flow for a complete purchase.
 
 ```mermaid
-stateDiagram-v2
-    [*] --> IntentCreation: ユーザー入力
-    IntentCreation --> IntentSigned: Passkey署名
-    IntentSigned --> ProductSearch: A2A通信
-    ProductSearch --> CartSelection: Cart候補受信
-    CartSelection --> CartSigned: Passkey署名
-    CartSigned --> PaymentCreation: 支払い方法選択
-    PaymentCreation --> PaymentProcessing: A2A通信
-    PaymentProcessing --> [*]: 決済完了
+sequenceDiagram
+    autonumber
+    participant User
+    participant SA as Shopping Agent<br/>(Port 8000)
+    participant SAMCP as Shopping Agent MCP<br/>(Port 8010)
+    participant LLM as LangGraph<br/>StateGraph
+    participant DB as Database
+
+    %% Phase 1: Dialogue & Intent
+    rect rgb(240, 248, 255)
+        Note over User,LLM: Phase 1: Intent Collection (Internal)
+        User->>SA: POST /chat/stream<br/>"I want cute merchandise"
+        SA->>LLM: extract_info_node (StateGraph)
+        LLM-->>SA: {"intent": "cute merchandise", "max_amount": null}
+        SA-->>User: SSE: "What's your budget?"
+        User->>SA: "Up to 3000 yen"
+        SA->>LLM: extract_info_node (cumulative)
+        LLM-->>SA: {"intent": "cute merchandise", "max_amount": 3000}
+        SA->>SA: check_completeness_node
+        SA->>SAMCP: MCP: build_intent_mandate
+        SAMCP->>SAMCP: Generate IntentMandate structure
+        SAMCP-->>SA: IntentMandate (unsigned)
+        SA->>DB: Save IntentMandate (draft)
+        SA-->>User: SSE: IntentMandate preview
+    end
+
+    %% Phase 2: Intent Signing
+    rect rgb(255, 250, 240)
+        Note over User,DB: Phase 2: Intent Signing (Internal)
+        User->>SA: POST /sign-mandate<br/>{user_authorization: SD-JWT+KB}
+        SA->>SA: Parse SD-JWT+KB format (tilde-separated)
+        SA->>SA: Add user_authorization to IntentMandate
+        SA->>DB: Update IntentMandate (signed)
+        SA-->>User: Signed IntentMandate
+    end
+
+    %% Phase 3: Cart Request Preparation
+    rect rgb(240, 255, 240)
+        Note over User,SAMCP: Phase 3: Cart Request (Internal Prep)
+        User->>SA: Continue chat
+        SA->>SA: ask_shipping_node
+        SA-->>User: SSE: "Please provide shipping address"
+        User->>SA: {address: {...}}
+        SA->>SAMCP: MCP: request_cart_candidates<br/>{intent_mandate, shipping_address}
+        Note over SAMCP: MCP tool sends A2A to Merchant Agent<br/>(external, not shown in this diagram)
+        SAMCP-->>SA: {cart_candidates: [Artifact, ...]}
+        SA->>DB: Save cart candidates
+        SA-->>User: SSE: Display cart options
+    end
+
+    %% Phase 4: Cart Selection & Signing
+    rect rgb(255, 245, 240)
+        Note over User,DB: Phase 4: Cart Selection (Internal)
+        User->>SA: Select cart
+        SA->>SAMCP: MCP: select_cart<br/>{cart_id}
+        SAMCP->>SAMCP: Retrieve CartMandate from session
+        SAMCP-->>SA: Selected CartMandate
+        User->>SA: POST /sign-cart<br/>{user_authorization: SD-JWT+KB}
+        SA->>SA: Add user_authorization to CartMandate
+        SA->>DB: Update CartMandate (signed)
+        SA-->>User: Signed CartMandate
+    end
+
+    %% Phase 5: Payment
+    rect rgb(255, 240, 245)
+        Note over User,SAMCP: Phase 5: Payment (Internal)
+        User->>SA: Select payment method
+        SA->>SAMCP: MCP: assess_payment_risk<br/>{cart_mandate, payment_method}
+        SAMCP->>SAMCP: Calculate risk score (0-100)
+        SAMCP-->>SA: {risk_score, fraud_indicators}
+        SA->>SAMCP: MCP: build_payment_mandate
+        SAMCP-->>SA: PaymentMandate (unsigned)
+        User->>SA: POST /sign-payment<br/>{user_authorization: SD-JWT+KB}
+        SA->>SA: Add user_authorization to PaymentMandate
+        SA->>SAMCP: MCP: execute_payment<br/>{payment_mandate, cart_mandate}
+        Note over SAMCP: MCP tool sends to Payment Processor<br/>(external, not shown)
+        SAMCP-->>SA: {transaction_id, receipt_url}
+        SA->>DB: Save transaction
+        SA-->>User: SSE: Payment success + receipt
+    end
 ```
 
-### 3. セキュリティ管理
+## API Endpoints
 
-- **署名検証**: A2Aメッセージの署名検証（ECDSA/Ed25519）
-- **WebAuthn統合**: ユーザーのPasskey署名管理
-- **Nonce管理**: リプレイ攻撃対策
-- **リスク評価**: 8要素に基づく取引リスクスコア計算
+### Chat & Dialogue
 
----
+**`POST /chat/stream`** - SSE streaming chat (LangGraph-powered)
+- **Request**: `{user_input: string, session_id?: string, user_id?: string}`
+- **Response**: Server-Sent Events (JSON stream)
+  - `{type: "agent_text", content: string}`
+  - `{type: "agent_thinking", thought: string}`
+  - `{type: "intent_mandate", mandate: object}`
+  - `{type: "cart_candidates", candidates: array}`
+  - `{type: "done"}`
+- **Implementation**: `agent.py:961`
 
-## 主要機能
+### Mandate Management
 
-### 1. チャットストリーミング（SSE）
+**`POST /create-intent`** - Create IntentMandate
+- **Request**: `{user_id: string, max_amount: object, intent: string, ...}`
+- **Response**: IntentMandate (unsigned)
 
-**エンドポイント**: `POST /chat/stream`
+**`POST /sign-mandate`** - Sign IntentMandate with WebAuthn (SD-JWT+KB)
+- **Request**: `{intent_mandate: object, user_authorization: string}`
+- **Response**: Signed IntentMandate
 
-```typescript
-// フロントエンドからの呼び出し例
-const eventSource = new EventSource('/api/shopping-agent/chat/stream', {
-  method: 'POST',
-  body: JSON.stringify({
-    user_input: "むぎぼーのグッズが欲しい",
-    session_id: "session_abc123"
-  })
-});
+**`POST /sign-cart`** - Sign CartMandate with WebAuthn (SD-JWT+KB)
+- **Request**: `{cart_id: string, user_authorization: string}`
+- **Response**: Signed CartMandate
 
-eventSource.onmessage = (event) => {
-  const data = JSON.parse(event.data);
+**`POST /sign-payment`** - Sign PaymentMandate with WebAuthn (SD-JWT+KB)
+- **Request**: `{payment_mandate: object, user_authorization: string}`
+- **Response**: Signed PaymentMandate
 
-  switch (data.type) {
-    case 'agent_text':
-      // エージェントの応答を表示
-      console.log(data.content);
-      break;
-    case 'signature_request':
-      // Passkey署名を要求
-      requestWebAuthnSignature(data.mandate);
-      break;
-    case 'cart_options':
-      // カート候補を表示
-      displayCartOptions(data.items);
-      break;
-    case 'done':
-      // ストリーム終了
-      eventSource.close();
-      break;
-  }
-};
+### User Authentication (Layer 1)
+
+**`POST /auth/register`** - Register new user (Argon2id password hashing)
+- **Request**: `{email: string, password: string, full_name: string}`
+- **Response**: `{access_token: string, user: object}`
+- **Implementation**: `agent.py:294`
+
+**`POST /auth/login`** - Login user
+- **Request**: `{email: string, password: string}`
+- **Response**: `{access_token: string, user: object}`
+- **Implementation**: `agent.py:368`
+
+**`GET /auth/me`** - Get current user (JWT-protected)
+- **Headers**: `Authorization: Bearer <token>`
+- **Response**: User object
+- **Implementation**: `agent.py:665`
+
+### Transactions
+
+**`GET /transactions/{transaction_id}`** - Get transaction details
+- **Response**: Transaction object with status and events
+
+### Common Endpoints (Inherited from BaseAgent)
+
+**`GET /`** - Health check
+- **Response**: `{agent_id, agent_name, status, version}`
+
+**`GET /health`** - Health check (for Docker)
+- **Response**: `{status: "healthy"}`
+
+**`POST /a2a/message`** - Receive A2A messages from other agents
+- **Request**: A2AMessage (Ed25519 signed)
+- **Response**: A2A response
+
+**`GET /.well-known/did.json`** - DID document
+- **Response**: W3C DID Document
+
+## Environment Variables
+
+```bash
+# Service Configuration
+AGENT_ID=did:ap2:agent:shopping_agent
+DATABASE_URL=sqlite+aiosqlite:////app/data/shopping_agent.db
+AP2_KEYS_DIRECTORY=/app/keys
+
+# Downstream Services
+MERCHANT_AGENT_URL=http://merchant_agent:8001
+CREDENTIAL_PROVIDER_URL=http://credential_provider:8003
+PAYMENT_PROCESSOR_URL=http://payment_processor:8004
+SHOPPING_MCP_URL=http://shopping_agent_mcp:8010
+
+# LLM Configuration (LangGraph)
+DMR_API_URL=http://host.docker.internal:12434/engines/llama.cpp/v1
+DMR_MODEL=ai/qwen3
+DMR_API_KEY=none
+
+# Langfuse (Optional)
+LANGFUSE_ENABLED=false
+LANGFUSE_PUBLIC_KEY=
+LANGFUSE_SECRET_KEY=
+LANGFUSE_HOST=https://cloud.langfuse.com
+
+# OpenTelemetry
+OTEL_ENABLED=true
+OTEL_SERVICE_NAME=shopping_agent
+OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
+
+# Logging
+LOG_LEVEL=INFO
+LOG_FORMAT=text
 ```
 
-**実装**: `agent.py:961` (`chat_stream`エンドポイント)
+## Database Schema
 
-**LangGraph StateGraph統合**:
+### Tables
 
-`POST /chat/stream` → `shopping_flow_graph.ainvoke()` → 14ノードのステート駆動フロー
+- **mandates** - IntentMandate, CartMandate, PaymentMandate storage
+- **transactions** - Payment transaction records
+- **agent_sessions** - User session management
+- **users** - User accounts (JWT authentication, Argon2id hashing)
+- **passkey_credentials** - WebAuthn/Passkey credentials
 
-```mermaid
-graph LR
-    Start[ユーザー入力] --> Router{route_by_step}
-    Router -->|initial| Greeting[greeting_node]
-    Router -->|extract_intent| Extract[extract_intent_node<br/>LLM呼び出し]
-    Router -->|build_intent| BuildIntent[build_intent_node<br/>MCP: build_intent_mandate]
-    Router -->|request_carts| RequestCarts[request_carts_node<br/>MCP: request_cart_candidates]
-    Router -->|select_cart| SelectCart[select_cart_node]
-    Router -->|cart_signature_pending| ConsentSig[consent_signature_node<br/>MCP: select_and_sign_cart]
-    Router -->|select_payment| SelectPay[select_payment_node<br/>MCP: assess_payment_risk<br/>MCP: build_payment_mandate]
-    Router -->|execute_payment| ExecutePay[execute_payment_node<br/>MCP: execute_payment]
-    Router -->|completed| Complete[completed_node]
+## Dependencies
 
-    BuildIntent --> MCP1[Shopping Agent MCP<br/>:8010]
-    RequestCarts --> MCP1
-    ConsentSig --> MCP1
-    SelectPay --> MCP1
-    ExecutePay --> MCP1
+### Python Packages
+- **fastapi** 0.115.0 - Web framework
+- **sse-starlette** 2.1.0 - Server-Sent Events
+- **httpx** 0.27.0 - Async HTTP client
+- **langgraph** - Conversation flow management (14-node StateGraph)
+- **langchain** 0.3.0+ - LLM integration
+- **sqlalchemy** 2.0.35 - ORM
+- **cryptography** 43.0.0 - Ed25519 signing
 
-    style Router fill:#fff3e0
-    style MCP1 fill:#e1bee7
-```
+### Downstream Services
+- **Shopping Agent MCP** (Port 8010) - 6 MCP tools
+- **Merchant Agent** (Port 8001) - Product search & cart creation
+- **Credential Provider** (Port 8003) - WebAuthn verification
+- **Payment Processor** (Port 8004) - Payment execution
+- **LLM Endpoint** - OpenAI-compatible API (DMR)
 
-**StateGraphの特徴**:
-- **14ノード**: greeting, extract_intent, build_intent, ask_max_amount, ask_categories, ask_shipping, request_carts, select_cart, consent_signature, select_payment, webauthn_auth, execute_payment, completed, error_handler
-- **ステート駆動**: `session["step"]`に基づいて適切なノードに自動遷移
-- **Checkpointer**: LangGraphのMemorySaver機能で会話の継続性を保証
-- **MCP連携**: 6ツールをHTTP経由で呼び出し（Port 8010）
+## Key Implementation Details
 
-**ファイル**: `langgraph_shopping_flow.py` (1547行)
+### LangGraph StateGraph
 
-### 2. Shopping Agent MCP統合（6ツール）
+The Shopping Agent uses a 14-node StateGraph for conversation management:
 
-**MCPサーバー**: `http://shopping_agent_mcp:8010`
-
-| MCPツール | 説明 | 使用ノード |
-|---------|------|----------|
-| `build_intent_mandate` | IntentMandate構築 | build_intent_node |
-| `request_cart_candidates` | Merchant AgentにA2A送信、Cart候補取得 | request_carts_node |
-| `select_and_sign_cart` | CartMandateにユーザー署名追加 | consent_signature_node |
-| `assess_payment_risk` | RiskAssessmentEngine実行 | select_payment_node |
-| `build_payment_mandate` | PaymentMandate構築 | select_payment_node |
-| `execute_payment` | Payment Processorに決済依頼 | execute_payment_node |
-
-**実装**: `shopping_agent_mcp/main.py`
-
-### 3. Intent Mandate作成
-
-**フロー**:
-1. Challenge生成: `POST /intent/challenge`
-2. Passkey署名（フロントエンド）
-3. 署名付きIntent提出: `POST /intent/submit`
-
-**Intent Mandate構造**:
-
-```json
-{
-  "id": "intent_abc123",
-  "type": "IntentMandate",
-  "user_id": "user_demo_001",
-  "intent": "むぎぼーのグッズを購入",
-  "constraints": {
-    "max_amount": {"value": "50000", "currency": "JPY"},
-    "allowed_merchants": ["did:ap2:merchant:mugibo_merchant"],
-    "allowed_categories": ["goods"],
-    "expiry": "2025-10-24T12:00:00Z"
-  },
-  "passkey_signature": {
-    "challenge_id": "ch_xyz789",
-    "clientDataJSON": "...",
-    "authenticatorData": "...",
-    "signature": "..."
-  }
+```python
+ConversationState = {
+    "session_id": str,
+    "user_id": str,
+    "step": str,  # Current conversation step
+    "intent": str | None,
+    "max_amount": float | None,
+    "categories": List[str],
+    "brands": List[str],
+    "shipping_address": Dict | None,
+    "intent_mandate": Dict | None,
+    "cart_candidates": List[Dict],
+    "selected_cart": Dict | None,
+    "payment_method": Dict | None,
+    "conversation_history": List[Dict],
+    "error": str | None
 }
 ```
 
-**実装**:
-- Challenge生成: `agent.py:171-213`
-- Intent提出: `agent.py:215-289`
-- WebAuthn検証: `crypto.py:1176-1339`
+**14 Nodes**:
+1. `greeting_node` - Initial greeting
+2. `extract_intent_node` - LLM extracts purchase intent
+3. `build_intent_node` - MCP: build_intent_mandate
+4. `ask_max_amount_node` - Ask for budget
+5. `ask_categories_node` - Ask for product categories
+6. `ask_shipping_node` - Ask for shipping address
+7. `request_carts_node` - MCP: request_cart_candidates
+8. `select_cart_node` - User selects cart
+9. `consent_signature_node` - MCP: select_and_sign_cart
+10. `select_payment_node` - MCP: assess_payment_risk + build_payment_mandate
+11. `webauthn_auth_node` - WebAuthn authentication
+12. `execute_payment_node` - MCP: execute_payment
+13. `completed_node` - Purchase completed
+14. `error_handler_node` - Error handling
 
-### 3. A2A通信（商品検索）
+**File**: `langgraph_shopping_flow.py` (1547 lines)
 
-**送信先**: Merchant Agent (`did:ap2:agent:merchant_agent`)
+### MCP Integration (6 Tools)
 
-**A2Aメッセージ例**:
+**MCP Server**: `http://shopping_agent_mcp:8010`
+
+| MCP Tool | Description | Used in Node |
+|----------|-------------|--------------|
+| `build_intent_mandate` | Create IntentMandate | build_intent_node |
+| `request_cart_candidates` | Send A2A to Merchant Agent | request_carts_node |
+| `select_and_sign_cart` | Add user signature to CartMandate | consent_signature_node |
+| `assess_payment_risk` | Run RiskAssessmentEngine | select_payment_node |
+| `build_payment_mandate` | Create PaymentMandate | select_payment_node |
+| `execute_payment` | Send to Payment Processor | execute_payment_node |
+
+### A2A Communication
+
+All inter-agent communication uses Ed25519-signed A2A messages:
 
 ```json
 {
@@ -213,631 +308,110 @@ graph LR
     "sender": "did:ap2:agent:shopping_agent",
     "recipient": "did:ap2:agent:merchant_agent",
     "timestamp": "2025-10-23T12:34:56Z",
-    "nonce": "32バイトhex文字列",
-    "proof": {
-      "algorithm": "ed25519",
-      "signatureValue": "...",
-      "publicKey": "...",
-      "kid": "did:ap2:agent:shopping_agent#key-2",
-      "created": "2025-10-23T12:34:56Z",
-      "proofPurpose": "authentication"
-    }
+    "schema_version": "0.2"
   },
   "dataPart": {
-    "@type": "ap2.requests.ProductSearch",
-    "id": "search_123",
-    "payload": {
-      "query": "むぎぼー",
-      "category": "goods",
-      "max_results": 10
-    }
+    "@type": "ap2/IntentMandate",
+    "payload": {...}
+  },
+  "signature": {
+    "type": "Ed25519Signature2020",
+    "created": "2025-10-23T12:34:56Z",
+    "verificationMethod": "did:ap2:agent:shopping_agent#key-1",
+    "proofPurpose": "authentication",
+    "signatureValue": "..."
   }
 }
 ```
 
-**実装**: `agent.py` の `_search_products_via_merchant_agent()` メソッド
+### Mandate Chain
 
-### 4. Cart Mandate署名
+The Shopping Agent manages the complete mandate chain:
 
-**フロー**:
-1. Cart候補を受信（Merchant Agentから）
-2. ユーザーにCart選択UIを表示
-3. Merchant署名を検証
-4. Consent Challenge生成: `POST /consent/challenge`
-5. Passkey署名（フロントエンド）
-6. 署名付きConsent提出: `POST /consent/submit`
+1. **IntentMandate** - User's purchase intent (unsigned → signed with SD-JWT+KB)
+2. **CartMandate** - Selected cart from Merchant (received → signed with SD-JWT+KB)
+3. **PaymentMandate** - Payment details (created → signed with SD-JWT+KB → submitted)
 
-**Consent構造**:
+### Risk Assessment
 
-```json
-{
-  "consent_id": "consent_abc123",
-  "cart_mandate_id": "cart_xyz789",
-  "intent_message_id": "msg_intent_456",
-  "user_id": "user_demo_001",
-  "approved": true,
-  "timestamp": "2025-10-23T12:40:00Z",
-  "passkey_signature": {
-    "challenge_id": "ch_consent_123",
-    "clientDataJSON": "...",
-    "authenticatorData": "...",
-    "signature": "..."
-  },
-  "signed_data_hash": "sha256ハッシュ"
-}
-```
+Built-in risk assessment engine evaluates:
+- Transaction amount vs. constraints
+- Payment method risk factors
+- User transaction history
+- Fraud indicators
 
-**実装**:
-- Consent Challenge: `agent.py:291-347`
-- Consent提出: `agent.py:349-441`
+**Risk Score**: 0-100 (>80 = high risk, auto-decline)
 
-### 5. Payment Mandate作成とリスク評価
+**Implementation**: `common/risk_assessment.py`
 
-**Payment Mandate構造**:
+## Development
 
-```json
-{
-  "id": "payment_abc123",
-  "type": "PaymentMandate",
-  "cart_mandate": { /* 署名済みCart */ },
-  "intent_mandate": { /* 署名済みIntent */ },
-  "credential_provider_id": "cp_demo_001",
-  "payment_method_id": "pm_visa_1234",
-  "risk_assessment": {
-    "risk_score": 25,
-    "risk_level": "LOW",
-    "fraud_indicators": [],
-    "recommendation": "APPROVE"
-  },
-  "shopping_agent_signature": {
-    "algorithm": "Ed25519",
-    "value": "...",
-    "public_key": "...",
-    "signed_at": "2025-10-23T12:45:00Z",
-    "key_id": "shopping_agent"
-  }
-}
-```
-
-**リスク評価エンジン** (`v2/common/risk_assessment.py`):
-
-| 評価要素 | 重み | 内容 |
-|---------|------|------|
-| 金額リスク | 20% | 高額取引（>¥50,000）を検出 |
-| Intent制約違反 | 30% | max_amount超過、merchant制限違反 |
-| CNP取引 | 15% | Card Not Present取引 |
-| 支払い方法 | 10% | カード vs Passkey |
-| パターン異常 | 10% | 異常な取引パターン |
-| 配送先リスク | 5% | 配送先住所の妥当性 |
-| 時間帯リスク | 5% | 深夜取引等 |
-| エージェント関与 | 5% | 人間 vs AI主導 |
-
-**実装**:
-- Payment Mandate作成: `agent.py` の `_create_payment_mandate()` メソッド
-- リスク評価: `risk_assessment.py` の `assess_payment_mandate()` メソッド
-
----
-
-## エンドポイント一覧
-
-**合計**: 17エンドポイント
-
-### 認証・ユーザー管理
-
-| エンドポイント | メソッド | 説明 | 実装 |
-|--------------|---------|------|------|
-| `/auth/register` | POST | ユーザー登録 | `agent.py:294` |
-| `/auth/login` | POST | ログイン | `agent.py:368` |
-| `/auth/passkey/register/challenge` | POST | Passkey登録Challenge生成 | `agent.py:442` |
-| `/auth/passkey/register` | POST | Passkey登録 | `agent.py:488` |
-| `/auth/passkey/login/challenge` | POST | PasskeyログインChallenge生成 | `agent.py:550` |
-| `/auth/passkey/login` | POST | Passkeyログイン | `agent.py:602` |
-| `/auth/me` | GET | ユーザー情報取得 | `agent.py:665` |
-
-### チャット・会話フロー
-
-| エンドポイント | メソッド | 説明 | 実装 |
-|--------------|---------|------|------|
-| `/chat/stream` | POST | **SSEストリーミングチャット（LangGraph StateGraph統合）** | `agent.py:961` |
-
-### Intent Mandate管理
-
-| エンドポイント | メソッド | 説明 | 実装 |
-|--------------|---------|------|------|
-| `/intent/challenge` | POST | Intent署名用Challenge生成 | `agent.py:689` |
-| `/intent/submit` | POST | 署名付きIntent提出 | `agent.py:733` |
-
-### Cart Consent管理
-
-| エンドポイント | メソッド | 説明 | 実装 |
-|--------------|---------|------|------|
-| `/consent/challenge` | POST | Consent署名用Challenge生成 | `agent.py:809` |
-| `/consent/submit` | POST | 署名付きConsent提出 | `agent.py:867` |
-| `/cart/submit-signature` | POST | CartMandate署名送信 | `agent.py:1137` |
-
-### Payment処理
-
-| エンドポイント | メソッド | 説明 | 実装 |
-|--------------|---------|------|------|
-| `/payment/step-up-callback` | POST | Step-up認証コールバック | `agent.py:1049` |
-| `/payment/submit-attestation` | POST | PaymentMandate署名送信（WebAuthn） | `agent.py:1310` |
-
-### その他
-
-| エンドポイント | メソッド | 説明 | 実装 |
-|--------------|---------|------|------|
-| `/products` | GET | 商品一覧取得 | `agent.py:1015` |
-| `/transactions/{transaction_id}` | GET | トランザクション詳細取得 | `agent.py:1038` |
-
-### 継承元（BaseAgent）
-
-| エンドポイント | メソッド | 説明 | 実装 |
-|--------------|---------|------|------|
-| `/` | GET | ヘルスチェック | `base_agent.py:175` |
-| `/health` | GET | Docker向けヘルスチェック | `base_agent.py:263` |
-| `/a2a/message` | POST | A2Aメッセージ受信 | `base_agent.py:185` |
-| `/.well-known/agent-card.json` | GET | AgentCard取得 | `base_agent.py:268` |
-
----
-
-## 実装詳細
-
-### クラス構造
-
-```python
-# agent.py:57-144
-class ShoppingAgent(BaseAgent):
-    """
-    Shopping Agent実装
-
-    継承元: BaseAgent (v2/common/base_agent.py)
-    """
-
-    def __init__(self):
-        super().__init__(
-            agent_id="did:ap2:agent:shopping_agent",
-            agent_name="Shopping Agent",
-            passphrase=AgentPassphraseManager.get_passphrase("shopping_agent"),
-            keys_directory="./keys"
-        )
-
-        # データベースマネージャー
-        self.db_manager = DatabaseManager(database_url=os.getenv("DATABASE_URL"))
-
-        # HTTPクライアント（A2A通信用）
-        self.http_client = httpx.AsyncClient(timeout=30.0)
-
-        # 他エージェントのURL
-        self.merchant_agent_url = "http://merchant_agent:8001"
-        self.payment_processor_url = "http://payment_processor:8004"
-
-        # Credential Provider一覧
-        self.credential_providers = [...]
-
-        # セッション管理（インメモリ）
-        self.sessions: Dict[str, Dict[str, Any]] = {}
-
-        # リスク評価エンジン
-        self.risk_engine = RiskAssessmentEngine(db_manager=self.db_manager)
-
-        # WebAuthn Challenge管理
-        self.webauthn_challenge_manager = WebAuthnChallengeManager(
-            challenge_ttl_seconds=60
-        )
-
-        # LangGraphエージェント（AI機能）
-        self.langgraph_agent = get_langgraph_agent()
-        self.conversation_agent = get_conversation_agent()
-```
-
-### A2Aメッセージハンドラー登録
-
-```python
-# agent.py:153-164
-def register_a2a_handlers(self):
-    """
-    Shopping Agentが受信するA2Aメッセージ
-    """
-    self.a2a_handler.register_handler(
-        "ap2.mandates.CartMandate",
-        self.handle_cart_mandate
-    )
-    self.a2a_handler.register_handler(
-        "ap2.responses.ProductList",
-        self.handle_product_list
-    )
-    self.a2a_handler.register_handler(
-        "ap2.responses.SignatureResponse",
-        self.handle_signature_response
-    )
-```
-
-### セッション管理
-
-```python
-# セッション構造
-session = {
-    "session_id": "session_abc123",
-    "user_id": "user_demo_001",
-    "step": "initial",  # 会話ステート
-    "messages": [
-        {"role": "user", "content": "むぎぼーのグッズが欲しい"},
-        {"role": "assistant", "content": "最大金額を教えてください"}
-    ],
-    "intent_mandate": None,  # Intent Mandate（署名済み）
-    "cart_mandate": None,    # 選択されたCart Mandate
-    "payment_mandate": None  # Payment Mandate
-}
-```
-
-### データベーステーブル
-
-**mandates テーブル**:
-
-| カラム | 型 | 説明 |
-|--------|---|------|
-| id | TEXT | Mandate ID (PK) |
-| type | TEXT | "Intent" / "Cart" / "Payment" / "Consent" |
-| status | TEXT | "draft" / "signed" / "submitted" / "completed" |
-| payload | JSON | Mandate本体（JSON） |
-| issuer | TEXT | 発行者（user_id or agent DID） |
-| issued_at | TIMESTAMP | 発行日時 |
-| updated_at | TIMESTAMP | 更新日時 |
-
-**transactions テーブル**:
-
-| カラム | 型 | 説明 |
-|--------|---|------|
-| id | TEXT | Transaction ID (PK) |
-| intent_id | TEXT | Intent Mandate ID (FK) |
-| cart_id | TEXT | Cart Mandate ID (FK) |
-| payment_id | TEXT | Payment Mandate ID (FK) |
-| status | TEXT | "pending" / "completed" / "failed" |
-| events | JSON | イベントログ（JSON配列） |
-| created_at | TIMESTAMP | 作成日時 |
-| updated_at | TIMESTAMP | 更新日時 |
-
----
-
-## データフロー
-
-### 完全な購買フロー
-
-```mermaid
-sequenceDiagram
-    participant User
-    participant UI as Frontend
-    participant SA as Shopping Agent
-    participant MA as Merchant Agent
-    participant M as Merchant
-    participant CP as Credential Provider
-    participant PP as Payment Processor
-
-    Note over User,PP: Phase 1: Intent確立
-    User->>UI: "むぎぼーグッズ購入"
-    UI->>SA: POST /chat/stream
-    SA-->>UI: SSE: agent_text
-    SA-->>UI: SSE: signature_request (Intent)
-    UI->>SA: POST /intent/submit (Passkey署名)
-    SA->>SA: Intent MandateをDB保存
-
-    Note over User,PP: Phase 2: 商品検索
-    SA->>MA: A2A: ProductSearchRequest
-    MA->>MA: DB検索
-    MA-->>SA: A2A: ProductList
-    SA-->>UI: SSE: product_list
-
-    Note over User,PP: Phase 3: Cart作成
-    User->>UI: 商品選択
-    UI->>SA: POST /chat/stream (選択)
-    SA->>MA: A2A: CartRequest
-    MA->>M: A2A: SignCartRequest
-    M->>M: 在庫確認 + ECDSA署名
-    M-->>MA: A2A: SignedCart
-    MA-->>SA: A2A: CartCandidates
-    SA-->>UI: SSE: cart_options
-
-    Note over User,PP: Phase 4: Cart署名
-    User->>UI: Cart選択
-    UI->>SA: POST /consent/submit (Passkey署名)
-    SA->>CP: A2A: VerifyAttestationRequest
-    CP->>CP: WebAuthn検証
-    CP-->>SA: A2A: {verified: true}
-
-    Note over User,PP: Phase 5: 決済
-    SA->>SA: Payment Mandate作成 + リスク評価
-    SA->>CP: A2A: GetPaymentMethodsRequest
-    CP-->>SA: A2A: PaymentMethods
-    SA-->>UI: SSE: payment_method_selection
-    User->>UI: 支払い方法選択
-    SA->>MA: A2A: ProcessPaymentRequest
-    MA->>PP: A2A: PaymentMandate転送
-    PP->>PP: 3層署名検証 + Capture
-    PP-->>MA: A2A: PaymentResult
-    MA-->>SA: A2A: PaymentResult転送
-    SA-->>UI: SSE: payment_complete
-```
-
----
-
-## セキュリティ
-
-### 1. 署名管理
-
-**Intent Mandate署名**:
-- **署名者**: ユーザー（Passkey）
-- **署名対象**: `{intent, constraints}` フィールド
-- **アルゴリズム**: WebAuthn（ECDSA P-256）
-- **検証**: Credential Provider
-
-**Shopping Agent署名（A2A通信）**:
-- **署名者**: Shopping Agent
-- **署名対象**: A2Aメッセージ全体（header.proofを除く）
-- **アルゴリズム**: Ed25519（デフォルト）、ECDSA（後方互換）
-- **検証**: 受信側エージェント
-
-### 2. WebAuthn Challenge管理
-
-```python
-# v2/common/crypto.py:987-1107
-class WebAuthnChallengeManager:
-    """
-    WebAuthn Challenge管理
-
-    - challengeはサーバ側で生成し、一度のみ使用可能
-    - 使用後は無効化される
-    - 有効期限あり（デフォルト60秒）
-    """
-
-    def generate_challenge(self, user_id: str, context: str) -> Dict[str, str]:
-        """
-        新しいchallengeを生成
-
-        Returns:
-            {
-                "challenge_id": "ch_abc123",
-                "challenge": "base64url_encoded_32_bytes"
-            }
-        """
-        challenge_bytes = os.urandom(32)
-        challenge = base64.urlsafe_b64encode(challenge_bytes).decode('utf-8')
-        challenge_id = f"ch_{uuid.uuid4().hex[:16]}"
-
-        self._challenges[challenge_id] = {
-            "challenge": challenge,
-            "issued_at": datetime.now(timezone.utc),
-            "used": False,
-            "user_id": user_id,
-            "context": context
-        }
-
-        return {"challenge_id": challenge_id, "challenge": challenge}
-
-    def verify_and_consume_challenge(
-        self,
-        challenge_id: str,
-        challenge: str,
-        user_id: str
-    ) -> bool:
-        """
-        challengeを検証して消費（一度のみ使用可能）
-
-        検証項目:
-        - challenge_idの存在
-        - 有効期限（60秒以内）
-        - 使用済みフラグ
-        - challenge値の一致
-        - user_idの一致
-        """
-        # ...実装は crypto.py:1042-1092 参照
-```
-
-### 3. Nonce管理（リプレイ攻撃対策）
-
-```python
-# v2/common/nonce_manager.py
-class NonceManager:
-    """
-    Nonce管理（A2Aメッセージのリプレイ攻撃対策）
-
-    - 各A2Aメッセージは一意のnonceを持つ
-    - 使用済みnonceは記録され、再利用を防止
-    - TTL（Time To Live）によって古いnonceは自動削除
-    """
-
-    async def is_valid_nonce(self, nonce: str) -> bool:
-        """
-        Nonceの妥当性を検証
-
-        Returns:
-            True: 有効なnonce（初回使用）
-            False: 無効なnonce（再利用または不正）
-        """
-        async with self._lock:
-            if nonce in self._used_nonces:
-                # 再利用検出
-                return False
-
-            # 使用済みとして記録
-            self._used_nonces[nonce] = datetime.now(timezone.utc)
-            return True
-```
-
-### 4. リスク評価
-
-**リスクスコア計算例**:
-
-```python
-# Payment Mandate
-payment = {
-    "cart_mandate": {
-        "contents": {
-            "total": {"value": "30000", "currency": "JPY"}
-        }
-    },
-    "intent_mandate": {
-        "constraints": {
-            "max_amount": {"value": "50000", "currency": "JPY"}
-        }
-    },
-    "payment_method": {
-        "type": "card"
-    }
-}
-
-# リスク評価
-risk_result = risk_engine.assess_payment_mandate(payment)
-# {
-#   "risk_score": 25,
-#   "risk_level": "LOW",
-#   "fraud_indicators": [],
-#   "recommendation": "APPROVE",
-#   "risk_factors": {
-#       "amount_risk": 0,
-#       "constraint_violation": 0,
-#       "cnp_transaction": 20,
-#       "payment_method_risk": 10,
-#       ...
-#   }
-# }
-```
-
----
-
-## 開発者向け情報
-
-### utils/ ヘルパーパターン
-
-Shopping Agentは複雑なビジネスロジックを`utils/`ヘルパークラスに分離しています。
-
-| ヘルパークラス | ファイル | 責務 | 主要メソッド |
-|------------|------|------|------------|
-| `HashHelpers` | `utils/hash_helpers.py` (32行) | Mandateハッシュ計算 | `compute_mandate_hash()` |
-| `PaymentHelpers` | `utils/payment_helpers.py` (127行) | Payment処理ロジック | `create_payment_mandate()`, `verify_payment_result()` |
-| `CartHelpers` | `utils/cart_helpers.py` (89行) | Cart管理 | `select_cart()`, `verify_merchant_signature()` |
-| `A2AHelpers` | `utils/a2a_helpers.py` (78行) | A2A通信ヘルパー | `send_a2a_message()`, `create_request_payload()` |
-
-**実装例**:
-
-```python
-# agent.py でヘルパークラスをインポート
-from services.shopping_agent.utils import HashHelpers, PaymentHelpers, CartHelpers, A2AHelpers
-
-# agent.py の __init__ でインスタンス化
-self.hash_helpers = HashHelpers()
-self.payment_helpers = PaymentHelpers(key_manager=self.key_manager)
-self.cart_helpers = CartHelpers(key_manager=self.key_manager)
-self.a2a_helpers = A2AHelpers(http_client=self.http_client)
-
-# メソッド内でヘルパーを使用
-async def create_payment_mandate(self, cart_mandate, payment_method):
-    # ビジネスロジックをヘルパーに委譲
-    payment_mandate = self.payment_helpers.create_payment_mandate(
-        cart_mandate=cart_mandate,
-        payment_method=payment_method,
-        risk_assessment=risk_result
-    )
-    return payment_mandate
-```
-
-**ヘルパーパターンの利点**:
-- **再利用性**: 同じロジックを複数エンドポイントで共有
-- **テスタビリティ**: ヘルパークラスを独立してテスト可能
-- **保守性**: ビジネスロジックの変更がヘルパークラスに集約
-- **可読性**: メインクラスがHTTPルーティングに集中
-
----
-
-### ローカル開発
+### Run Locally
 
 ```bash
-# 仮想環境のアクティベート
-source v2/.venv/bin/activate
+# Set environment variables
+export OPENAI_API_KEY=sk-proj-your-key
+export DATABASE_URL=sqlite+aiosqlite:////app/data/shopping_agent.db
 
-# 依存関係インストール
-cd v2
-uv sync
+# Install dependencies
+pip install -e .
 
-# 環境変数設定
-export AP2_SHOPPING_AGENT_PASSPHRASE="your_passphrase"
-export DATABASE_URL="sqlite+aiosqlite:///./data/shopping_agent.db"
-export MERCHANT_AGENT_URL="http://localhost:8001"
-
-# サーバー起動
-uvicorn services.shopping_agent.main:app --host 0.0.0.0 --port 8000 --reload
+# Run service
+cd services/shopping_agent
+python main.py
 ```
 
-### Docker開発
+### Run with Docker
 
 ```bash
-# Shopping Agent単体でビルド＆起動
-cd v2
-docker compose up --build shopping_agent
+# Build and run
+docker compose up shopping_agent
 
-# ログ確認
+# View logs
 docker compose logs -f shopping_agent
-
-# デバッグモード
-LOG_LEVEL=DEBUG docker compose up shopping_agent
 ```
 
-### テスト
+## Testing
 
 ```bash
-# ヘルスチェック
-curl http://localhost:8000/
+# Health check
+curl http://localhost:8000/health
 
-# Intent Challenge生成
-curl -X POST http://localhost:8000/intent/challenge \
+# Test SSE streaming
+curl -N -H "Content-Type: application/json" \
+  -d '{"user_input": "I want cute merchandise"}' \
+  http://localhost:8000/chat/stream
+
+# Register user
+curl -X POST http://localhost:8000/auth/register \
   -H "Content-Type: application/json" \
-  -d '{
-    "user_id": "user_demo_001",
-    "intent_data": {
-      "intent": "むぎぼーグッズ購入",
-      "constraints": {"max_amount": {"value": "50000", "currency": "JPY"}}
-    }
-  }'
+  -d '{"email": "test@example.com", "password": "SecurePass123!", "full_name": "Test User"}'
 
-# SSEチャット（ブラウザから）
-# http://localhost:8000/chat/stream に POST
+# Login
+curl -X POST http://localhost:8000/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email": "test@example.com", "password": "SecurePass123!"}'
 ```
 
-### 環境変数
+## AP2 Compliance
 
-| 変数名 | 説明 | デフォルト |
-|--------|------|-----------|
-| `AP2_SHOPPING_AGENT_PASSPHRASE` | 秘密鍵のパスフレーズ | *必須* |
-| `DATABASE_URL` | データベースURL | `sqlite+aiosqlite:///...` |
-| `MERCHANT_AGENT_URL` | Merchant AgentのURL | `http://merchant_agent:8001` |
-| `MERCHANT_URL` | MerchantのURL | `http://merchant:8002` |
-| `PAYMENT_PROCESSOR_URL` | Payment ProcessorのURL | `http://payment_processor:8004` |
-| `LOG_LEVEL` | ログレベル | `INFO` |
-| `LOG_FORMAT` | ログ形式 | `text` |
+- ✅ **IntentMandate Creation** - Natural language → structured mandate
+- ✅ **User Authorization** - SD-JWT+KB format (tilde-separated, alg="none")
+- ✅ **A2A Protocol** - Ed25519 signed messages
+- ✅ **Mandate Chain Validation** - Intent → Cart → Payment
+- ✅ **Layer 1 Authentication** - JWT Bearer tokens (Argon2id)
+- ✅ **Risk Assessment** - Transaction evaluation (0-100 score)
 
-### 主要ファイル
+## References
 
-| ファイル | 行数 | 説明 |
-|---------|------|------|
-| `agent.py` | ~1500 | ShoppingAgentクラス実装 |
-| `main.py` | ~30 | FastAPIエントリーポイント |
-| `langgraph_agent.py` | ~300 | LangGraph統合（AI機能） |
-| `langgraph_conversation.py` | ~400 | 対話エージェント（AI） |
-| `mcp_tools.py` | ~200 | MCP（Model Context Protocol）ツール |
-| `Dockerfile` | ~40 | Dockerイメージ定義 |
+- [Main README](../../README.md)
+- [AP2 Specification](https://ap2-protocol.org/specification/)
+- [LangGraph Documentation](https://langchain-ai.github.io/langgraph/)
+- [WebAuthn Specification](https://www.w3.org/TR/webauthn/)
 
 ---
 
-## 関連ドキュメント
-
-- [メインREADME](../../../README.md) - プロジェクト全体の概要
-- [AP2仕様書](https://ap2-protocol.org/specification/)
-- [A2A拡張仕様](../../refs/AP2-main/docs/a2a-extension.md)
-- [Common Modules](../../common/) - 共通モジュールのドキュメント
-- [Merchant Agent README](../merchant_agent/README.md)
-- [Payment Processor README](../payment_processor/README.md)
-
----
-
-**作成日**: 2025-10-23
-**バージョン**: v2.0.0
-**メンテナー**: AP2 Development Team
+**Port**: 8000
+**Role**: User's AI Agent
+**Protocol**: AP2 v0.2
+**Status**: Production-Ready

@@ -1,664 +1,785 @@
 # Merchant
 
-**AP2 Protocol - 実店舗エンティティ**
+**Merchant Service** - Real store entity responsible for CartMandate signing, product/inventory management, and order approval (AP2-compliant).
 
-Merchantは、実際の商店（むぎぼーショップ）を表すエンティティです。Cart Mandateに署名し、在庫管理、注文承認を行います。**Merchant AgentとMerchantは別エンティティ**であり、Merchantのみが署名権限を持ちます。
+## Overview
 
-## 📋 目次
+The Merchant service represents the actual store entity (むぎぼーショップ) in the AP2 protocol. It is responsible for signing CartMandates, managing inventory, and approving orders. **Merchant and Merchant Agent are separate entities**, and only Merchant has signing authority.
 
-- [概要](#概要)
-- [役割と責務](#役割と責務)
-- [主要機能](#主要機能)
-- [エンドポイント一覧](#エンドポイント一覧)
-- [実装詳細](#実装詳細)
-- [セキュリティ](#セキュリティ)
-- [署名モード](#署名モード)
-- [開発者向け情報](#開発者向け情報)
+**Port**: 8002
+**Role**: Merchant (store entity, NOT agent)
+**Protocol**: AP2 v0.2
+**DID**: `did:ap2:merchant` (NOT `did:ap2:agent:...`)
 
----
+## Key Features
 
-## 概要
+- **CartMandate Signing** - ECDSA signature with merchant_authorization JWT
+- **Inventory Management** - Product and stock management
+- **Order Approval** - Auto-sign or manual approval modes
+- **Merchant Authorization JWT** - AP2-compliant JWT generation
+- **Signature Key Management** - Merchant-only private key custody
+- **A2A Protocol** - Ed25519-signed messaging
+- **W3C DID Document** - DID resolution endpoint
 
-### AP2での役割
+## Sequence Diagram
 
-- **AP2 Role**: `merchant`
-- **DID**: `did:ap2:merchant` (注意: `did:ap2:agent:...` ではない)
-- **Port**: `8002`
-- **Database**: `v2/data/merchant.db`
-- **店舗名**: むぎぼーショップ
-
-### 主要な責務
-
-1. **Cart Mandate署名**: ECDSA署名による承認
-2. **在庫確認**: Cart作成前の在庫チェック
-3. **注文承認**: 自動署名 or 手動承認
-4. **Merchant Authorization JWT発行**: AP2仕様準拠のJWT
-5. **署名鍵管理**: Merchantのみが秘密鍵を保持
-
----
-
-## 役割と責務
-
-### 1. エンティティ分離の重要性
-
-**AP2仕様の要件**: MerchantとMerchant Agentは**別エンティティ**である必要があります。
+This diagram shows the Merchant service's internal processing for CartMandate signing.
 
 ```mermaid
-graph LR
-    MA[Merchant Agent<br/>仲介<br/>署名権限なし] -->|A2A通信<br/>署名依頼| M[Merchant<br/>署名<br/>店舗側<br/>署名権限あり]
+sequenceDiagram
+    autonumber
+    participant MA as Merchant Agent<br/>(Port 8001)
+    participant M as Merchant<br/>(Port 8002)
+    participant DB as Database<br/>(Products)
 
-    style MA fill:#fff4e1,stroke:#333,stroke-width:2px
-    style M fill:#ffe1e1,stroke:#333,stroke-width:2px
+    %% CartMandate Signing Flow
+    rect rgb(240, 248, 255)
+        Note over MA,DB: CartMandate Signing (Internal Processing)
+        MA->>M: POST /sign/cart<br/>{cart_mandate: {...}}
+        M->>M: Validate CartMandate (merchant_id, required fields, prices)
+        loop For each cart item
+            M->>DB: Get product details
+            DB-->>M: Product data (price, inventory)
+            M->>M: Verify price matches database
+            M->>M: Check inventory >= quantity
+        end
+
+        alt Auto-sign mode
+            M->>M: Generate merchant_authorization JWT (ES256)
+            M->>M: Add JWT to cart_mandate
+            M->>DB: Save signed CartMandate (status: signed)
+            M-->>MA: {signed_cart_mandate: {...}, merchant_authorization: "jwt..."}
+        else Manual approval mode
+            M->>DB: Save CartMandate (status: pending_merchant_signature)
+            M-->>MA: {status: "pending_merchant_signature", cart_mandate_id: "..."}
+        end
+    end
+
+    %% Manual Approval Flow
+    rect rgb(255, 250, 240)
+        Note over M,DB: Manual Approval (if manual mode)
+        Note over M: Merchant reviews CartMandate in Dashboard<br/>(external processing)
+        M->>M: POST /cart-mandates/{id}/approve
+        M->>DB: Get pending CartMandate
+        DB-->>M: CartMandate data
+        M->>M: Generate merchant_authorization JWT (ES256)
+        M->>M: Add JWT to cart_mandate
+        M->>DB: Update status to signed
+        M-->>M: {status: "approved", signed_cart_mandate: {...}}
+    end
 ```
 
-**理由**:
-- **セキュリティ**: 署名鍵をAgentから分離
-- **責任分離**: 自動処理（Agent）と承認（Merchant）を明確化
-- **監査**: Merchantによる明示的な承認プロセスが記録される
-- **AP2準拠**: 仕様で要求される6エンティティアーキテクチャ
+## API Endpoints
 
-### 2. Cart Mandate署名の責務
+### CartMandate Signing
 
-Merchantは、以下の検証を行った後にCart Mandateに署名します：
+**`POST /sign/cart`** - Sign CartMandate
 
-1. **merchant_id検証**: 自店舗のCartか確認
-2. **在庫確認**: 全商品の在庫が十分か確認
-3. **価格検証**: 商品価格がデータベースと一致するか確認
-4. **ECDSA署名**: Cart Mandateに署名
-5. **Merchant Authorization JWT発行**: AP2仕様準拠のJWT生成
-
----
-
-## 主要機能
-
-### 1. Cart Mandate署名
-
-**エンドポイント**: `POST /sign/cart`
-
-**リクエスト**:
-
+**Request**:
 ```json
 {
   "cart_mandate": {
-    "type": "CartMandate",
     "contents": {
       "id": "cart_abc123",
+      "user_cart_confirmation_required": true,
+      "payment_request": {
+        "method_data": [...],
+        "details": {
+          "display_items": [...],
+          "total": {"label": "合計", "amount": {"value": 8800.0, "currency": "JPY"}}
+        },
+        "options": {...},
+        "shipping_address": {...}
+      },
+      "cart_expiry": "2025-10-23T13:34:56Z",
+      "merchant_name": "むぎぼーショップ"
+    },
+    "merchant_authorization": null,
+    "_metadata": {
       "merchant_id": "did:ap2:merchant:mugibo_merchant",
-      "items": [
-        {
-          "product_id": "prod_mugibo_calendar_001",
-          "sku": "MUGIBO-CAL-2025",
-          "name": "むぎぼーカレンダー2025",
-          "quantity": 1,
-          "unit_price": {"value": "1980", "currency": "JPY"},
-          "total_price": {"value": "1980", "currency": "JPY"}
-        }
-      ],
-      "subtotal": {"value": "1980", "currency": "JPY"},
-      "shipping_cost": {"value": "500", "currency": "JPY"},
-      "tax": {"value": "198", "currency": "JPY"},
-      "total": {"value": "2678", "currency": "JPY"},
-      "shipping_address": { /* ... */ }
+      "raw_items": [...]
     }
   }
 }
 ```
 
-**レスポンス（自動署名モード）**:
-
+**Response (Auto-sign mode)**:
 ```json
 {
   "signed_cart_mandate": {
-    "type": "CartMandate",
-    "contents": { /* ... */ },
-    "merchant_signature": {
-      "algorithm": "ECDSA",
-      "value": "MEUCIQDx8yZ...",
-      "public_key": "LS0tLS1CRU...",
-      "signed_at": "2025-10-23T12:35:00Z",
-      "key_id": "merchant"
-    },
-    "merchant_authorization": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9..."
+    "contents": {...},
+    "merchant_authorization": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9...",
+    "_metadata": {...}
   },
-  "merchant_signature": { /* 上記と同じ */ },
   "merchant_authorization": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9..."
 }
 ```
 
-**実装**: `service.py:106-196`
+**Response (Manual approval mode)**:
+```json
+{
+  "status": "pending_merchant_signature",
+  "cart_mandate_id": "cart_abc123",
+  "message": "Manual approval required by merchant"
+}
+```
 
-### 2. 署名プロセス詳細
+**Implementation**: `service.py:182`
+
+**Signing Process**:
+1. **Validation** - Verify merchant_id, required fields, price calculations
+2. **Inventory Check** - Verify all items have sufficient stock
+3. **JWT Generation** - Create merchant_authorization JWT (ES256)
+4. **Database Storage** - Save signed CartMandate
+
+**`POST /poll/cart`** - Poll CartMandate approval status
+
+**Request**:
+```json
+{
+  "cart_mandate_id": "cart_abc123"
+}
+```
+
+**Response (Pending)**:
+```json
+{
+  "status": "pending_merchant_signature",
+  "cart_mandate_id": "cart_abc123"
+}
+```
+
+**Response (Signed)**:
+```json
+{
+  "status": "signed",
+  "signed_cart_mandate": {...}
+}
+```
+
+**Response (Rejected)**:
+```json
+{
+  "status": "rejected",
+  "cart_mandate_id": "cart_abc123",
+  "reason": "Insufficient inventory"
+}
+```
+
+**Implementation**: `service.py:311`
+
+### Manual Approval
+
+**`GET /cart-mandates/pending`** - List pending CartMandates
+
+**Response**:
+```json
+{
+  "pending_cart_mandates": [
+    {
+      "id": "cart_abc123",
+      "payload": {...},
+      "created_at": "2025-10-23T12:34:56Z"
+    }
+  ],
+  "total": 1
+}
+```
+
+**Implementation**: `service.py:481`
+
+**`GET /cart-mandates/{cart_mandate_id}`** - Get CartMandate details
+
+**Response**:
+```json
+{
+  "id": "cart_abc123",
+  "status": "pending_merchant_signature",
+  "payload": {...},
+  "created_at": "2025-10-23T12:34:56Z",
+  "updated_at": "2025-10-23T12:35:00Z"
+}
+```
+
+**Implementation**: `service.py:509`
+
+**`POST /cart-mandates/{cart_mandate_id}/approve`** - Approve and sign CartMandate
+
+**Response**:
+```json
+{
+  "status": "approved",
+  "signed_cart_mandate": {...},
+  "merchant_authorization": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9..."
+}
+```
+
+**Implementation**: `service.py:540`
+
+**`POST /cart-mandates/{cart_mandate_id}/reject`** - Reject CartMandate
+
+**Request**:
+```json
+{
+  "reason": "Insufficient inventory"
+}
+```
+
+**Response**:
+```json
+{
+  "status": "rejected",
+  "cart_mandate_id": "cart_abc123",
+  "reason": "Insufficient inventory"
+}
+```
+
+**Implementation**: `service.py:589`
+
+### Product Management
+
+**`GET /products`** - List all products
+
+**Response**:
+```json
+{
+  "products": [
+    {
+      "id": 1,
+      "sku": "MUGIBO-001",
+      "name": "むぎぼーぬいぐるみ（S）",
+      "price": 250000,
+      "inventory_count": 10
+    }
+  ],
+  "total": 1
+}
+```
+
+**Implementation**: `service.py:381`
+
+**`POST /products`** - Create product
+
+**Request**:
+```json
+{
+  "sku": "MUGIBO-002",
+  "name": "むぎぼーTシャツ",
+  "description": "かわいいTシャツ",
+  "price": 300000,
+  "inventory_count": 20,
+  "product_metadata": {
+    "category": "apparel",
+    "brand": "むぎぼーショップ"
+  }
+}
+```
+
+**Response**:
+```json
+{
+  "id": 2,
+  "sku": "MUGIBO-002",
+  "name": "むぎぼーTシャツ",
+  "price": 300000,
+  "inventory_count": 20
+}
+```
+
+**Implementation**: `service.py:657`
+
+**`PATCH /products/{product_id}`** - Update product
+
+**Request**:
+```json
+{
+  "inventory_count": 15
+}
+```
+
+**Response**:
+```json
+{
+  "id": 1,
+  "sku": "MUGIBO-001",
+  "inventory_count": 15
+}
+```
+
+**Implementation**: `service.py:398`
+
+**`DELETE /products/{product_id}`** - Delete product
+
+**Response**:
+```json
+{
+  "status": "deleted",
+  "product_id": "1"
+}
+```
+
+**Implementation**: `service.py:692`
+
+### Settings
+
+**`GET /settings/signature-mode`** - Get signature mode
+
+**Response**:
+```json
+{
+  "auto_sign_mode": true,
+  "mode": "auto"
+}
+```
+
+**Implementation**: `service.py:451`
+
+**`POST /settings/signature-mode`** - Set signature mode
+
+**Request**:
+```json
+{
+  "auto_sign_mode": false
+}
+```
+
+**Response**:
+```json
+{
+  "auto_sign_mode": false,
+  "mode": "manual",
+  "message": "Signature mode set to manual"
+}
+```
+
+**Implementation**: `service.py:461`
+
+### Transactions
+
+**`GET /transactions`** - List transactions
+
+**Query Parameters**:
+- `status`: Filter by status (captured, failed, refunded)
+- `limit`: Maximum results (default: 100)
+
+**Response**:
+```json
+{
+  "transactions": [
+    {
+      "id": "txn_xxx",
+      "status": "captured",
+      "amount": {"value": 8800.0, "currency": "JPY"},
+      "created_at": "2025-10-23T12:34:56Z"
+    }
+  ],
+  "total": 1
+}
+```
+
+**Implementation**: `service.py:630`
+
+### Common Endpoints (Inherited from BaseAgent)
+
+**`GET /`** - Health check
+- **Response**: `{agent_id, agent_name, status, version}`
+
+**`GET /health`** - Health check (for Docker)
+- **Response**: `{status: "healthy"}`
+
+**`POST /a2a/message`** - Receive A2A messages from other agents
+- **Request**: A2AMessage (Ed25519 signed)
+- **Response**: A2A response
+
+**`GET /.well-known/did.json`** - DID document
+- **Response**: W3C DID Document
+
+## Environment Variables
+
+```bash
+# Service Configuration
+AGENT_ID=did:ap2:merchant
+DATABASE_URL=sqlite+aiosqlite:////app/data/merchant.db
+AP2_KEYS_DIRECTORY=/app/keys
+
+# Merchant Configuration
+MERCHANT_ID=did:ap2:merchant:mugibo_merchant
+MERCHANT_NAME=むぎぼーショップ
+AUTO_SIGN_MODE=true
+
+# OpenTelemetry
+OTEL_ENABLED=true
+OTEL_SERVICE_NAME=merchant
+OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
+
+# Logging
+LOG_LEVEL=INFO
+LOG_FORMAT=text
+```
+
+## Database Schema
+
+### Tables
+
+- **products** - Product catalog
+  - `id` (primary key)
+  - `sku` (unique)
+  - `name`
+  - `description`
+  - `price` (cents)
+  - `inventory_count`
+  - `metadata` (JSON)
+
+- **mandates** - CartMandate storage
+  - `id` (primary key, cart_id)
+  - `type` (Cart)
+  - `status` (pending_merchant_signature/signed/rejected)
+  - `payload` (JSON)
+  - `issuer` (did:ap2:merchant)
+  - `issued_at`
+  - `updated_at`
+
+## Dependencies
+
+### Python Packages
+- **fastapi** 0.115.0 - Web framework
+- **sqlalchemy** 2.0.35 - ORM
+- **cryptography** 43.0.0 - ECDSA signing
+- **httpx** 0.27.0 - Async HTTP client
+
+### Shared Components
+- **common.base_agent** - BaseAgent for A2A protocol
+- **common.database** - DatabaseManager, ProductCRUD, MandateCRUD
+- **common.crypto** - SignatureManager, KeyManager
+- **common.jwt_utils** - MerchantAuthorizationJWT
+- **common.telemetry** - OpenTelemetry instrumentation
+
+## Key Implementation Details
+
+### Merchant Authorization JWT
+
+AP2-compliant JWT generation:
 
 ```python
-# service.py:106-196
-@self.app.post("/sign/cart")
-async def sign_cart_mandate(sign_request: Dict[str, Any]):
-    cart_mandate = sign_request["cart_mandate"]
+# service.py:792-864
+def _generate_merchant_authorization_jwt(
+    self,
+    cart_mandate: Dict[str, Any],
+    merchant_id: str
+) -> str:
+    """Generate AP2-compliant merchant_authorization JWT
 
-    # ===== Step 1: バリデーション =====
-    self._validate_cart_mandate(cart_mandate)
-    # - merchant_idが自店舗か確認
-    # - 必須フィールドの存在確認
-    # - 価格計算の妥当性確認
+    JWT Structure:
+    - Header: {"alg": "ES256", "kid": "did:ap2:merchant:xxx#key-1", "typ": "JWT"}
+    - Payload: {
+        "iss": "did:ap2:merchant:xxx",  // Merchant
+        "sub": "did:ap2:merchant:xxx",  // Same as iss
+        "aud": "did:ap2:agent:payment_processor",  // Payment Processor
+        "iat": <timestamp>,
+        "exp": <timestamp + 3600>,  // 1 hour (AP2-compliant)
+        "jti": <unique_id>,  // Replay attack prevention
+        "cart_hash": "<cart_contents_hash>"
+      }
+    - Signature: ECDSA signature (merchant's private key)
+    """
+    from common.user_authorization import compute_mandate_hash
+    from common.jwt_utils import MerchantAuthorizationJWT
 
-    # ===== Step 2: 在庫確認 =====
-    await self._check_inventory(cart_mandate)
-    # - 各商品の在庫が十分か確認
-    # - 在庫不足の場合はHTTPException(400)
+    # Compute cart hash (excluding signature fields)
+    cart_hash = compute_mandate_hash(cart_mandate)
 
-    # ===== Step 3: 署名 =====
-    cart_id = cart_mandate["contents"]["id"]
+    jwt_generator = MerchantAuthorizationJWT(
+        signature_manager=self.signature_manager,
+        key_manager=self.key_manager
+    )
 
-    if self.auto_sign_mode:
-        # 自動署名モード
-        signature = await self._sign_cart_mandate(cart_mandate)
+    # Generate JWT (ES256)
+    jwt_token = jwt_generator.generate_with_hash(
+        merchant_id=merchant_id,
+        cart_hash=cart_hash,
+        audience="did:ap2:agent:payment_processor",
+        expiration_minutes=60,  // 1 hour
+        algorithm="ECDSA",
+        key_id=merchant_id  // AP2-compliant: DID registered in DID document
+    )
+
+    logger.info(
+        f"[_generate_merchant_authorization_jwt] Generated signed JWT for CartMandate: "
+        f"cart_id={cart_mandate.get('id')}, "
+        f"alg=ES256, merchant_id={merchant_id}"
+    )
+
+    return jwt_token
+```
+
+**JWT Properties**:
+- Algorithm: ES256 (ECDSA with P-256 and SHA-256)
+- Expiry: 1 hour from issuance
+- cart_hash: SHA-256 hash of CartMandate (RFC 8785 normalized)
+- Audience: Payment Processor DID
+
+### CartMandate Validation
+
+Comprehensive validation logic:
+
+```python
+# service.py:773-781 (delegated to validation_helpers)
+def _validate_cart_mandate(self, cart_mandate: Dict[str, Any]):
+    """Validate CartMandate structure
+
+    Validation checks:
+    1. merchant_id matches self.merchant_id (_metadata)
+    2. Required fields exist (contents, payment_request, etc.)
+    3. Price calculations are correct (display_items sum = total)
+    4. cart_expiry is within valid range
+    """
+    self.validation_helpers.validate_cart_mandate(cart_mandate)
+```
+
+**Validation Steps**:
+1. **merchant_id Check** - Verify CartMandate is for this merchant
+2. **Required Fields** - Verify contents.id, payment_request, display_items, total exist
+3. **Price Calculation** - Verify display_items sum matches total
+4. **Expiry Check** - Verify cart_expiry is in the future
+
+### Inventory Check
+
+Stock verification logic:
+
+```python
+# service.py:783-790 (delegated to inventory_helpers)
+async def _check_inventory(self, cart_mandate: Dict[str, Any]):
+    """Check inventory for all cart items
+
+    Raises HTTPException(400) if any item is out of stock
+
+    Retrieves items from _metadata.raw_items:
+    - product_id: Database product ID
+    - quantity: Requested quantity
+
+    For each item:
+    1. Get product from database
+    2. Check inventory_count >= quantity
+    3. Raise error if insufficient stock
+    """
+    await self.inventory_helpers.check_inventory(cart_mandate)
+```
+
+**Inventory Check Flow**:
+1. Extract raw_items from `_metadata.raw_items`
+2. For each item, query ProductCRUD
+3. Verify `inventory_count >= quantity`
+4. Return error if any item is out of stock
+
+### Signature Mode
+
+Two signing modes supported:
+
+**1. Auto-sign Mode (Default)**:
+- Immediately signs CartMandate upon receipt
+- No human intervention required
+- Suitable for demo/development environments
+
+**2. Manual Approval Mode**:
+- Saves CartMandate with `pending_merchant_signature` status
+- Requires merchant to review and approve via Dashboard
+- Suitable for production environments
+
+**Configuration**:
+```python
+# service.py:79
+self.auto_sign_mode = DEFAULT_AUTO_SIGN_MODE  # True by default
+```
+
+**API for Mode Toggle**:
+- `GET /settings/signature-mode` - Get current mode
+- `POST /settings/signature-mode` - Change mode
+
+### A2A Message Handler
+
+CartMandate signing via A2A protocol:
+
+```python
+# service.py:722-767
+async def handle_cart_mandate_sign_request(self, message: A2AMessage) -> Dict[str, Any]:
+    """Handle CartMandate sign request from Merchant Agent
+
+    A2A Message:
+    - type: ap2.mandates.CartMandate
+    - payload: CartMandate (unsigned)
+
+    Response:
+    - type: ap2.mandates.CartMandate
+    - payload: CartMandate (signed with merchant_authorization)
+
+    Error Response:
+    - type: ap2.errors.Error
+    - payload: {error_code, error_message}
+    """
+    logger.info("[Merchant] Received CartMandate sign request")
+    cart_mandate = message.dataPart.payload
+
+    try:
+        # Validation
+        self._validate_cart_mandate(cart_mandate)
+
+        # Inventory check
+        await self._check_inventory(cart_mandate)
+
+        # Generate merchant_authorization JWT
         signed_cart_mandate = cart_mandate.copy()
-        signed_cart_mandate["merchant_signature"] = signature.model_dump()
-
-        # ===== Step 4: Merchant Authorization JWT生成 =====
         merchant_authorization_jwt = self._generate_merchant_authorization_jwt(
             cart_mandate,
             self.merchant_id
         )
         signed_cart_mandate["merchant_authorization"] = merchant_authorization_jwt
 
-        # データベースに保存
-        async with self.db_manager.get_session() as db_session:
-            existing_mandate = await MandateCRUD.get_by_id(db_session, cart_id)
+        cart_id = cart_mandate["contents"]["id"]
 
-            if existing_mandate:
-                await MandateCRUD.update_status(
-                    db_session,
-                    cart_id,
-                    "signed",
-                    signed_cart_mandate
-                )
-            else:
-                await MandateCRUD.create(db_session, {
-                    "id": cart_id,
-                    "type": "Cart",
-                    "status": "signed",
-                    "payload": signed_cart_mandate,
-                    "issuer": self.agent_id
-                })
+        logger.info(
+            f"[A2A] Signed CartMandate: {cart_id} "
+            f"(with merchant_authorization JWT)"
+        )
 
         return {
-            "signed_cart_mandate": signed_cart_mandate,
-            "merchant_signature": signed_cart_mandate["merchant_signature"],
-            "merchant_authorization": merchant_authorization_jwt
-        }
-    else:
-        # 手動署名モード: 承認待ちとして保存
-        # ... (実装は service.py:198-224 参照)
-```
-
-### 3. Merchant Authorization JWT
-
-**AP2仕様準拠**: Cart Mandateには`merchant_authorization`フィールドが必要です。
-
-**JWT構造**:
-
-```json
-{
-  "header": {
-    "alg": "ES256",
-    "typ": "JWT",
-    "kid": "did:ap2:merchant#key-1"
-  },
-  "payload": {
-    "iss": "did:ap2:merchant:mugibo_merchant",
-    "sub": "cart_abc123",
-    "iat": 1729680000,
-    "exp": 1729683600,
-    "cart_hash": "sha256ハッシュ（RFC 8785正規化）",
-    "merchant_name": "むぎぼーショップ",
-    "total_amount": {
-      "value": "2678",
-      "currency": "JPY"
-    }
-  },
-  "signature": "ECDSA署名"
-}
-```
-
-**実装**: `service.py` の `_generate_merchant_authorization_jwt()` メソッド
-
-```python
-# service.py:300-350
-def _generate_merchant_authorization_jwt(
-    self,
-    cart_mandate: Dict[str, Any],
-    merchant_id: str
-) -> str:
-    """
-    Merchant Authorization JWTを生成
-
-    AP2仕様準拠:
-    - JWT形式（ES256アルゴリズム）
-    - cart_hash: RFC 8785正規化されたCartのSHA-256ハッシュ
-    - 有効期限: 1時間
-    """
-    from v2.common.crypto import compute_mandate_hash
-    from v2.common.jwt_utils import MerchantAuthorizationJWT
-
-    # Cart Mandateのハッシュを計算
-    cart_hash = compute_mandate_hash(cart_mandate, hash_format='hex')
-
-    # JWTペイロード
-    jwt_payload = {
-        "iss": merchant_id,
-        "sub": cart_mandate["contents"]["id"],
-        "iat": int(datetime.now(timezone.utc).timestamp()),
-        "exp": int((datetime.now(timezone.utc) + timedelta(hours=1)).timestamp()),
-        "cart_hash": cart_hash,
-        "merchant_name": self.merchant_name,
-        "total_amount": cart_mandate["contents"]["total"]
-    }
-
-    # ECDSA署名でJWT生成
-    jwt_token = MerchantAuthorizationJWT.generate(
-        jwt_payload,
-        self.key_manager,
-        key_id="merchant"
-    )
-
-    return jwt_token
-```
-
-### 4. 在庫管理
-
-**エンドポイント**:
-- `GET /inventory/{sku}`: 特定商品の在庫照会
-- `POST /inventory/{sku}`: 在庫更新
-
-**在庫確認ロジック**:
-
-```python
-# service.py:250-290
-async def _check_inventory(self, cart_mandate: Dict[str, Any]):
-    """
-    Cart Mandateの在庫を確認
-
-    Raises:
-        HTTPException(400): 在庫不足の場合
-    """
-    items = cart_mandate["contents"]["items"]
-
-    async with self.db_manager.get_session() as session:
-        for item in items:
-            product_id = item["product_id"]
-            quantity = item["quantity"]
-
-            # データベースから商品を取得
-            product = await ProductCRUD.get_by_id(session, product_id)
-
-            if not product:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Product not found: {product_id}"
-                )
-
-            if product.inventory_count < quantity:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Insufficient inventory for {product.name}: "
-                           f"requested={quantity}, available={product.inventory_count}"
-                )
-```
-
----
-
-## エンドポイント一覧
-
-### Cart Mandate署名
-
-| エンドポイント | メソッド | 説明 | 実装 |
-|--------------|---------|------|------|
-| `/sign/cart` | POST | Cart Mandateに署名 | `service.py:106` |
-| `/sign/approve/{cart_id}` | POST | 手動承認（手動モード） | `service.py:226` |
-| `/sign/reject/{cart_id}` | POST | 手動拒否（手動モード） | `service.py:250` |
-
-### 在庫管理
-
-| エンドポイント | メソッド | 説明 | 実装 |
-|--------------|---------|------|------|
-| `/inventory/{sku}` | GET | 在庫照会 | `service.py:274` |
-| `/inventory/{sku}` | POST | 在庫更新 | `service.py:290` |
-
-### 設定
-
-| エンドポイント | メソッド | 説明 | 実装 |
-|--------------|---------|------|------|
-| `/settings/auto-sign` | GET | 署名モード取得 | `service.py:320` |
-| `/settings/auto-sign` | POST | 署名モード設定 | `service.py:330` |
-
-### A2A通信
-
-| エンドポイント | メソッド | 説明 | 実装 |
-|--------------|---------|------|------|
-| `/a2a/message` | POST | A2Aメッセージ受信 | `base_agent.py:185` |
-| `/.well-known/agent-card.json` | GET | AgentCard取得 | `base_agent.py:268` |
-
-### ヘルスチェック
-
-| エンドポイント | メソッド | 説明 | 実装 |
-|--------------|---------|------|------|
-| `/` | GET | ヘルスチェック | `base_agent.py:175` |
-| `/health` | GET | Docker向けヘルスチェック | `base_agent.py:263` |
-
----
-
-## 実装詳細
-
-### クラス構造
-
-```python
-# service.py:32-82
-class MerchantService(BaseAgent):
-    """
-    Merchant Service実装
-
-    継承元: BaseAgent (v2/common/base_agent.py)
-    """
-
-    def __init__(self):
-        super().__init__(
-            agent_id="did:ap2:merchant",  # Agentではない！
-            agent_name="Merchant",
-            passphrase=AgentPassphraseManager.get_passphrase("merchant"),
-            keys_directory="./keys"
-        )
-
-        # データベースマネージャー
-        self.db_manager = DatabaseManager(
-            database_url=os.getenv("DATABASE_URL")
-        )
-
-        # このMerchantの情報
-        self.merchant_id = "did:ap2:merchant:mugibo_merchant"
-        self.merchant_name = "むぎぼーショップ"
-
-        # 署名モード設定（メモリ内管理、本番環境ではDBに保存）
-        self.auto_sign_mode = True  # デフォルトは自動署名
-```
-
-### A2Aメッセージハンドラー
-
-```python
-# service.py:92-99
-def register_a2a_handlers(self):
-    """
-    Merchantが受信するA2Aメッセージ
-    """
-    self.a2a_handler.register_handler(
-        "ap2.mandates.CartMandate",
-        self.handle_cart_mandate_sign_request
-    )
-```
-
-### バリデーションロジック
-
-```python
-# service.py の _validate_cart_mandate() メソッド
-def _validate_cart_mandate(self, cart_mandate: Dict[str, Any]):
-    """
-    Cart Mandateの妥当性を検証
-
-    検証項目:
-    1. merchant_idが自店舗か
-    2. 必須フィールドの存在
-    3. 価格計算の妥当性
-    """
-    contents = cart_mandate.get("contents", {})
-
-    # 1. merchant_id検証
-    merchant_id = contents.get("merchant_id")
-    if merchant_id != self.merchant_id:
-        raise HTTPException(
-            status_code=400,
-            detail=f"merchant_id mismatch: expected={self.merchant_id}, got={merchant_id}"
-        )
-
-    # 2. 必須フィールド検証
-    required_fields = ["id", "items", "total", "shipping_address"]
-    for field in required_fields:
-        if field not in contents:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Missing required field: {field}"
-            )
-
-    # 3. 価格計算検証（簡易版）
-    items = contents["items"]
-    calculated_subtotal = sum(
-        int(item["total_price"]["value"])
-        for item in items
-    )
-
-    stated_subtotal = int(contents["subtotal"]["value"])
-
-    if calculated_subtotal != stated_subtotal:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Subtotal mismatch: calculated={calculated_subtotal}, stated={stated_subtotal}"
-        )
-```
-
----
-
-## セキュリティ
-
-### 1. 署名鍵管理
-
-**Merchantのみが署名鍵を保持**:
-
-```
-v2/keys/
-├── merchant_private.pem         # ECDSA秘密鍵（AES-256暗号化）
-├── merchant_public.pem          # ECDSA公開鍵
-├── merchant_ed25519_private.pem # Ed25519秘密鍵（A2A通信用）
-└── merchant_ed25519_public.pem  # Ed25519公開鍵
-```
-
-**鍵の用途**:
-- **ECDSA（P-256）**: Cart Mandate署名、JWT署名
-- **Ed25519**: A2Aメッセージ署名
-
-### 2. ECDSA署名プロセス
-
-```python
-# service.py の _sign_cart_mandate() メソッド
-async def _sign_cart_mandate(self, cart_mandate: Dict[str, Any]) -> Signature:
-    """
-    Cart MandateにECDSA署名
-
-    署名対象:
-    - cart_mandate全体（merchant_signature、merchant_authorizationを除く）
-    - RFC 8785正規化されたJSON
-    """
-    # SignatureManagerを使用（v2/common/crypto.py）
-    signature = self.signature_manager.sign_mandate(
-        cart_mandate,
-        key_id="merchant"  # ECDSA鍵を使用
-    )
-
-    logger.info(
-        f"[Merchant] Signed Cart Mandate: cart_id={cart_mandate['contents']['id']}, "
-        f"algorithm={signature.algorithm}"
-    )
-
-    return signature
-```
-
-### 3. JWT署名
-
-**Merchant Authorization JWTの署名**:
-
-```python
-# v2/common/jwt_utils.py の MerchantAuthorizationJWT クラス
-class MerchantAuthorizationJWT:
-    @staticmethod
-    def generate(
-        payload: Dict[str, Any],
-        key_manager: KeyManager,
-        key_id: str
-    ) -> str:
-        """
-        ES256アルゴリズムでJWT生成
-
-        1. ヘッダー作成（alg=ES256, kid=...）
-        2. ペイロードをJSON正規化
-        3. ECDSA署名
-        4. JWT形式にエンコード
-        """
-        # ECDSA秘密鍵を取得
-        private_key = key_manager.get_private_key(key_id, algorithm="ECDSA")
-
-        # JWTヘッダー
-        header = {
-            "alg": "ES256",
-            "typ": "JWT",
-            "kid": f"did:ap2:merchant#key-1"
+            "type": "ap2.mandates.CartMandate",
+            "id": cart_id,
+            "payload": signed_cart_mandate
         }
 
-        # ペイロードとヘッダーをBase64URL エンコード
-        header_b64 = base64url_encode(json.dumps(header))
-        payload_b64 = base64url_encode(json.dumps(payload))
-
-        # 署名対象データ
-        signing_input = f"{header_b64}.{payload_b64}"
-
-        # ECDSA署名
-        signature_bytes = private_key.sign(
-            signing_input.encode('utf-8'),
-            ec.ECDSA(hashes.SHA256())
-        )
-
-        # Base64URL エンコード
-        signature_b64 = base64url_encode(signature_bytes)
-
-        # JWT形式
-        jwt_token = f"{signing_input}.{signature_b64}"
-
-        return jwt_token
+    except Exception as e:
+        logger.error(f"[handle_cart_mandate_sign_request] Error: {e}", exc_info=True)
+        return {
+            "type": "ap2.errors.Error",
+            "id": str(uuid.uuid4()),
+            "payload": {
+                "error_code": "signature_failed",
+                "error_message": str(e)
+            }
+        }
 ```
 
----
+### Helper Classes
 
-## 署名モード
-
-### 1. 自動署名モード（デフォルト）
-
-**特徴**:
-- Cart Mandate受信後、即座に署名
-- 人間の介入なし
-- デモ環境・開発環境向け
-
-**設定**:
+Merchant uses 4 helper classes for business logic separation:
 
 ```python
-self.auto_sign_mode = True  # デフォルト
+# service.py:82-92
+from services.merchant.utils import (
+    SignatureHelpers,
+    ValidationHelpers,
+    InventoryHelpers,
+    JWTHelpers,
+)
+
+self.signature_helpers = SignatureHelpers()
+self.validation_helpers = ValidationHelpers(merchant_id=self.merchant_id)
+self.inventory_helpers = InventoryHelpers(db_manager=self.db_manager)
+self.jwt_helpers = JWTHelpers(key_manager=self.key_manager)
 ```
 
-### 2. 手動署名モード
+**Helper Responsibilities**:
+- **SignatureHelpers** (`utils/signature_helpers.py`) - ECDSA signature generation
+- **ValidationHelpers** (`utils/validation_helpers.py`) - CartMandate validation
+- **InventoryHelpers** (`utils/inventory_helpers.py`) - Stock verification
+- **JWTHelpers** (`utils/jwt_helpers.py`) - JWT generation and verification
 
-**特徴**:
-- Cart Mandateを承認待ちとして保存
-- Merchant Dashboard（Frontend）で手動承認
-- 本番環境向け
+## Development
 
-**設定**:
+### Run Locally
 
 ```bash
-# 環境変数で設定（将来実装予定）
-export MERCHANT_AUTO_SIGN_MODE=false
+# Set environment variables
+export AGENT_ID=did:ap2:merchant
+export DATABASE_URL=sqlite+aiosqlite:////app/data/merchant.db
+export MERCHANT_ID=did:ap2:merchant:mugibo_merchant
+
+# Install dependencies
+pip install -e .
+
+# Run service
+cd services/merchant
+python main.py
 ```
 
-**手動承認フロー**:
-
-1. Cart Mandate受信
-2. `pending_merchant_signature`ステータスでDB保存
-3. Merchant DashboardでCart内容を確認
-4. 承認: `POST /sign/approve/{cart_id}`
-5. 拒否: `POST /sign/reject/{cart_id}`
-
----
-
-## 開発者向け情報
-
-### ローカル開発
+### Run with Docker
 
 ```bash
-# 仮想環境のアクティベート
-source v2/.venv/bin/activate
+# Build and run
+docker compose up merchant
 
-# 依存関係インストール
-cd v2
-uv sync
-
-# 環境変数設定
-export AP2_MERCHANT_PASSPHRASE="your_passphrase"
-export DATABASE_URL="sqlite+aiosqlite:///./data/merchant.db"
-
-# サーバー起動
-uvicorn services.merchant.main:app --host 0.0.0.0 --port 8002 --reload
-```
-
-### Docker開発
-
-```bash
-# Merchant単体でビルド＆起動
-cd v2
-docker compose up --build merchant
-
-# ログ確認
+# View logs
 docker compose logs -f merchant
 ```
 
-### テスト
+## Testing
 
 ```bash
-# ヘルスチェック
-curl http://localhost:8002/
+# Health check
+curl http://localhost:8002/health
 
-# Cart Mandate署名（A2A通信経由）
-curl -X POST http://localhost:8002/a2a/message \
+# Sign CartMandate (auto-sign mode)
+curl -X POST http://localhost:8002/sign/cart \
   -H "Content-Type: application/json" \
-  -d @sample_cart_mandate.json
+  -d '{
+    "cart_mandate": {
+      "contents": {
+        "id": "cart_test123",
+        "user_cart_confirmation_required": true,
+        "payment_request": {...},
+        "cart_expiry": "2025-10-23T13:34:56Z",
+        "merchant_name": "むぎぼーショップ"
+      },
+      "merchant_authorization": null,
+      "_metadata": {
+        "merchant_id": "did:ap2:merchant:mugibo_merchant",
+        "raw_items": [...]
+      }
+    }
+  }'
 
-# 在庫照会
-curl http://localhost:8002/inventory/MUGIBO-CAL-2025
+# Poll CartMandate status
+curl -X POST http://localhost:8002/poll/cart \
+  -H "Content-Type: application/json" \
+  -d '{
+    "cart_mandate_id": "cart_test123"
+  }'
+
+# List products
+curl http://localhost:8002/products
+
+# Get signature mode
+curl http://localhost:8002/settings/signature-mode
+
+# Change to manual approval mode
+curl -X POST http://localhost:8002/settings/signature-mode \
+  -H "Content-Type: application/json" \
+  -d '{
+    "auto_sign_mode": false
+  }'
 ```
 
-### 環境変数
+## AP2 Compliance
 
-| 変数名 | 説明 | デフォルト |
-|--------|------|-----------|
-| `AP2_MERCHANT_PASSPHRASE` | 秘密鍵のパスフレーズ | *必須* |
-| `DATABASE_URL` | データベースURL | `sqlite+aiosqlite:///...` |
-| `MERCHANT_AUTO_SIGN_MODE` | 自動署名モード | `true` |
-| `LOG_LEVEL` | ログレベル | `INFO` |
+- ✅ **CartMandate Signing** - ECDSA signature with merchant_authorization JWT
+- ✅ **Merchant Authorization JWT** - ES256, cart_hash, 1-hour expiry
+- ✅ **Separate from Merchant Agent** - Clear entity separation
+- ✅ **Inventory Verification** - Pre-signature stock check
+- ✅ **CartMandate Validation** - merchant_id, prices, expiry checks
+- ✅ **Manual Approval Mode** - Optional human-in-the-loop
+- ✅ **A2A Protocol** - Ed25519 signed messages
+- ✅ **W3C DID Document** - DID resolution endpoint (`/.well-known/did.json`)
 
-### 主要ファイル
+## References
 
-| ファイル | 行数 | 説明 |
-|---------|------|------|
-| `service.py` | ~600 | MerchantServiceクラス実装 |
-| `main.py` | ~30 | FastAPIエントリーポイント |
-| `Dockerfile` | ~40 | Dockerイメージ定義 |
-
----
-
-## 関連ドキュメント
-
-- [メインREADME](../../../README.md) - プロジェクト全体の概要
-- [Merchant Agent README](../merchant_agent/README.md) - Merchant Agentとの違い
-- [Shopping Agent README](../shopping_agent/README.md)
+- [Main README](../../README.md)
+- [Merchant Agent README](../merchant_agent/README.md)
 - [Payment Processor README](../payment_processor/README.md)
-- [AP2仕様書](https://ap2-protocol.org/specification/)
+- [AP2 Specification](https://ap2-protocol.org/specification/)
 
 ---
 
-**作成日**: 2025-10-23
-**バージョン**: v2.0.0
-**メンテナー**: AP2 Development Team
+**Port**: 8002
+**Role**: Merchant (store entity)
+**Protocol**: AP2 v0.2
+**Status**: Production-Ready
