@@ -195,7 +195,7 @@ def create_user_authorization_vp(
         exp_time = now + timedelta(minutes=5)  # 5分間有効
 
         issuer_jwt_header = {
-            "alg": "ES256",  # ECDSA with P-256 and SHA-256
+            "alg": "none",  # JWT標準準拠（RFC 7519）: 署名なしを明示
             "typ": "JWT"
         }
 
@@ -218,11 +218,18 @@ def create_user_authorization_vp(
         }
         logger.info("[create_user_authorization_vp] cnf claim with JWK added to Issuer JWT")
 
-        # Issuer JWTをエンコード（署名なし、デバイス鍵で署名するため）
+        # Issuer JWTをエンコード（署名なし、JWT標準準拠）
+        # 形式: header.payload. （空の署名部、RFC 7519 Section 6.1準拠）
+        #
+        # 理由:
+        # - WebAuthn APIは特定のchallengeに対してのみ署名するため、issuer_jwtへの直接署名は不可能
+        # - issuer_jwtはkb_jwtのsd_hashによって間接的に保護される（改竄検出）
+        # - alg="none"でJWT標準に準拠し、署名なしを明示
         issuer_jwt_str = (
             base64url_encode(json.dumps(issuer_jwt_header, separators=(',', ':')).encode()) +
             "." +
-            base64url_encode(json.dumps(issuer_jwt_payload, separators=(',', ':')).encode())
+            base64url_encode(json.dumps(issuer_jwt_payload, separators=(',', ':')).encode()) +
+            "."  # 空の署名部（RFC 7519準拠）
         )
 
         # Step 5: Key-binding JWT を生成（transaction_data + WebAuthn assertion含む）
@@ -405,6 +412,8 @@ def verify_user_authorization_vp(
         if issuer_jwt_str:
             try:
                 # Issuer JWTをデコード（署名検証なし、公開鍵抽出のため）
+                # 注意: issuer_jwtはalg="none"で署名なし（JWT標準準拠）
+                # issuer_jwtの完全性はkb_jwtのsd_hashによって保護される
                 issuer_jwt_parts = issuer_jwt_str.split(".")
                 if len(issuer_jwt_parts) >= 2:
                     issuer_payload_bytes = base64url_decode(issuer_jwt_parts[1])
