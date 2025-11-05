@@ -288,24 +288,26 @@ sequenceDiagram
         SAMCP->>SAMCP: Create PaymentMandate
         SAMCP-->>UI: PaymentMandate preview
 
-        %% Step 23: WebAuthn Signing & Agent Token Request
+        %% Step 23: WebAuthn Verification & Agent Token Issuance (AP2完全準拠)
         UI->>CP: GET /webauthn/options
         CP->>REDIS: Store challenge (TTL: 60s)
         CP-->>UI: challenge
         UI->>User: Final Passkey confirmation
         User->>UI: 👆 Confirm
         UI->>CP: POST /attestations/verify<br/>{payment_mandate, attestation}
-        CP->>REDIS: Verify challenge
-        CP->>CP: Verify WebAuthn signature
+        CP->>REDIS: Verify challenge (replay protection)
+        CP->>CP: Verify WebAuthn signature (ECDSA)
         CP->>CP: Create SD-JWT+KB user_authorization
         CP->>CP: Extract payment_method_token from PaymentMandate
-        CP->>PN: POST /network/tokenize<br/>{payment_mandate, payment_method_token}
-        PN->>PN: Validate PaymentMandate
-        PN->>PN: Generate agent_token (cryptographically secure)
-        PN->>REDIS: Store agent_token (TTL: 1 hour)
+        Note over CP,PN: CP requests Agent Token (AP2 Step 23)
+        CP->>PN: POST /network/tokenize<br/>{payment_mandate, attestation, payment_method_token}
+        PN->>PN: Validate PaymentMandate structure
+        PN->>PN: Validate payment_method_token format
+        PN->>PN: Generate agent_token (32 bytes, cryptographically secure)
+        PN->>REDIS: Store agent_token with metadata (TTL: 1 hour)
         PN-->>CP: {agent_token: "agent_tok_xxx", expires_at: "..."}
-        CP->>REDIS: Save agent_token to token_data
-        CP->>DB: Save attestation
+        CP->>REDIS: Save agent_token to token_data[payment_method_token]
+        CP->>DB: Save attestation record
         CP-->>UI: {verified: true, token: "cred_xxx"}
 
         %% Step 24-25: Execute Payment
