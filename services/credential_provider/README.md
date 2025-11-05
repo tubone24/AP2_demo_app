@@ -1,1256 +1,642 @@
 # Credential Provider
 
-**Credential Provider** は、AP2プロトコルにおいてユーザーの認証情報管理とデバイス証明の検証を担当するサービスです。
+**WebAuthn & Payment Credential Service** - Manages user authentication, payment methods, and agent token lifecycle for AP2 transactions.
 
-## 目次
+## Overview
 
-- [概要](#概要)
-- [AP2における役割](#ap2における役割)
-- [アーキテクチャ](#アーキテクチャ)
-- [主要機能](#主要機能)
-- [エンドポイント](#エンドポイント)
-- [WebAuthn検証フロー](#webauthn検証フロー)
-- [支払い方法管理](#支払い方法管理)
-- [Step-upフロー](#step-upフロー)
-- [トークン管理](#トークン管理)
-- [セキュリティ](#セキュリティ)
-- [データベース構造](#データベース構造)
-- [開発](#開発)
+The Credential Provider is responsible for WebAuthn/Passkey verification, payment method management, and agent token lifecycle orchestration. It acts as the bridge between user credentials, Payment Network tokenization, and Payment Processor verification.
 
----
+**Port**: 8003
+**Role**: Credential Provider
+**Protocol**: AP2 v0.2
 
-## 概要
+## Key Features
 
-Credential Providerは、以下の責任を持つエンティティです：
+- **WebAuthn/Passkey Verification** - FIDO2-compliant authentication
+- **Payment Method Management** - Card tokenization and storage
+- **Agent Token Orchestration** - Payment Network tokenization (AP2 Step 23)
+- **Step-up Authentication** - Additional verification for sensitive operations
+- **Receipt Management** - Receipt storage and retrieval (AP2 Step 29)
+- **Redis Token Store** - TTL-managed token storage (15-minute expiry)
+- **SD-JWT+KB Generation** - Selective Disclosure JWT with Key Binding
 
-- **WebAuthn認証**: デバイス証明（Passkey/WebAuthn）の検証
-- **支払い方法管理**: カード情報、トークン化、Step-up認証
-- **領収書管理**: Payment Processorから受信した領収書の保存
-- **Credential Token発行**: 認証済みユーザーへのトークン発行
+## Sequence Diagram
 
-### AP2における役割
-
-```
-AP2 Role: credentials-provider
-DID: did:ap2:agent:credential_provider
-```
-
-**Key Responsibilities**:
-1. **User Authorization検証** (AP2 Step 4, 22)
-2. **Payment Network連携** (AP2 Step 23)
-3. **Agent Token取得** (決済ネットワークからのトークン化)
-4. **領収書受信** (AP2 Step 29)
-
----
-
-## アーキテクチャ
-
-```mermaid
-graph TB
-    subgraph CP["Credential Provider Service<br/>(did:ap2:agent:credential_provider)"]
-        WAV[WebAuthn Verification Engine<br/>・Passkey署名検証 FIDO2<br/>・Challenge管理 Redis KV, TTL: 60秒<br/>・Counter-based replay attack prevention<br/>・RFC 8785 Canonicalization]
-
-        PMM[Payment Method Management<br/>・カード情報管理 DB永続化<br/>・トークン化 Redis KV, TTL: 15分<br/>・Step-up認証フロー Redis KV, TTL: 10分]
-
-        PNI[Payment Network Integration<br/>・Agent Token取得 AP2 Step 23<br/>・Attestation送信]
-
-        RM[Receipt Management<br/>・領収書受信 AP2 Step 29<br/>・ユーザー別領収書保管 DB永続化]
-
-        WAV --> PMM
-        PMM --> PNI
-        PNI --> RM
-    end
-
-    CP --> DB[(Database<br/>SQLite)]
-    CP --> RD[(Redis<br/>KV)]
-    CP --> PN[Payment Network]
-    CP --> SA[Shopping Agent]
-
-    style WAV fill:#e1f5ff,stroke:#333,stroke-width:2px
-    style PMM fill:#ffe1f5,stroke:#333,stroke-width:2px
-    style PNI fill:#f5ffe1,stroke:#333,stroke-width:2px
-    style RM fill:#fff4e1,stroke:#333,stroke-width:2px
-    style DB fill:#e8e8e8,stroke:#333,stroke-width:2px
-    style RD fill:#e8e8e8,stroke:#333,stroke-width:2px
-    style PN fill:#e8e8e8,stroke:#333,stroke-width:2px
-    style SA fill:#e8e8e8,stroke:#333,stroke-width:2px
-```
-
----
-
-## 主要機能
-
-### 1. Passkey登録 (provider.py:155-262)
-
-```python
-@self.app.post("/register/passkey")
-async def register_passkey(registration_request: Dict[str, Any]):
-    """
-    WebAuthn Registration Ceremonyの結果を受信して、
-    公開鍵をデータベースに保存します。
-    """
-    user_id = registration_request["user_id"]
-    credential_id = registration_request["credential_id"]
-    attestation_object_b64 = registration_request["attestation_object"]
-
-    # attestationObjectから公開鍵を抽出 (COSE format)
-    attestation_obj = AttestationObject(attestation_object_bytes)
-    auth_data = attestation_obj.auth_data
-    credential_public_key = auth_data.credential_data.public_key
-
-    # データベースに保存
-    await PasskeyCredentialCRUD.create(session, {
-        "credential_id": credential_id,
-        "user_id": user_id,
-        "public_key_cose": public_key_cose_b64,
-        "counter": 0,  # 初期値
-        "transports": transports
-    })
-```
-
-**処理フロー**:
-1. `attestationObject` から公開鍵をCOSE形式で抽出
-2. `fido2` ライブラリで `AuthenticatorData` をパース
-3. 公開鍵をBase64エンコードしてDBに保存
-4. `counter` を0で初期化（リプレイ攻撃対策の基準値）
-
----
-
-### 2. WebAuthn Attestation検証 (provider.py:264-433)
-
-```python
-@self.app.post("/verify/attestation")
-async def verify_attestation(request: AttestationVerifyRequest):
-    """
-    WebAuthn attestation検証 (AP2 Step 4, 22)
-
-    IntentMandate署名時: payment_method未設定 → Payment Network呼び出しスキップ
-    PaymentMandate署名時: payment_method設定済み → Payment Network呼び出し (Step 23)
-    """
-    payment_mandate = request.payment_mandate
-    attestation = request.attestation
-    credential_id = attestation.get("rawId")
-
-    # データベースから登録済みPasskeyを取得
-    passkey_credential = await PasskeyCredentialCRUD.get_by_credential_id(
-        session, credential_id
-    )
-
-    # WebAuthn署名検証（完全な暗号学的検証）
-    verified, new_counter = self.attestation_manager.verify_webauthn_signature(
-        webauthn_auth_result=attestation,
-        challenge=challenge,
-        public_key_cose_b64=passkey_credential.public_key_cose,
-        stored_counter=passkey_credential.counter,
-        rp_id="localhost"
-    )
-
-    if verified:
-        # Signature counterを更新（リプレイ攻撃対策）
-        await PasskeyCredentialCRUD.update_counter(
-            session, credential_id, new_counter
-        )
-
-        # トークン発行
-        token = self._generate_token(payment_mandate, attestation)
-
-        # PaymentMandateに支払い方法トークンが含まれている場合のみ
-        # Payment Networkに送信 (AP2 Step 23)
-        agent_token = None
-        payment_method_token = payment_mandate.get("payment_method", {}).get("token")
-        if payment_method_token:
-            agent_token = await self._request_agent_token_from_network(
-                payment_mandate=payment_mandate,
-                attestation=attestation,
-                payment_method_token=payment_method_token
-            )
-```
-
-**WebAuthn検証の6ステップ** (crypto.py:1176-1339):
-
-1. **ClientDataJSON検証**: challenge、origin、typeを確認
-2. **AuthenticatorData検証**: RP ID Hash、User Present (UP) フラグ、User Verified (UV) フラグ
-3. **Signature Counter検証**: リプレイ攻撃防止（counter増加チェック）
-4. **署名データ構築**: `authenticatorData || SHA256(clientDataJSON)`
-5. **COSE公開鍵デコード**: CBOR形式からEC2公開鍵を抽出 (P-256/ES256)
-6. **ECDSA署名検証**: `ECDSA-SHA256` で署名を検証
-
----
-
-### 3. Payment Network連携 (provider.py:1408-1478)
-
-```python
-async def _request_agent_token_from_network(
-    self,
-    payment_mandate: Dict[str, Any],
-    attestation: Dict[str, Any],
-    payment_method_token: str
-) -> Optional[str]:
-    """
-    決済ネットワークへのトークン化呼び出し（AP2 Step 23）
-
-    CPが決済ネットワークにHTTPリクエストを送信し、Agent Tokenを取得
-    """
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            f"{self.payment_network_url}/network/tokenize",
-            json={
-                "payment_mandate": payment_mandate,
-                "attestation": attestation,
-                "payment_method_token": payment_method_token,
-                "transaction_context": {
-                    "credential_provider_id": self.agent_id,
-                    "timestamp": datetime.now(timezone.utc).isoformat()
-                }
-            },
-            timeout=10.0
-        )
-
-        if response.status_code == 200:
-            data = response.json()
-            agent_token = data.get("agent_token")
-            return agent_token
-```
-
-**AP2 Step 23の実装**:
-- Credential Provider → Payment Network: `POST /network/tokenize`
-- リクエスト: `payment_mandate` + `attestation` + `payment_method_token`
-- レスポンス: `agent_token` (決済ネットワークが発行したトークン)
-
-**重要**: `agent_token` は `payment_method.token` とは別物：
-- `payment_method.token`: CPが発行した一時トークン (Step 17-18)
-- `agent_token`: Payment Networkが発行したトークン (Step 23)
-
----
-
-### 4. 支払い方法トークン化 (provider.py:477-554)
-
-```python
-@self.app.post("/payment-methods/tokenize")
-async def tokenize_payment_method(tokenize_request: Dict[str, Any]):
-    """
-    支払い方法のトークン化 (AP2 Step 17-18)
-
-    選択された支払い方法に対して一時的なセキュアトークンを生成
-    """
-    user_id = tokenize_request["user_id"]
-    payment_method_id = tokenize_request["payment_method_id"]
-
-    # 支払い方法を取得
-    payment_method = next(
-        (pm for pm in user_payment_methods if pm["id"] == payment_method_id),
-        None
-    )
-
-    # 一時トークン生成（暗号学的に安全）
-    random_bytes = secrets.token_urlsafe(32)  # 256ビット
-    secure_token = f"tok_{uuid.uuid4().hex[:8]}_{random_bytes[:24]}"
-    expires_at = now + timedelta(minutes=15)  # 15分間有効
-
-    # トークンストアに保存
-    self.token_store[secure_token] = {
-        "user_id": user_id,
-        "payment_method_id": payment_method_id,
-        "payment_method": payment_method,
-        "issued_at": now.isoformat(),
-        "expires_at": expires_at.isoformat()
-    }
-```
-
-**トークン化の目的**:
-- カード情報をトークンに置き換え、PaymentMandateに含める
-- トークンは15分間有効（タイムアウト防止）
-- `secrets.token_urlsafe()` で暗号学的に安全な乱数生成
-
----
-
-### 5. Step-upフロー (provider.py:556-1012)
-
-**AP2 Step 13対応**: 決済ネットワークが追加認証を要求する場合の処理
-
-#### Step 5.1: Step-up開始 (provider.py:556-643)
-
-```python
-@self.app.post("/payment-methods/initiate-step-up")
-async def initiate_step_up(request: Dict[str, Any]):
-    """
-    Step-upフロー開始 (AP2 Step 13)
-
-    American Expressなど、3D Secure認証が必要なカードの場合
-    """
-    user_id = request["user_id"]
-    payment_method_id = request["payment_method_id"]
-
-    # Step-upセッション作成
-    session_id = f"stepup_{uuid.uuid4().hex[:16]}"
-    expires_at = now + timedelta(minutes=10)  # 10分間有効
-
-    self.step_up_sessions[session_id] = {
-        "session_id": session_id,
-        "user_id": user_id,
-        "payment_method_id": payment_method_id,
-        "payment_method": payment_method,
-        "transaction_context": transaction_context,
-        "return_url": return_url,
-        "status": "pending",
-        "created_at": now.isoformat(),
-        "expires_at": expires_at.isoformat()
-    }
-
-    # Step-up URL生成
-    step_up_url = f"http://localhost:8003/step-up/{session_id}"
-
-    return {
-        "session_id": session_id,
-        "step_up_url": step_up_url,
-        "expires_at": expires_at.isoformat(),
-        "step_up_reason": "3D Secure authentication required"
-    }
-```
-
-#### Step 5.2: Step-up認証画面 (provider.py:645-848)
-
-```python
-@self.app.get("/step-up/{session_id}")
-async def get_step_up_page(session_id: str):
-    """
-    Step-up認証画面
-
-    決済ネットワークのStep-up画面をシミュレート
-    実際の環境では3D Secureなどの決済ネットワーク画面にリダイレクト
-    """
-    # HTMLページを返す（3D Secure風のUI）
-    html_content = f"""
-    <html>
-        <head><title>3D Secure Authentication</title></head>
-        <body>
-            <h1>🔐 3D Secure Authentication</h1>
-            <div>追加認証が必要です。</div>
-            <button onclick="completeStepUp()">認証を完了する</button>
-            <button onclick="cancelStepUp()">キャンセル</button>
-        </body>
-    </html>
-    """
-```
-
-#### Step 5.3: Step-up完了 (provider.py:850-936)
-
-```python
-@self.app.post("/step-up/{session_id}/complete")
-async def complete_step_up(session_id: str, request: Dict[str, Any]):
-    """
-    Step-up完了
-
-    認証成功時にトークンを発行し、return_urlにリダイレクト
-    """
-    if status == "success":
-        # トークン発行
-        token = f"tok_stepup_{uuid.uuid4().hex[:8]}_{random_bytes[:24]}"
-
-        # トークンストアに保存
-        self.token_store[token] = {
-            "user_id": session_data["user_id"],
-            "payment_method_id": session_data["payment_method_id"],
-            "payment_method": session_data["payment_method"],
-            "issued_at": now.isoformat(),
-            "expires_at": token_expires_at.isoformat(),
-            "step_up_completed": True  # Step-up完了フラグ
-        }
-
-        return {
-            "status": "completed",
-            "session_id": session_id,
-            "return_url": session_data["return_url"],
-            "token": token
-        }
-```
-
-#### Step 5.4: Step-up検証 (provider.py:938-1012)
-
-```python
-@self.app.post("/payment-methods/verify-step-up")
-async def verify_step_up(request: Dict[str, Any]):
-    """
-    Step-up完了確認
-
-    Shopping Agentが認証完了後に呼び出して、
-    認証が成功したかを確認し、支払い方法情報を取得する
-    """
-    session_data = self.step_up_sessions.get(session_id)
-
-    if status == "completed":
-        return {
-            "verified": True,
-            "payment_method": session_data["payment_method"],
-            "token": session_data.get("token"),
-            "message": "Step-up authentication verified successfully"
-        }
-```
-
-**Step-upフローのシーケンス**:
+This diagram shows the Credential Provider's internal processing for attestation verification and credential verification.
 
 ```mermaid
 sequenceDiagram
-    participant SA as Shopping Agent
-    participant CP as Credential Provider
-    participant User as User Browser
+    autonumber
+    participant User as User<br/>(Browser)
+    participant CP as Credential Provider<br/>(Port 8003)
+    participant Redis as Redis<br/>(Token Store)
+    participant PN as Payment Network<br/>(Port 8005)
+    participant DB as Database
+    participant PP as Payment Processor<br/>(Port 8004)
 
-    Note over SA,CP: AP2 Step 13: Step-up Required
-    SA->>CP: POST /payment-methods/initiate-step-up
-    CP-->>SA: {session_id, step_up_url}
+    %% Attestation Verification Flow (AP2 Step 19-23)
+    rect rgb(240, 248, 255)
+        Note over User,PN: Attestation Verification (AP2 Step 19-23)
+        User->>CP: POST /attestations/verify<br/>{attestation, client_data, payment_mandate}
+        CP->>CP: Validate WebAuthn attestation format
+        CP->>CP: Verify client_data_json
+        CP->>CP: Extract credential_id
 
-    SA->>User: Redirect to step_up_url
-    User->>CP: GET /step-up/{session_id}
-    CP-->>User: HTML (3D Secure画面)
+        Note over CP,DB: Check if passkey exists
+        CP->>DB: Query passkey_credentials by credential_id
+        DB-->>CP: Passkey record (or null)
 
-    User->>CP: POST /step-up/{session_id}/complete
-    CP-->>User: {status: completed, token, return_url}
+        alt Passkey not found (Registration)
+            CP->>DB: CREATE passkey_credential
+            CP->>CP: Generate payment_method_token
+            CP->>DB: CREATE payment_method
+            CP->>Redis: Save payment_method_token → payment_method mapping (TTL: 15min)
+        else Passkey found (Authentication)
+            CP->>DB: GET payment_method by user_id
+            CP->>CP: Generate payment_method_token
+            CP->>Redis: Save payment_method_token → payment_method mapping (TTL: 15min)
+        end
 
-    User->>SA: Redirect to return_url?step_up_status=success
-    SA->>CP: POST /payment-methods/verify-step-up
-    CP-->>SA: {verified: true, payment_method, token}
+        Note over CP,PN: Tokenization (AP2 Step 23)
+        CP->>PN: POST /network/tokenize<br/>{payment_mandate, attestation, payment_method_token}
+        Note over PN: PN generates agent_token<br/>and saves to Redis<br/>(external processing, see PN README)
+        PN-->>CP: {agent_token, expires_at, network_name}
+
+        CP->>Redis: Update token_data with agent_token
+        CP-->>User: {verified: true, payment_method_token}
+    end
+
+    %% Credential Verification Flow (AP2 Step 26-27)
+    rect rgb(255, 250, 240)
+        Note over PP,Redis: Credential Verification (AP2 Step 26-27)
+        PP->>CP: POST /credentials/verify<br/>{user_authorization (SD-JWT+KB), payment_mandate}
+        CP->>CP: Parse SD-JWT+KB (tilde-separated)
+        CP->>CP: Verify issuer_jwt (alg="none", RFC 7519)
+        CP->>CP: Verify kb_jwt (WebAuthn signature)
+        CP->>CP: Verify mandate_hash binding
+
+        CP->>Redis: GET token_data by payment_method_token
+        Redis-->>CP: {payment_method, agent_token}
+
+        CP->>DB: GET payment_method details
+        DB-->>CP: Payment method info
+
+        CP-->>PP: {verified: true, credential_info: {..., agent_token}}
+    end
+
+    %% Receipt Storage Flow (AP2 Step 29)
+    rect rgb(240, 255, 240)
+        Note over PP,DB: Receipt Storage (AP2 Step 29)
+        PP->>CP: POST /receipts<br/>{transaction_id, receipt_url, payer_id}
+        CP->>DB: CREATE receipt record
+        DB-->>CP: Receipt saved
+        CP-->>PP: {status: "success", receipt_id}
+    end
 ```
 
----
+## API Endpoints
 
-### 6. トークン検証 (provider.py:1160-1249)
+### Attestation Verification
+
+**`POST /attestations/verify`** - Verify WebAuthn attestation and generate tokens (AP2 Step 19-23)
+
+**Request**:
+```json
+{
+  "attestation": "base64_encoded_attestation_object",
+  "client_data": "base64_encoded_client_data_json",
+  "payment_mandate": {
+    "id": "payment_xxx",
+    "payer_id": "user_123",
+    "amount": {"value": 2500, "currency": "JPY"}
+  },
+  "credential_id": "base64_encoded_credential_id",
+  "user_id": "user_123"
+}
+```
+
+**Response**:
+```json
+{
+  "verified": true,
+  "payment_method_token": "tok_abc123xyz789",
+  "payment_method_id": "pm_xxx",
+  "agent_token_received": true,
+  "network_name": "DemoPaymentNetwork"
+}
+```
+
+**Implementation**: `provider.py:300`
+
+**Processing Steps**:
+1. Verify WebAuthn attestation format (FIDO2)
+2. Check if passkey exists in database
+3. If new passkey: Register and create payment method
+4. If existing passkey: Retrieve payment method
+5. Generate payment_method_token (Redis, 15-min TTL)
+6. Call Payment Network for agent_token (AP2 Step 23)
+7. Store agent_token in Redis token_data
+
+### Credential Verification
+
+**`POST /credentials/verify`** - Verify credentials and return agent token (AP2 Step 26-27)
+
+**Request**:
+```json
+{
+  "user_authorization": "issuer_jwt~kb_jwt",
+  "payment_mandate": {
+    "id": "payment_xxx",
+    "user_authorization": "issuer_jwt~kb_jwt"
+  },
+  "mandate_hash": "sha256_hash_of_mandate"
+}
+```
+
+**Response**:
+```json
+{
+  "verified": true,
+  "credential_info": {
+    "payment_method_id": "pm_xxx",
+    "type": "card",
+    "brand": "visa",
+    "last4": "1234",
+    "holder_name": "John Doe",
+    "expiry_month": 12,
+    "expiry_year": 2025,
+    "agent_token": "agent_tok_abc123xyz789"
+  }
+}
+```
+
+**Implementation**: `provider.py:1500`
+
+**SD-JWT+KB Verification**:
+1. Parse tilde-separated format (`issuer_jwt~kb_jwt`)
+2. Verify issuer_jwt with `alg="none"` (RFC 7519)
+3. Verify kb_jwt WebAuthn signature
+4. Verify mandate_hash binding
+5. Retrieve agent_token from Redis token_data
+6. Return payment method info + agent_token
+
+### Payment Method Management
+
+**`POST /payment-methods`** - Create payment method
+
+**Request**:
+```json
+{
+  "user_id": "user_123",
+  "type": "card",
+  "card_number": "4111111111111111",
+  "expiry_month": 12,
+  "expiry_year": 2025,
+  "cvv": "123",
+  "holder_name": "John Doe"
+}
+```
+
+**Response**:
+```json
+{
+  "id": "pm_xxx",
+  "user_id": "user_123",
+  "type": "card",
+  "brand": "visa",
+  "last4": "1111",
+  "holder_name": "John Doe",
+  "expiry_month": 12,
+  "expiry_year": 2025,
+  "created_at": "2025-10-23T12:34:56Z"
+}
+```
+
+**Implementation**: `provider.py:800`
+
+**`GET /payment-methods`** - List payment methods
+
+**Response**:
+```json
+{
+  "payment_methods": [
+    {
+      "id": "pm_xxx",
+      "type": "card",
+      "brand": "visa",
+      "last4": "1111",
+      "holder_name": "John Doe"
+    }
+  ]
+}
+```
+
+**Implementation**: `provider.py:900`
+
+### Receipt Management
+
+**`POST /receipts`** - Store receipt (AP2 Step 29)
+
+**Request**:
+```json
+{
+  "transaction_id": "txn_xxx",
+  "receipt_url": "http://payment_processor:8004/receipts/txn_xxx.pdf",
+  "payer_id": "user_123",
+  "amount": {"value": 2500, "currency": "JPY"}
+}
+```
+
+**Response**:
+```json
+{
+  "status": "success",
+  "receipt_id": "receipt_xxx"
+}
+```
+
+**Implementation**: `provider.py:1800`
+
+**`GET /receipts`** - List receipts
+
+**Response**:
+```json
+{
+  "receipts": [
+    {
+      "id": "receipt_xxx",
+      "transaction_id": "txn_xxx",
+      "receipt_url": "http://...",
+      "payer_id": "user_123",
+      "created_at": "2025-10-23T12:34:56Z"
+    }
+  ]
+}
+```
+
+**Implementation**: `provider.py:1900`
+
+### Common Endpoints (Inherited from BaseAgent)
+
+**`GET /`** - Health check
+- **Response**: `{agent_id, agent_name, status, version}`
+
+**`GET /health`** - Health check (for Docker)
+- **Response**: `{status: "healthy"}`
+
+**`POST /a2a/message`** - Receive A2A messages from other agents
+- **Request**: A2AMessage (Ed25519 signed)
+- **Response**: A2A response
+
+**`GET /.well-known/did.json`** - DID document
+- **Response**: W3C DID Document
+
+## Environment Variables
+
+```bash
+# Service Configuration
+AGENT_ID=did:ap2:agent:credential_provider
+DATABASE_URL=sqlite+aiosqlite:////app/data/credential_provider.db
+AP2_KEYS_DIRECTORY=/app/keys
+
+# Downstream Services
+PAYMENT_NETWORK_URL=http://payment_network:8005
+
+# Redis Configuration
+REDIS_URL=redis://localhost:6379/0
+
+# Token TTL Configuration
+TOKEN_EXPIRY_MINUTES=15
+WEBAUTHN_CHALLENGE_TTL=60
+STEPUP_SESSION_TTL=600
+
+# OpenTelemetry
+OTEL_ENABLED=true
+OTEL_SERVICE_NAME=credential_provider
+OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
+
+# Logging
+LOG_LEVEL=INFO
+LOG_FORMAT=text
+```
+
+## Database Schema
+
+### Tables
+
+- **passkey_credentials** - WebAuthn/Passkey credentials
+  - `id` (primary key)
+  - `user_id`
+  - `credential_id` (base64)
+  - `public_key` (base64)
+  - `sign_count`
+  - `created_at`
+
+- **payment_methods** - Payment method storage
+  - `id` (primary key)
+  - `user_id`
+  - `type` (card/digital_wallet)
+  - `brand` (visa/mastercard/etc)
+  - `last4`
+  - `holder_name`
+  - `expiry_month`
+  - `expiry_year`
+  - `created_at`
+
+- **receipts** - Receipt storage (AP2 Step 29)
+  - `id` (primary key)
+  - `transaction_id`
+  - `receipt_url`
+  - `payer_id`
+  - `amount` (JSON)
+  - `created_at`
+
+## Dependencies
+
+### Python Packages
+- **fastapi** 0.115.0 - Web framework
+- **fido2** - WebAuthn/FIDO2 implementation
+- **httpx** 0.27.0 - Async HTTP client
+- **cryptography** 43.0.0 - Cryptographic operations
+- **sqlalchemy** 2.0.35 - ORM
+- **redis** - Redis client for token storage
+
+### Shared Components
+- **common.base_agent** - BaseAgent for A2A protocol
+- **common.redis_client** - RedisClient, TokenStore, SessionStore
+- **common.crypto** - DeviceAttestationManager, KeyManager
+- **common.database** - DatabaseManager, CRUD classes
+
+### Downstream Services
+- **Payment Network** (Port 8005) - Agent token generation (AP2 Step 23)
+
+### Upstream Services
+- **Payment Processor** (Port 8004) - Credential verification requests (AP2 Step 26-27)
+- **Shopping Agent** (Port 8000) - Attestation verification, receipt storage
+
+## Key Implementation Details
+
+### WebAuthn Attestation Verification
+
+Complete FIDO2-compliant verification:
 
 ```python
-@self.app.post("/credentials/verify")
-async def verify_credentials(verify_request: Dict[str, Any]):
-    """
-    トークン検証と認証情報提供 (AP2 Step 26-27)
+# provider.py:300-650
+async def verify_attestation(request: AttestationVerifyRequest):
+    # Step 1: Decode attestation object
+    attestation_obj = AttestationObject(base64.b64decode(request.attestation))
 
-    Payment Processorからトークンを受信し、検証して支払い方法情報を返却
-    """
-    token = verify_request["token"]
-    payer_id = verify_request["payer_id"]
+    # Step 2: Verify client data
+    client_data = json.loads(base64.b64decode(request.client_data))
 
-    # トークンストアから支払い方法を取得
-    token_data = self.token_store.get(token)
-    if not token_data:
-        return {"verified": False, "error": "Token not found or expired"}
+    # Step 3: Verify attestation format (packed, fido-u2f, etc.)
+    auth_data = attestation_obj.auth_data
+    credential_id = auth_data.credential_data.credential_id
+    public_key = auth_data.credential_data.public_key
 
-    # トークン有効期限チェック
-    expires_at = datetime.fromisoformat(token_data["expires_at"])
-    if datetime.now(timezone.utc) > expires_at:
-        del self.token_store[token]
-        return {"verified": False, "error": "Token expired"}
+    # Step 4: Check if passkey exists
+    passkey = await passkey_crud.get_by_credential_id(credential_id)
 
-    # ユーザーIDの一致チェック
-    if token_data["user_id"] != payer_id:
-        return {"verified": False, "error": "User ID mismatch"}
+    if not passkey:
+        # Registration flow
+        await passkey_crud.create(
+            user_id=request.user_id,
+            credential_id=credential_id,
+            public_key=public_key,
+            sign_count=auth_data.sign_count
+        )
+    else:
+        # Authentication flow
+        # Verify sign_count hasn't decreased (replay attack prevention)
+        if auth_data.sign_count <= passkey.sign_count:
+            raise HTTPException(status_code=401, detail="Invalid sign_count")
 
-    # 支払い方法情報を返却
-    payment_method = token_data["payment_method"]
+        # Update sign_count
+        await passkey_crud.update_sign_count(credential_id, auth_data.sign_count)
+
+    return {"verified": True, "credential_id": credential_id}
+```
+
+**Attestation Verification Steps**:
+1. Decode attestation object (base64 → CBOR)
+2. Verify client_data_json signature
+3. Extract credential_id and public_key
+4. Check replay attack (sign_count)
+5. Register new passkey or verify existing
+
+### Agent Token Lifecycle
+
+Complete token orchestration:
+
+```python
+# provider.py:400-650
+# Step 1: Generate payment_method_token
+payment_method_token = f"tok_{secrets.token_hex(16)}"
+
+# Step 2: Save to Redis (TTL: 15 minutes)
+token_data = {
+    "payment_method_id": payment_method.id,
+    "user_id": user_id,
+    "created_at": datetime.now(timezone.utc).isoformat()
+}
+await token_store.save_token(
+    payment_method_token,
+    token_data,
+    ttl_seconds=TOKEN_EXPIRY_MINUTES * 60
+)
+
+# Step 3: Call Payment Network for agent_token (AP2 Step 23)
+response = await http_client.post(
+    f"{payment_network_url}/network/tokenize",
+    json={
+        "payment_mandate": payment_mandate,
+        "attestation": attestation,
+        "payment_method_token": payment_method_token
+    }
+)
+agent_token = response.json()["agent_token"]
+
+# Step 4: Save agent_token to token_data
+token_data["agent_token"] = agent_token
+await token_store.save_token(payment_method_token, token_data, ttl_seconds=TOKEN_EXPIRY_MINUTES * 60)
+```
+
+**Token Lifecycle**:
+1. **payment_method_token** - Generated by CP, stored in Redis (15-min TTL)
+2. **agent_token** - Generated by Payment Network, stored by CP in token_data (1-hour TTL at PN side)
+3. **Credential Verification** - PP requests, CP returns both payment_method and agent_token
+
+### SD-JWT+KB Verification
+
+Selective Disclosure JWT with Key Binding:
+
+```python
+# provider.py:1500-1700
+async def verify_credentials(request: Dict[str, Any]):
+    user_authorization = request["user_authorization"]
+
+    # Step 1: Parse tilde-separated format
+    if "~" not in user_authorization:
+        raise HTTPException(status_code=400, detail="Invalid SD-JWT+KB format")
+
+    parts = user_authorization.split("~")
+    issuer_jwt = parts[0]  # Issuer-signed JWT
+    kb_jwt = parts[1]      # Key binding JWT (WebAuthn)
+
+    # Step 2: Verify issuer_jwt (alg="none" per RFC 7519)
+    header, payload, signature = issuer_jwt.split(".")
+    header_data = json.loads(base64.b64decode(header))
+
+    if header_data.get("alg") != "none":
+        raise HTTPException(status_code=401, detail="Invalid issuer_jwt algorithm")
+
+    # Step 3: Verify kb_jwt (WebAuthn signature)
+    kb_header, kb_payload, kb_signature = kb_jwt.split(".")
+    kb_data = json.loads(base64.b64decode(kb_payload))
+
+    # Verify WebAuthn signature using stored public key
+    passkey = await passkey_crud.get_by_credential_id(kb_data["credential_id"])
+    verify_webauthn_signature(passkey.public_key, kb_signature, kb_payload)
+
+    # Step 4: Verify mandate_hash binding
+    mandate_hash = request["mandate_hash"]
+    if kb_data["mandate_hash"] != mandate_hash:
+        raise HTTPException(status_code=401, detail="Mandate hash mismatch")
+
+    # Step 5: Retrieve agent_token from Redis
+    payment_method_token = payload["payment_method_token"]
+    token_data = await token_store.get_token(payment_method_token)
+    agent_token = token_data.get("agent_token")
+
     return {
         "verified": True,
         "credential_info": {
-            "payment_method_id": payment_method["id"],
-            "type": payment_method.get("type", "card"),
-            "brand": payment_method.get("brand", "unknown"),
-            "last4": payment_method.get("last4", "0000"),
-            "holder_name": payment_method.get("holder_name", "Unknown")
+            "payment_method_id": token_data["payment_method_id"],
+            "agent_token": agent_token,
+            ...
         }
     }
 ```
 
-**トークン検証の3ステップ**:
-1. **存在確認**: `token_store` にトークンが存在するか
-2. **有効期限確認**: `expires_at` が現在時刻より後か
-3. **ユーザーID確認**: `token_data["user_id"]` が `payer_id` と一致するか
+**SD-JWT+KB Format** (tilde-separated):
+- `issuer_jwt`: Issuer-signed JWT with `alg="none"` (RFC 7519 compliant)
+- `kb_jwt`: Key binding JWT with WebAuthn signature
 
----
+### Redis Token Store
 
-### 7. 領収書管理 (provider.py:1065-1158)
-
-```python
-@self.app.post("/receipts")
-async def receive_receipt(receipt_data: Dict[str, Any]):
-    """
-    領収書受信 (AP2 Step 29)
-
-    Payment Processorから領収書通知を受信
-    """
-    transaction_id = receipt_data.get("transaction_id")
-    receipt_url = receipt_data.get("receipt_url")
-    payer_id = receipt_data.get("payer_id")
-
-    # 領収書情報を保存
-    if payer_id not in self.receipts:
-        self.receipts[payer_id] = []
-
-    self.receipts[payer_id].append({
-        "transaction_id": transaction_id,
-        "receipt_url": receipt_url,
-        "amount": receipt_data.get("amount"),
-        "received_at": datetime.now(timezone.utc).isoformat(),
-        "payment_timestamp": receipt_data.get("timestamp")
-    })
-```
-
-**領収書取得**:
+TTL-managed token storage:
 
 ```python
-@self.app.get("/receipts")
-async def get_receipts(user_id: str):
-    """
-    ユーザーの領収書一覧取得
-    """
-    receipts = self.receipts.get(user_id, [])
-    return {
-        "user_id": user_id,
-        "receipts": receipts,
-        "total_count": len(receipts)
-    }
-```
-
----
-
-## エンドポイント
-
-### 認証関連
-
-| Method | Path | 説明 | AP2 Step |
-|--------|------|------|----------|
-| POST | `/register/passkey` | Passkey登録 (WebAuthn Registration) | N/A |
-| POST | `/verify/attestation` | WebAuthn attestation検証 | 4, 22 |
-| POST | `/passkey/get-public-key` | Passkey公開鍵取得 | N/A |
-
-### 支払い方法管理
-
-| Method | Path | 説明 | AP2 Step |
-|--------|------|------|----------|
-| GET | `/payment-methods` | 支払い方法一覧取得 | N/A |
-| POST | `/payment-methods` | 支払い方法追加 | N/A |
-| POST | `/payment-methods/tokenize` | 支払い方法のトークン化 | 17-18 |
-
-### Step-upフロー
-
-| Method | Path | 説明 | AP2 Step |
-|--------|------|------|----------|
-| POST | `/payment-methods/initiate-step-up` | Step-up開始 | 13 |
-| GET | `/step-up/{session_id}` | Step-up認証画面 | 13 |
-| POST | `/step-up/{session_id}/complete` | Step-up完了 | 13 |
-| POST | `/payment-methods/verify-step-up` | Step-up検証 | 13 |
-
-### トークン検証
-
-| Method | Path | 説明 | AP2 Step |
-|--------|------|------|----------|
-| POST | `/credentials/verify` | トークン検証と認証情報提供 | 26-27 |
-
-### 領収書管理
-
-| Method | Path | 説明 | AP2 Step |
-|--------|------|------|----------|
-| POST | `/receipts` | 領収書受信 | 29 |
-| GET | `/receipts` | 領収書一覧取得 | N/A |
-
-### A2Aエンドポイント
-
-| Method | Path | 説明 |
-|--------|------|------|
-| POST | `/a2a/message` | A2Aメッセージ受信 (BaseAgentから継承) |
-
----
-
-## WebAuthn検証フロー
-
-### 完全な暗号学的検証プロセス
-
-```mermaid
-sequenceDiagram
-    participant SA as Shopping Agent
-    participant CP as Credential Provider
-    participant User as User Device
-    participant DB as Database
-
-    Note over SA,User: WebAuthn Authentication Ceremony
-
-    SA->>CP: POST /verify/attestation<br/>{payment_mandate, attestation}
-
-    Note over CP: 1. credential_idからPasskey取得
-    CP->>DB: SELECT * FROM passkey_credentials<br/>WHERE credential_id = ?
-    DB-->>CP: {credential_id, public_key_cose, counter}
-
-    Note over CP: 2. ClientDataJSON検証
-    CP->>CP: JSON.parse(clientDataJSON)<br/>- challenge一致確認<br/>- origin確認<br/>- type = "webauthn.get"
-
-    Note over CP: 3. AuthenticatorData検証
-    CP->>CP: - RP ID Hash確認<br/>- User Present (UP) フラグ<br/>- User Verified (UV) フラグ
-
-    Note over CP: 4. Signature Counter検証
-    CP->>CP: new_counter > stored_counter<br/>(リプレイ攻撃防止)
-
-    Note over CP: 5. 署名データ構築
-    CP->>CP: signature_data =<br/>authenticatorData || SHA256(clientDataJSON)
-
-    Note over CP: 6. ECDSA署名検証
-    CP->>CP: ECDSA-SHA256 verify<br/>(P-256 public key)
-
-    alt 検証成功
-        CP->>DB: UPDATE passkey_credentials<br/>SET counter = new_counter
-        CP->>CP: _generate_token()
-
-        alt PaymentMandateにpayment_method.tokenあり
-            CP->>CP: _request_agent_token_from_network()
-            Note over CP: AP2 Step 23: Payment Network連携
-        end
-
-        CP->>DB: INSERT INTO attestations<br/>{user_id, verified=1, token, agent_token}
-        CP-->>SA: {verified: true, token, agent_token}
-    else 検証失敗
-        CP->>DB: INSERT INTO attestations<br/>{user_id, verified=0}
-        CP-->>SA: {verified: false}
-    end
-```
-
-### WebAuthn検証の実装詳細 (crypto.py:1176-1339)
-
-```python
-def verify_webauthn_signature(
-    self,
-    webauthn_auth_result: Dict[str, Any],
-    challenge: str,
-    public_key_cose_b64: str,
-    stored_counter: int,
-    rp_id: str = "localhost"
-) -> tuple[bool, int]:
-    """
-    WebAuthn署名の完全な暗号学的検証
-
-    Returns:
-        (verified: bool, new_counter: int)
-    """
-    # 1. ClientDataJSON検証
-    client_data_json_b64 = webauthn_auth_result.get("response", {}).get("clientDataJSON")
-    client_data_json = base64.b64decode(client_data_json_b64).decode('utf-8')
-    client_data = json.loads(client_data_json)
-
-    assert client_data["challenge"] == challenge
-    assert client_data["type"] == "webauthn.get"
-    assert rp_id in client_data.get("origin", "")
-
-    # 2. AuthenticatorData検証
-    authenticator_data_b64 = webauthn_auth_result.get("response", {}).get("authenticatorData")
-    authenticator_data = base64.b64decode(authenticator_data_b64)
-
-    rp_id_hash = authenticator_data[0:32]
-    assert rp_id_hash == hashlib.sha256(rp_id.encode()).digest()
-
-    flags = authenticator_data[32]
-    user_present = bool(flags & 0x01)  # UP
-    user_verified = bool(flags & 0x04)  # UV
-    assert user_present
-
-    # 3. Signature Counter検証
-    counter = int.from_bytes(authenticator_data[33:37], byteorder='big')
-    if stored_counter > 0 and counter > 0:
-        assert counter > stored_counter  # リプレイ攻撃防止
-
-    # 4. 署名データ構築
-    client_data_hash = hashlib.sha256(client_data_json.encode()).digest()
-    signature_data = authenticator_data + client_data_hash
-
-    # 5. COSE公開鍵デコード
-    public_key_cose_bytes = base64.b64decode(public_key_cose_b64)
-    cose_key = cbor2.loads(public_key_cose_bytes)
-
-    # 6. ECDSA署名検証 (P-256)
-    ec_public_key = ec.EllipticCurvePublicKey.from_encoded_point(
-        ec.SECP256R1(), public_key_bytes
-    )
-
-    signature_b64 = webauthn_auth_result.get("response", {}).get("signature")
-    signature = base64.b64decode(signature_b64)
-
-    ec_public_key.verify(
-        signature,
-        signature_data,
-        ec.ECDSA(hashes.SHA256())
-    )
-
-    return True, counter
-```
-
----
-
-## 支払い方法管理
-
-### デモ環境の支払い方法データ (provider.py:66-105)
-
-```python
-self.payment_methods: Dict[str, List[Dict[str, Any]]] = {
-    "user_demo_001": [
-        {
-            "id": "pm_001",
-            "type": "card",
-            "token": "tok_visa_4242",
-            "last4": "4242",
-            "brand": "visa",
-            "expiry_month": 12,
-            "expiry_year": 2025,
-            "holder_name": "山田太郎",
-            "requires_step_up": False  # 通常のカード
-        },
-        {
-            "id": "pm_003",
-            "type": "card",
-            "token": "tok_amex_3782",
-            "last4": "3782",
-            "brand": "amex",
-            "expiry_month": 9,
-            "expiry_year": 2026,
-            "holder_name": "山田太郎",
-            "requires_step_up": True,  # American ExpressはStep-up必要
-            "step_up_reason": "3D Secure authentication required"
-        }
-    ]
-}
-```
-
-**`requires_step_up`フィールド**:
-- `False`: 通常の決済フロー (Visa, Mastercard)
-- `True`: Step-up認証が必要 (American Express, 高額決済)
-
----
-
-## Step-upフロー
-
-### Step-upが必要なケース
-
-1. **カードブランド要件**: American Express等、3D Secureが必須のカード
-2. **高額決済**: 決済ネットワークが追加認証を要求
-3. **リスク評価**: 不審なトランザクションパターン
-
-### Step-upセッション管理 (provider.py:107-109)
-
-```python
-# Step-upセッション管理（インメモリ）
-# 本番環境ではRedis等のKVストアを使用
-self.step_up_sessions: Dict[str, Dict[str, Any]] = {}
-```
-
-**セッションデータ構造**:
-
-```json
-{
-  "session_id": "stepup_abc123",
-  "user_id": "user_demo_001",
-  "payment_method_id": "pm_003",
-  "payment_method": { ... },
-  "transaction_context": {
-    "amount": {"value": "10000.00", "currency": "JPY"},
-    "merchant_id": "did:ap2:merchant:mugibo_merchant"
-  },
-  "return_url": "http://localhost:3000/payment/step-up-callback",
-  "status": "pending",  // pending, completed, failed
-  "created_at": "2025-10-23T12:34:56Z",
-  "expires_at": "2025-10-23T12:44:56Z"  // 10分後
-}
-```
-
----
-
-## トークン管理
-
-### トークンの種類
-
-Credential Providerは3種類のトークンを管理します：
-
-#### 1. Payment Method Token (provider.py:477-554)
-
-```python
-# 例: "tok_a1b2c3d4_x9y8z7w6v5u4t3s2r1q0"
-secure_token = f"tok_{uuid.uuid4().hex[:8]}_{random_bytes[:24]}"
-```
-
-- **目的**: 支払い方法のセキュアな参照
-- **有効期限**: 15分
-- **生成タイミング**: AP2 Step 17-18 (支払い方法選択後)
-
-#### 2. Credential Token (provider.py:1480-1497)
-
-```python
-# 例: "cred_token_a1b2c3d4_x9y8z7w6v5u4t3s2r1q0"
-secure_token = f"cred_token_{uuid.uuid4().hex[:8]}_{random_bytes[:24]}"
-```
-
-- **目的**: WebAuthn検証成功の証明
-- **生成タイミング**: AP2 Step 4, 22 (attestation検証後)
-
-#### 3. Agent Token (Payment Networkが発行)
-
-```python
-# 例: "agent_tok_visa_network_a1b2c3d4e5f6"
-agent_token = data.get("agent_token")
-```
-
-- **目的**: 決済ネットワークが発行したトークン
-- **生成タイミング**: AP2 Step 23 (Payment Network連携後)
-
-### トークンストア構造 (provider.py:115-117)
-
-```python
-self.token_store: Dict[str, Dict[str, Any]] = {}
-
-# 例:
-# {
-#   "tok_a1b2c3d4_x9y8z7w6": {
-#     "user_id": "user_demo_001",
-#     "payment_method_id": "pm_001",
-#     "payment_method": { ... },
-#     "issued_at": "2025-10-23T12:00:00Z",
-#     "expires_at": "2025-10-23T12:15:00Z",
-#     "step_up_completed": false  // Step-upの場合はtrue
-#   }
+# Token store structure
+# Key: cp:token:{payment_method_token}
+# Value: {
+#   "payment_method_id": "pm_xxx",
+#   "user_id": "user_123",
+#   "agent_token": "agent_tok_xxx",  # Added after Payment Network call
+#   "created_at": "2025-10-23T12:34:56Z"
 # }
+# TTL: 900 seconds (15 minutes)
+
+# Challenge store structure (WebAuthn)
+# Key: cp:challenge:{challenge_id}
+# Value: {
+#   "challenge": "base64_encoded_challenge",
+#   "user_id": "user_123",
+#   "created_at": "2025-10-23T12:34:56Z"
+# }
+# TTL: 60 seconds (replay attack prevention)
 ```
 
----
+**Redis Databases**:
+- **DB 0**: Credential Provider (tokens, challenges, sessions)
+- **DB 1**: Credential Provider 2 (if deployed)
+- **DB 2**: Payment Network (agent tokens)
 
-## セキュリティ
+## Development
 
-### 1. リプレイ攻撃防止
-
-#### Signature Counter (provider.py:361-375)
-
-```python
-# Signature counterを更新（リプレイ攻撃対策）
-await PasskeyCredentialCRUD.update_counter(
-    session, credential_id, new_counter
-)
-
-if new_counter == 0:
-    logger.info(
-        f"AP2準拠: Authenticatorがcounterを実装していない場合でも、"
-        f"user_authorizationのnonceによりリプレイ攻撃は防止されます"
-    )
-else:
-    logger.info(f"Signature counter updated: {stored_counter} → {new_counter}")
-```
-
-**2段階のリプレイ攻撃防止**:
-1. **Signature Counter**: WebAuthn仕様の標準機能 (counter増加チェック)
-2. **Nonce**: AP2仕様の `user_authorization.nonce` (一度だけ使用可能)
-
-### 2. 暗号学的に安全なトークン生成
-
-```python
-import secrets
-
-# secrets.token_urlsafe()を使用（cryptographically strong random）
-random_bytes = secrets.token_urlsafe(32)  # 32バイト = 256ビット
-secure_token = f"tok_{uuid.uuid4().hex[:8]}_{random_bytes[:24]}"
-```
-
-**`secrets` モジュール**:
-- OS提供の暗号学的に安全な乱数生成器を使用
-- `random` モジュールより安全（予測不可能）
-
-### 3. トークン有効期限
-
-```python
-# Payment Method Token: 15分
-expires_at = now + timedelta(minutes=15)
-
-# Step-up Session: 10分
-expires_at = now + timedelta(minutes=10)
-```
-
-### 4. RP ID検証 (crypto.py:1176-1339)
-
-```python
-# AuthenticatorDataのRP ID Hash検証
-rp_id_hash = authenticator_data[0:32]
-expected_rp_id_hash = hashlib.sha256(rp_id.encode()).digest()
-
-if rp_id_hash != expected_rp_id_hash:
-    raise ValueError(f"RP ID mismatch")
-```
-
-**RP ID検証の重要性**:
-- フィッシング攻撃防止
-- 異なるドメインでの署名利用を防止
-
----
-
-## データベース構造
-
-### PasskeyCredential (database.py) - DB永続化
-
-```sql
-CREATE TABLE passkey_credentials (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    credential_id TEXT UNIQUE NOT NULL,       -- WebAuthn credential ID (Base64URL)
-    user_id TEXT NOT NULL,                    -- ユーザーID
-    public_key_cose TEXT NOT NULL,            -- COSE公開鍵 (Base64)
-    counter INTEGER DEFAULT 0,                -- Signature counter (リプレイ攻撃対策)
-    transports TEXT,                          -- ["internal", "usb", "nfc", "ble"] (JSON)
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX idx_passkey_user_id ON passkey_credentials(user_id);
-CREATE INDEX idx_passkey_credential_id ON passkey_credentials(credential_id);
-```
-
-### PaymentMethod (database.py) - DB永続化
-
-```sql
-CREATE TABLE payment_methods (
-    id TEXT PRIMARY KEY,                      -- payment_method_id (e.g., pm_xxxxx)
-    user_id TEXT NOT NULL,                    -- ユーザーID
-    payment_data TEXT NOT NULL,               -- 支払い方法データ (JSON)
-                                              -- {type, brand, last4, holder_name, ...}
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX idx_payment_method_user_id ON payment_methods(user_id);
-```
-
-### Receipt (database.py) - DB永続化
-
-```sql
-CREATE TABLE receipts (
-    id TEXT PRIMARY KEY,                      -- UUID
-    user_id TEXT NOT NULL,                    -- ユーザーID (payer_id)
-    transaction_id TEXT NOT NULL,             -- トランザクションID
-    receipt_url TEXT NOT NULL,                -- 領収書PDFのURL
-    amount_value INTEGER NOT NULL,            -- 金額 (cents)
-    currency TEXT DEFAULT 'JPY',              -- 通貨
-    payment_timestamp DATETIME NOT NULL,      -- 決済実行時刻
-    received_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX idx_receipt_user_id ON receipts(user_id);
-CREATE INDEX idx_receipt_transaction_id ON receipts(transaction_id);
-```
-
-### Attestation (database.py) - DB永続化
-
-```sql
-CREATE TABLE attestations (
-    id TEXT PRIMARY KEY,                      -- UUID
-    user_id TEXT NOT NULL,                    -- ユーザーID
-    attestation_raw TEXT NOT NULL,            -- WebAuthn attestation結果 (JSON)
-    verified INTEGER NOT NULL,                -- 検証結果 (0 or 1)
-    verification_details TEXT,                -- 検証詳細 (JSON)
-                                              -- {token, agent_token, verified_at}
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX idx_attestation_user_id ON attestations(user_id);
-```
-
----
-
-## Redis KVストア構造
-
-### Token Store (Redis KV, TTL: 15分)
-
-```
-Key: cp:token:{token}
-Value (JSON):
-{
-  "user_id": "user_demo_001",
-  "payment_method_id": "pm_xxxxx",
-  "payment_method": { ... },
-  "issued_at": "2025-10-26T12:00:00Z",
-  "expires_at": "2025-10-26T12:15:00Z",
-  "step_up_completed": true  // オプション
-}
-TTL: 900秒 (15分)
-```
-
-### Step-up Session Store (Redis KV, TTL: 10分)
-
-```
-Key: cp:stepup:{session_id}
-Value (JSON):
-{
-  "session_id": "stepup_xxxxx",
-  "user_id": "user_demo_001",
-  "payment_method_id": "pm_xxxxx",
-  "payment_method": { ... },
-  "transaction_context": { ... },
-  "return_url": "http://...",
-  "status": "pending" | "completed" | "failed",
-  "created_at": "2025-10-26T12:00:00Z",
-  "expires_at": "2025-10-26T12:10:00Z",
-  "token"?: "tok_xxxxx",      // status=completed時のみ
-  "completed_at"?: "..."       // status=completed時のみ
-}
-TTL: 600秒 (10分)
-```
-
-### Challenge Store (Redis KV, TTL: 60秒)
-
-```
-Key: cp:challenge:{challenge_id}
-Value (JSON):
-{
-  "challenge": "base64url_challenge",
-  "user_id": "user_demo_001",
-  "created_at": "2025-10-26T12:00:00Z"
-}
-TTL: 60秒
-```
-
-### CRUD操作 (database.py)
-
-#### PasskeyCredentialCRUD
-
-```python
-# Passkey作成
-credential = await PasskeyCredentialCRUD.create(session, {
-    "credential_id": "...",
-    "user_id": "user_demo_001",
-    "public_key_cose": "...",
-    "counter": 0,
-    "transports": ["internal"]
-})
-
-# credential_idで取得
-passkey = await PasskeyCredentialCRUD.get_by_credential_id(session, credential_id)
-
-# Counter更新
-await PasskeyCredentialCRUD.update_counter(session, credential_id, new_counter)
-```
-
----
-
-## 開発
-
-### 環境変数
+### Run Locally
 
 ```bash
-# データベースURL
-DATABASE_URL=sqlite+aiosqlite:////app/v2/data/credential_provider.db
+# Set environment variables
+export AGENT_ID=did:ap2:agent:credential_provider
+export DATABASE_URL=sqlite+aiosqlite:////app/data/credential_provider.db
+export PAYMENT_NETWORK_URL=http://localhost:8005
+export REDIS_URL=redis://localhost:6379/0
 
-# 決済ネットワークURL (AP2 Step 23用)
-PAYMENT_NETWORK_URL=http://payment_network:8005
+# Install dependencies
+pip install -e .
 
-# Passphraseマネージャー
-CREDENTIAL_PROVIDER_PASSPHRASE=credential_provider_secret_123
+# Start Redis
+redis-server --port 6379
+
+# Run service
+cd services/credential_provider
+python main.py
 ```
 
-### Docker起動
+### Run with Docker
 
 ```bash
-# コンテナ起動
+# Build and run
 docker compose up credential_provider
 
-# ログ確認
-docker compose logs credential_provider --tail=100
-
-# データベース確認
-docker compose exec credential_provider sqlite3 /app/v2/data/credential_provider.db "SELECT * FROM passkey_credentials;"
+# View logs
+docker compose logs -f credential_provider
 ```
 
-### ローカル起動
+## Testing
 
 ```bash
-cd v2/services/credential_provider
-
-# 依存関係インストール
-pip install -r requirements.txt
-
-# サービス起動
-python main.py
-# または
-uvicorn main:app --host 0.0.0.0 --port 8003 --reload
-```
-
-### Health Check
-
-```bash
-# サービス稼働確認
+# Health check
 curl http://localhost:8003/health
 
-# DIDドキュメント取得
-curl http://localhost:8003/.well-known/did.json
-```
-
-### テスト用エンドポイント
-
-#### Passkey登録
-
-```bash
-curl -X POST http://localhost:8003/register/passkey \
+# Verify attestation (requires WebAuthn data)
+curl -X POST http://localhost:8003/attestations/verify \
   -H "Content-Type: application/json" \
   -d '{
-    "user_id": "user_demo_001",
-    "credential_id": "test_credential_id_001",
-    "attestation_object": "...",
-    "transports": ["internal"]
+    "attestation": "base64_encoded_attestation",
+    "client_data": "base64_encoded_client_data",
+    "payment_mandate": {...},
+    "user_id": "user_123"
   }'
-```
 
-#### WebAuthn検証（モック）
-
-```bash
-curl -X POST http://localhost:8003/verify/attestation \
+# Verify credentials
+curl -X POST http://localhost:8003/credentials/verify \
   -H "Content-Type: application/json" \
   -d '{
-    "payment_mandate": {
-      "id": "pm_001",
-      "payer_id": "user_demo_001"
-    },
-    "attestation": {
-      "rawId": "mock_credential_id_001",
-      "challenge": "test_challenge"
-    }
+    "user_authorization": "issuer_jwt~kb_jwt",
+    "payment_mandate": {...},
+    "mandate_hash": "sha256_hash"
   }'
+
+# List payment methods
+curl http://localhost:8003/payment-methods?user_id=user_123
+
+# List receipts
+curl http://localhost:8003/receipts?payer_id=user_123
 ```
 
-#### 支払い方法一覧取得
+## AP2 Compliance
 
-```bash
-curl "http://localhost:8003/payment-methods?user_id=user_demo_001"
-```
+- ✅ **WebAuthn Verification** - FIDO2-compliant attestation verification
+- ✅ **Agent Token Orchestration** - AP2 Step 23 (Payment Network tokenization)
+- ✅ **SD-JWT+KB Format** - Tilde-separated, alg="none" for issuer_jwt
+- ✅ **Credential Verification** - AP2 Step 26-27 (returns agent_token to PP)
+- ✅ **Receipt Storage** - AP2 Step 29 (receipt persistence)
+- ✅ **Redis Token Store** - TTL-managed with 15-minute expiry
+- ✅ **Replay Attack Prevention** - Challenge TTL (60 seconds), sign_count verification
 
-#### 支払い方法トークン化
+## References
 
-```bash
-curl -X POST http://localhost:8003/payment-methods/tokenize \
-  -H "Content-Type: application/json" \
-  -d '{
-    "user_id": "user_demo_001",
-    "payment_method_id": "pm_001"
-  }'
-```
+- [Main README](../../README.md)
+- [Payment Network README](../payment_network/README.md)
+- [Payment Processor README](../payment_processor/README.md)
+- [AP2 Specification](https://ap2-protocol.org/specification/)
+- [WebAuthn Specification](https://www.w3.org/TR/webauthn/)
 
 ---
 
-## AP2シーケンスとコード対応
-
-| AP2 Step | 説明 | ファイル | 行番号 | メソッド |
-|----------|------|----------|--------|----------|
-| Step 4 | Intent Mandate署名後のWebAuthn検証 | provider.py | 264-433 | `verify_attestation()` |
-| Step 13 | Step-up認証要求 | provider.py | 556-1012 | `initiate_step_up()` |
-| Step 17-18 | 支払い方法トークン化 | provider.py | 477-554 | `tokenize_payment_method()` |
-| Step 22 | Payment Mandate署名後のWebAuthn検証 | provider.py | 264-433 | `verify_attestation()` |
-| Step 23 | Payment Network連携 (Agent Token取得) | provider.py | 1408-1478 | `_request_agent_token_from_network()` |
-| Step 26-27 | トークン検証 (Payment Processorから) | provider.py | 1160-1249 | `verify_credentials()` |
-| Step 29 | 領収書受信 | provider.py | 1065-1158 | `receive_receipt()` |
-
----
-
-## 参考リンク
-
-- **WebAuthn仕様**: https://www.w3.org/TR/webauthn-2/
-- **FIDO2**: https://fidoalliance.org/fido2/
-- **COSE (CBOR Object Signing and Encryption)**: https://datatracker.ietf.org/doc/html/rfc8152
-- **AP2プロトコル**: https://ap2-protocol.org/specification/
-- **3D Secure**: https://www.emvco.com/emv-technologies/3d-secure/
-
----
-
-## 開発者向け情報
-
-### utils/ ヘルパーパターン
-
-Credential Providerは複雑なビジネスロジックを`utils/`ヘルパークラスに分離しています。
-
-| ヘルパークラス | ファイル | 責務 | 主要メソッド |
-|------------|------|------|------------|
-| `PasskeyHelpers` | `utils/passkey_helpers.py` (176行) | WebAuthn Challenge/検証、Credential作成 | `generate_challenge()`, `verify_challenge()`, `create_credential()`, `verify_webauthn_attestation()` |
-| `TokenHelpers` | `utils/token_helpers.py` (67行) | Token生成・検証（Redis TTL管理） | `generate_token()`, `verify_token()` |
-| `StepUpHelpers` | `utils/stepup_helpers.py` (115行) | Step-up認証フロー管理（Redis Session） | `generate_step_up_challenge()`, `create_step_up_session()`, `verify_step_up_signature()` |
-| `PaymentMethodHelpers` | `utils/payment_method_helpers.py` (88行) | 支払い方法CRUD | `format_payment_methods()`, `create_payment_method()` |
-| `ReceiptHelpers` | `utils/receipt_helpers.py` (23行) | 領収書DB保存 | `save_receipt()` |
-
-**実装例（PasskeyHelpers）**:
-
-```python
-# provider.py でヘルパークラスをインポート
-from services.credential_provider.utils import PasskeyHelpers, TokenHelpers, StepUpHelpers
-
-# provider.py の __init__ でインスタンス化
-self.passkey_helpers = PasskeyHelpers(
-    rp_id=RP_ID,
-    rp_name=RP_NAME,
-    challenge_store=self.challenge_store,  # Redis SessionStore（TTL: 60秒）
-    db_manager=self.db_manager
-)
-self.token_helpers = TokenHelpers(
-    token_store=self.token_store  # Redis TokenStore（TTL: 15分）
-)
-self.stepup_helpers = StepUpHelpers(
-    session_store=self.session_store,  # Redis SessionStore（TTL: 10分）
-    challenge_store=self.challenge_store,
-    db_manager=self.db_manager
-)
-
-# エンドポイント内でヘルパーを使用（Challenge生成）
-@app.post("/register/passkey/challenge")
-async def register_passkey_challenge(request: PasskeyRegistrationChallengeRequest):
-    # ビジネスロジックをヘルパーに委譲
-    challenge, challenge_b64url = await self.passkey_helpers.generate_challenge(
-        user_id=request.user_id,
-        user_email=request.user_email
-    )
-    # ヘルパーが内部でRedisに保存（TTL: 60秒）
-    return {
-        "challenge": challenge_b64url,
-        "rp_id": RP_ID,
-        "rp_name": RP_NAME,
-        ...
-    }
-
-# エンドポイント内でヘルパーを使用（Challenge検証）
-@app.post("/register/passkey")
-async def register_passkey(request: PasskeyRegistrationRequest):
-    # Challenge検証をヘルパーに委譲
-    challenge_data = await self.passkey_helpers.verify_challenge(
-        challenge=extracted_challenge,
-        user_id=request.user_id
-    )
-    # ヘルパーが内部でRedisから削除（リプレイ攻撃防止）
-
-    # Credential作成をヘルパーに委譲
-    credential = await self.passkey_helpers.create_credential(
-        user_id=request.user_id,
-        credential_id=request.credential_id,
-        public_key=public_key_pem,
-        counter=authenticator_data_parsed["counter"]
-    )
-    return {"verified": True, "credential_id": credential.id}
-```
-
-**実装例（TokenHelpers + Redis TTL）**:
-
-```python
-# エンドポイント内でヘルパーを使用（トークン化）
-@app.post("/payment-methods/tokenize")
-async def tokenize_payment_method(request: TokenizePaymentMethodRequest):
-    # トークン生成をヘルパーに委譲
-    token = await self.token_helpers.generate_token(
-        payment_method_id=payment_method.id,
-        user_id=request.user_id,
-        ttl_seconds=15 * 60  # 15分（デフォルト）
-    )
-    # ヘルパーが内部でRedisに保存（TTL: 15分）
-    return {"token": token}
-
-# エンドポイント内でヘルパーを使用（トークン検証）
-@app.post("/credentials/verify")
-async def verify_credentials(request: VerifyCredentialsRequest):
-    # トークン検証をヘルパーに委譲（Redisから取得）
-    token_data = await self.token_helpers.verify_token(
-        token=request.token
-    )
-    # ヘルパーが内部でRedisからTTLを確認し、期限切れならNone返却
-    if not token_data:
-        raise HTTPException(status_code=401, detail="Token expired or invalid")
-    return {"verified": True, "credential_info": token_data}
-```
-
-**ヘルパーパターンの利点**:
-- **責務分離**: エンドポイントはHTTPルーティングに集中、ビジネスロジックはヘルパーに委譲
-- **Redis統合の抽象化**: TokenStore/SessionStoreをヘルパーに注入し、TTL管理を隠蔽
-- **テスタビリティ**: ヘルパークラスをモックRedisでテスト可能
-- **保守性**: WebAuthn仕様変更がPasskeyHelpersの1箇所に集約
+**Port**: 8003
+**Role**: Credential Provider
+**Protocol**: AP2 v0.2
+**Status**: Production-Ready

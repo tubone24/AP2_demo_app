@@ -418,7 +418,7 @@ cat > .env << 'EOF'
 # OpenAI API (Required for LangGraph)
 OPENAI_API_KEY=sk-proj-your-api-key-here
 
-# Optional: DMR Endpoint (alternative to OpenAI)
+# DMR Endpoint (alternative to OpenAI)
 DMR_API_URL=http://host.docker.internal:12434/engines/llama.cpp/v1
 DMR_MODEL=ai/qwen3
 DMR_API_KEY=none
@@ -438,7 +438,57 @@ OTEL_ENABLED=true
 EOF
 ```
 
-#### 2. Start All Services
+**Note**: If you're using DMR (alternative to OpenAI), you need to set up DMR before starting the services. See [DMR Setup](#dmr-setup) below.
+
+#### 2. DMR Setup (Optional)
+
+If you want to use DMR instead of OpenAI for LangGraph's LLM inference, follow these steps:
+
+**What is DMR?**
+- DMR is a local LLM inference engine that provides an OpenAI-compatible API
+- Useful for development/testing without OpenAI API costs
+- Supports various models (Qwen, Llama, etc.)
+
+**Installation**:
+
+```bash
+# 1. Install DMR (example using Homebrew on macOS)
+brew install dmr
+
+# Or download from DMR releases
+# https://github.com/your-dmr-repo/releases
+
+# 2. Download and configure a model (e.g., Qwen3)
+dmr pull ai/qwen3
+
+# 3. Start DMR server
+dmr serve --port 12434
+
+# 4. Verify DMR is running
+curl http://localhost:12434/v1/models
+```
+
+**Configuration**:
+
+In your `.env` file, set:
+```bash
+DMR_API_URL=http://host.docker.internal:12434/engines/llama.cpp/v1
+DMR_MODEL=ai/qwen3
+DMR_API_KEY=none
+```
+
+**Note**: `host.docker.internal` allows Docker containers to access the host machine's localhost.
+
+**Alternative: Use OpenAI**
+
+If you don't want to set up DMR, simply provide your OpenAI API key:
+```bash
+OPENAI_API_KEY=sk-proj-your-api-key-here
+```
+
+The Shopping Agent will automatically use OpenAI if `OPENAI_API_KEY` is set.
+
+#### 3. Start All Services
 
 ```bash
 # Build and start all services
@@ -455,7 +505,7 @@ This will start all 15 services:
 - **3 Infrastructure Services**: Redis, Meilisearch, Jaeger
 - **2 Init Services**: init-keys, init-seeds (run once at startup)
 
-#### 3. Verify Services
+#### 4. Verify Services
 
 ```bash
 # Check service health
@@ -474,7 +524,7 @@ open http://localhost:16686         # Jaeger UI (tracing)
 open http://localhost:7700          # Meilisearch UI
 ```
 
-#### 4. Demo Flow
+#### 5. Demo Flow
 
 1. **Passkey Registration** - Register at `/chat` on first visit
 2. **Product Search** - Enter "I want cute merchandise"
@@ -484,7 +534,7 @@ open http://localhost:7700          # Meilisearch UI
 6. **Payment** - Select payment method and sign
 7. **Receipt** - Download PDF receipt after payment completion
 
-#### 5. View Logs
+#### 6. View Logs
 
 ```bash
 # All services
