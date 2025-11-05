@@ -34,36 +34,31 @@ sequenceDiagram
     participant DB as Database
     participant PP as Payment Processor<br/>(Port 8004)
 
-    %% Attestation Verification Flow (AP2 Step 19-23)
+    %% Attestation Verification Flow (AP2 Step 3-4, 19-23)
     rect rgb(240, 248, 255)
-        Note over User,PN: Attestation Verification (AP2 Step 19-23)
-        User->>CP: POST /attestations/verify<br/>{attestation, client_data, payment_mandate}
-        CP->>CP: Validate WebAuthn attestation format
+        Note over User,PN: Attestation Verification (AP2 Step 3-4 or 19-23)
+        User->>CP: POST /attestations/verify<br/>{attestation, client_data, mandate}
+        CP->>CP: Validate WebAuthn attestation format (FIDO2)
         CP->>CP: Verify client_data_json
-        CP->>CP: Extract credential_id
+        CP->>CP: Extract credential_id from attestation
+        CP->>CP: Verify WebAuthn signature (ECDSA)
+        CP->>CP: Create SD-JWT+KB user_authorization
 
-        Note over CP,DB: Check if passkey exists
-        CP->>DB: Query passkey_credentials by credential_id
-        DB-->>CP: Passkey record (or null)
+        Note over CP,DB: Save attestation record
+        CP->>DB: CREATE attestation (mandate_id, user_id, credential_id)
+        DB-->>CP: Attestation saved
 
-        alt Passkey not found (Registration)
-            CP->>DB: CREATE passkey_credential
-            CP->>CP: Generate payment_method_token
-            CP->>DB: CREATE payment_method
-            CP->>Redis: Save payment_method_token → payment_method mapping (TTL: 15min)
-        else Passkey found (Authentication)
-            CP->>DB: GET payment_method by user_id
-            CP->>CP: Generate payment_method_token
-            CP->>Redis: Save payment_method_token → payment_method mapping (TTL: 15min)
+        Note over CP,PN: Conditional: Agent Token Request (AP2 Step 23)
+        alt PaymentMandate with payment_method.token
+            CP->>CP: Extract payment_method_token from PaymentMandate
+            CP->>PN: POST /network/tokenize<br/>{payment_mandate, attestation, payment_method_token}
+            Note over PN: PN validates PaymentMandate,<br/>generates agent_token (32 bytes),<br/>saves to Redis (TTL: 1h)<br/>(see Payment Network README)
+            PN-->>CP: {agent_token: "agent_tok_xxx", expires_at, network_name}
+            CP->>Redis: Save agent_token to token_data[payment_method_token]
+            CP-->>User: {verified: true, token: "cred_xxx", agent_token_received: true}
+        else IntentMandate or CartMandate (no payment_method.token)
+            CP-->>User: {verified: true, token: "cred_xxx"}
         end
-
-        Note over CP,PN: Tokenization (AP2 Step 23)
-        CP->>PN: POST /network/tokenize<br/>{payment_mandate, attestation, payment_method_token}
-        Note over PN: PN generates agent_token<br/>and saves to Redis<br/>(external processing, see PN README)
-        PN-->>CP: {agent_token, expires_at, network_name}
-
-        CP->>Redis: Update token_data with agent_token
-        CP-->>User: {verified: true, payment_method_token}
     end
 
     %% Credential Verification Flow (AP2 Step 26-27)
@@ -98,31 +93,38 @@ sequenceDiagram
 
 ### Attestation Verification
 
-**`POST /attestations/verify`** - Verify WebAuthn attestation and generate tokens (AP2 Step 19-23)
+**`POST /attestations/verify`** - Verify WebAuthn attestation (AP2 Step 3-4, 19-23)
 
 **Request**:
 ```json
 {
   "attestation": "base64_encoded_attestation_object",
   "client_data": "base64_encoded_client_data_json",
-  "payment_mandate": {
-    "id": "payment_xxx",
+  "mandate": {
+    "id": "intent_xxx | cart_xxx | payment_xxx",
     "payer_id": "user_123",
-    "amount": {"value": 2500, "currency": "JPY"}
+    "amount": {"value": 3000, "currency": "JPY"}
   },
   "credential_id": "base64_encoded_credential_id",
   "user_id": "user_123"
 }
 ```
 
-**Response**:
+**Response (PaymentMandate with payment_method.token)**:
 ```json
 {
   "verified": true,
-  "payment_method_token": "tok_abc123xyz789",
-  "payment_method_id": "pm_xxx",
+  "token": "cred_abc123xyz789",
   "agent_token_received": true,
   "network_name": "DemoPaymentNetwork"
+}
+```
+
+**Response (IntentMandate or CartMandate)**:
+```json
+{
+  "verified": true,
+  "token": "cred_abc123xyz789"
 }
 ```
 
@@ -130,12 +132,19 @@ sequenceDiagram
 
 **Processing Steps**:
 1. Verify WebAuthn attestation format (FIDO2)
-2. Check if passkey exists in database
-3. If new passkey: Register and create payment method
-4. If existing passkey: Retrieve payment method
-5. Generate payment_method_token (Redis, 15-min TTL)
-6. Call Payment Network for agent_token (AP2 Step 23)
-7. Store agent_token in Redis token_data
+2. Verify client_data_json
+3. Extract credential_id from attestation
+4. Verify WebAuthn signature (ECDSA)
+5. Create SD-JWT+KB user_authorization
+6. Save attestation record to database
+7. **Conditional**: If mandate is PaymentMandate with `payment_method.token`:
+   - Extract payment_method_token from PaymentMandate
+   - Call Payment Network `/network/tokenize` (AP2 Step 23)
+   - Receive agent_token from Payment Network
+   - Store agent_token in Redis token_data[payment_method_token]
+   - Return `{verified: true, token, agent_token_received: true}`
+8. **Otherwise** (IntentMandate or CartMandate):
+   - Return `{verified: true, token}`
 
 ### Credential Verification
 
