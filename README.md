@@ -1,6 +1,6 @@
-# AP2 Demo Application v2
+# AP2 Demo Application
 
-AP2 Protocol (Agent Payments Protocol v0.2) implementation with microservices architecture. Built with FastAPI, Docker Compose, Next.js, LangGraph, MCP, Meilisearch, Redis, WebAuthn, and OpenTelemetry.
+AP2 Protocol (Agent Payments Protocol) implementation with microservices architecture. Built with FastAPI, Docker Compose, Next.js, LangGraph, MCP, Meilisearch, Redis, WebAuthn, and OpenTelemetry.
 
 ## Overview
 
