@@ -2,6 +2,8 @@
 
 AP2 Protocol (Agent Payments Protocol) implementation with microservices architecture. Built with FastAPI, Docker Compose, Next.js, LangGraph, MCP, Meilisearch, Redis, WebAuthn, and OpenTelemetry.
 
+![demo](./docs/images/demo.gif)
+
 ## Overview
 
 This application is a implementation of the AP2 (Agent Payments Protocol) specification using a microservices architecture. It features **15 services** (7 Backend + 2 MCP + 1 Frontend + 1 Redis + 1 Meilisearch + 1 Jaeger + 1 Payment Network + 1 Init Services) that work together to provide:
