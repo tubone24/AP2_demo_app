@@ -275,8 +275,14 @@ class CredentialProviderService(BaseAgent):
 
                 logger.info(f"[register_passkey_challenge] Saved challenge to Redis KV (TTL: {WEBAUTHN_CHALLENGE_TTL}s)")
 
-                # 注意: 現在は"none" attestationを使用
-                # 本番環境では"direct"または"indirect"を使用し、challengeを厳密に検証すべき
+                # AP2完全準拠: attestation conveyanceは"none"を使用
+                # 理由:
+                #   - AP2仕様はattestation statementを要求していない（Mandate署名検証が重要）
+                #   - 2025年現在、1Password等のsynced passkey providerはattestation statementを提供しない（プライバシー保護）
+                #   - すべてのPasskey互換認証器との互換性を確保
+                #   - エンタープライズ用途（特定ハードウェアキーのみ許可）以外では"none"が業界標準
+                #
+                # 注意: challengeの検証は verify_webauthn_signature() で実装済み（line 585-607）
 
                 # WebAuthn Registration Optionsを返す
                 return {

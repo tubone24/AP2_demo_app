@@ -38,13 +38,6 @@ from common.models import (
     UserResponse,
     UserInDB,
     Token,
-    # [DEPRECATED] Passkey認証モデル（削除予定）
-    PasskeyRegistrationChallenge,
-    PasskeyRegistrationChallengeResponse,
-    PasskeyRegistrationRequest,
-    PasskeyLoginChallenge,
-    PasskeyLoginChallengeResponse,
-    PasskeyLoginRequest,
 )
 from common.database import (
     DatabaseManager,
@@ -52,11 +45,10 @@ from common.database import (
     TransactionCRUD,
     AgentSessionCRUD,
     UserCRUD,
-    PasskeyCredentialCRUD,
 )
 from common.mandate_types import IntentMandate
 from common.risk_assessment import RiskAssessmentEngine
-from common.crypto import WebAuthnChallengeManager, DeviceAttestationManager
+from common.crypto import WebAuthnChallengeManager
 from common.user_authorization import create_user_authorization_vp
 from common.auth import (
     # JWT認証
@@ -219,16 +211,10 @@ class ShoppingAgent(BaseAgent):
         self.cart_helpers = CartHelpers(signature_manager=self.signature_manager)
         # A2AHelpersは親クラスの初期化後にa2a_handlerが利用可能になるため、後で初期化
 
-        # WebAuthn challenge管理
-        # - Layer 1認証用: Passkey登録/ログイン（本追加）
-        # - Layer 2署名用: Intent/Consent署名（既存）
+        # WebAuthn challenge管理（Layer 2署名用: Mandate署名）
+        # 注意: Layer 1認証（HTTPセッション）はメール/パスワード認証を使用
+        # Mandate署名はCredential Providerで実施（AP2完全準拠）
         self.webauthn_challenge_manager = WebAuthnChallengeManager(challenge_ttl_seconds=60)
-
-        # Passkey認証用のchallenge管理（ログイン用）
-        self.passkey_auth_challenge_manager = WebAuthnChallengeManager(challenge_ttl_seconds=120)  # ログインは2分
-
-        # Device Attestation管理（WebAuthn署名検証用 - AP2完全準拠）
-        self.attestation_manager = DeviceAttestationManager(self.key_manager)
 
         # LangGraph Shopping Flow（会話フロー：StateGraph版、AP2完全準拠）
         try:
@@ -485,292 +471,9 @@ class ShoppingAgent(BaseAgent):
                 raise HTTPException(status_code=500, detail=f"Login failed: {e}")
 
         # ========================================
-        # [DEPRECATED] Passkey認証エンドポイント（削除予定）
-        # AP2完全準拠により、Passkey認証はCredential Providerのみで使用
+        # HTTPセッション認証はメール/パスワード認証を使用（上記の /auth/register, /auth/login）
+        # Mandate署名認証はCredential Providerで実施（AP2完全準拠）
         # ========================================
-
-        @self.app.post("/auth/passkey/register/challenge", response_model=PasskeyRegistrationChallengeResponse)
-        async def passkey_register_challenge(request: PasskeyRegistrationChallenge):
-            """
-            POST /auth/passkey/register/challenge - Passkey登録用challengeを生成
-
-            AP2仕様準拠:
-            - ユーザー登録時にPasskey（WebAuthn）を作成
-            - email: AP2 payer_emailとして使用（ただしオプション - PII保護）
-
-            フロー:
-            1. ユーザーが username + email を入力
-            2. challengeを生成
-            3. フロントエンドがWebAuthn Registration APIを呼び出し
-            """
-            try:
-                # 既存ユーザーチェック
-                async with self.db_manager.get_session() as session:
-                    existing_user = await UserCRUD.get_by_email(session, request.email)
-                    if existing_user:
-                        raise HTTPException(status_code=400, detail="Email already registered")
-
-                # 仮ユーザーID生成（登録完了時に確定）
-                user_id = f"usr_{uuid.uuid4().hex[:16]}"
-
-                # WebAuthn challenge生成
-                challenge_info = self.passkey_auth_challenge_manager.generate_challenge(
-                    user_id=user_id,
-                    context="passkey_registration"
-                )
-
-                logger.info(f"[Auth] Passkey registration challenge generated: email={request.email}, user_id={user_id}")
-
-                return PasskeyRegistrationChallengeResponse(
-                    challenge=challenge_info["challenge"],
-                    user_id=user_id,
-                    rp_id=os.getenv("WEBAUTHN_RP_ID", "localhost"),
-                    rp_name="AP2 Demo Shopping Agent",
-                    timeout=WEBAUTHN_CHALLENGE_TIMEOUT_MS
-                )
-
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.error(f"[passkey_register_challenge] Error: {e}", exc_info=True)
-                raise HTTPException(status_code=500, detail=f"Failed to generate challenge: {e}")
-
-        @self.app.post("/auth/passkey/register", response_model=Token)
-        async def passkey_register(request: PasskeyRegistrationRequest):
-            """
-            POST /auth/passkey/register - Passkeyを登録してJWTを発行
-
-            AP2仕様準拠:
-            - email: PaymentMandate.payer_emailとして使用（オプション）
-            - Passkey公開鍵をDB保存（秘密鍵は保存しない）
-            """
-            try:
-                # WebAuthn Attestation検証
-                # 注意: 本番環境では完全なWebAuthn検証が必要
-                # ここでは簡易実装（challenge存在確認のみ）
-                logger.info(f"[Auth] Passkey registration request: email={request.email}")
-
-                # ユーザー作成
-                user_id = f"usr_{uuid.uuid4().hex[:16]}"
-                async with self.db_manager.get_session() as session:
-                    # Userレコード作成
-                    user = await UserCRUD.create(session, {
-                        "id": user_id,
-                        "display_name": request.username,
-                        "email": request.email
-                    })
-
-                    # PasskeyCredentialレコード作成
-                    await PasskeyCredentialCRUD.create(session, {
-                        "credential_id": request.credential_id,
-                        "user_id": user_id,
-                        "public_key_cose": request.public_key,
-                        "counter": 0,
-                        "transports": request.transports or []
-                    })
-
-                logger.info(f"[Auth] User registered with Passkey: user_id={user_id}, email={request.email}")
-
-                # JWTトークン発行
-                access_token = create_access_token(
-                    data={"user_id": user_id, "email": request.email}
-                )
-
-                # UserResponseに変換
-                user_response = UserResponse(
-                    id=user.id,
-                    username=user.display_name,
-                    email=user.email,
-                    created_at=user.created_at,
-                    is_active=bool(user.is_active)
-                )
-
-                return Token(
-                    access_token=access_token,
-                    token_type="bearer",
-                    user=user_response
-                )
-
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.error(f"[passkey_register] Error: {e}", exc_info=True)
-                raise HTTPException(status_code=500, detail=f"Registration failed: {e}")
-
-        @self.app.post("/auth/passkey/login/challenge", response_model=PasskeyLoginChallengeResponse)
-        async def passkey_login_challenge(request: PasskeyLoginChallenge):
-            """
-            POST /auth/passkey/login/challenge - Passkeyログイン用challengeを生成
-
-            AP2仕様準拠:
-            - email でユーザーを識別
-            - 登録済みPasskey credentialリストを返す
-            """
-            try:
-                # ユーザー検索
-                async with self.db_manager.get_session() as session:
-                    user = await UserCRUD.get_by_email(session, request.email)
-                    if not user:
-                        raise HTTPException(status_code=404, detail="User not found")
-
-                    # ユーザーのPasskey credential取得
-                    credentials = await PasskeyCredentialCRUD.get_by_user_id(session, user.id)
-                    if not credentials:
-                        raise HTTPException(status_code=404, detail="No Passkey registered")
-
-                # WebAuthn challenge生成
-                challenge_info = self.passkey_auth_challenge_manager.generate_challenge(
-                    user_id=user.id,
-                    context="passkey_login"
-                )
-
-                # credential IDリスト作成
-                allowed_credentials = [
-                    {
-                        "type": "public-key",
-                        "id": cred.credential_id,
-                        "transports": json.loads(cred.transports) if cred.transports else []
-                    }
-                    for cred in credentials
-                ]
-
-                logger.info(f"[Auth] Passkey login challenge generated: email={request.email}, credentials={len(allowed_credentials)}")
-
-                return PasskeyLoginChallengeResponse(
-                    challenge=challenge_info["challenge"],
-                    rp_id=os.getenv("WEBAUTHN_RP_ID", "localhost"),
-                    timeout=WEBAUTHN_CHALLENGE_TIMEOUT_MS,
-                    allowed_credentials=allowed_credentials
-                )
-
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.error(f"[passkey_login_challenge] Error: {e}", exc_info=True)
-                raise HTTPException(status_code=500, detail=f"Failed to generate challenge: {e}")
-
-        @self.app.post("/auth/passkey/login", response_model=Token)
-        async def passkey_login(request: PasskeyLoginRequest):
-            """
-            POST /auth/passkey/login - Passkeyでログインして JWTを発行
-
-            AP2仕様準拠:
-            - Passkey署名を検証
-            - sign_counterでリプレイ攻撃を検出
-            - JWTに user_id + email（payer_email）を含める
-            """
-            try:
-                # ユーザー検索
-                async with self.db_manager.get_session() as session:
-                    user = await UserCRUD.get_by_email(session, request.email)
-                    if not user:
-                        raise HTTPException(status_code=401, detail="Authentication failed")
-
-                    # Passkey Credential取得
-                    credential = await PasskeyCredentialCRUD.get_by_credential_id(
-                        session, request.credential_id
-                    )
-                    if not credential or credential.user_id != user.id:
-                        raise HTTPException(status_code=401, detail="Invalid credential")
-
-                    logger.info(f"[Auth] Passkey login verification: user_id={user.id}, credential_id={request.credential_id[:16]}...")
-
-                    # AP2完全準拠: WebAuthn Assertion完全検証（COSE署名検証）
-                    # Step 1: client_data_jsonからchallengeを抽出
-                    import base64
-                    try:
-                        client_data_json_b64 = request.client_data_json
-
-                        # Base64URLデコード
-                        padding_needed = len(client_data_json_b64) % 4
-                        if padding_needed:
-                            client_data_json_b64 += '=' * (4 - padding_needed)
-
-                        client_data_json_b64_std = client_data_json_b64.replace('-', '+').replace('_', '/')
-                        client_data_json_bytes = base64.b64decode(client_data_json_b64_std)
-                        client_data = json.loads(client_data_json_bytes.decode('utf-8'))
-
-                        received_challenge = client_data.get("challenge")
-                        if not received_challenge:
-                            logger.error("[Auth] Challenge not found in client_data_json")
-                            raise HTTPException(status_code=401, detail="Challenge not found")
-
-                        logger.debug(f"[Auth] Received challenge: {received_challenge[:16]}...")
-
-                        # Step 2: Challenge検証（WebAuthnChallengeManagerは使えない: challenge_idがないため）
-                        # フロントエンドから送られてきたchallengeをそのまま使用
-                        # 注意: 本来はchallenge_idベースの検証が必要だが、現在のフロントエンド実装では
-                        # challengeのみが送られてくるため、直接challengeを使用
-                        challenge = received_challenge
-
-                    except (json.JSONDecodeError, base64.binascii.Error) as e:
-                        logger.error(f"[Auth] Failed to parse client_data_json: {e}")
-                        raise HTTPException(status_code=401, detail="Invalid client_data_json")
-
-                    # Step 3: WebAuthn署名検証（完全な暗号学的検証 - AP2完全準拠）
-                    # WebAuthnAttestation形式に変換
-                    webauthn_auth_result = {
-                        "response": {
-                            "clientDataJSON": request.client_data_json,
-                            "authenticatorData": request.authenticator_data,
-                            "signature": request.signature,
-                        }
-                    }
-
-                    verified, new_counter = self.attestation_manager.verify_webauthn_signature(
-                        webauthn_auth_result=webauthn_auth_result,
-                        challenge=challenge,
-                        public_key_cose_b64=credential.public_key_cose,
-                        stored_counter=credential.counter,
-                        rp_id="localhost"
-                    )
-
-                    if not verified:
-                        logger.error(f"[Auth] WebAuthn signature verification failed: user_id={user.id}")
-                        raise HTTPException(status_code=401, detail="Signature verification failed")
-
-                    # Step 4: Signature counterを更新（リプレイ攻撃対策）
-                    await PasskeyCredentialCRUD.update_counter(
-                        session, request.credential_id, new_counter
-                    )
-
-                    if new_counter == 0:
-                        logger.info(
-                            f"[Auth] Signature counter: {credential.counter} → {new_counter} "
-                            f"(AP2準拠: Authenticatorがcounterを実装していない場合)"
-                        )
-                    else:
-                        logger.info(
-                            f"[Auth] Signature counter updated: {credential.counter} → {new_counter}"
-                        )
-
-                logger.info(f"[Auth] User logged in with Passkey: user_id={user.id}, email={user.email}")
-
-                # JWTトークン発行
-                access_token = create_access_token(
-                    data={"user_id": user.id, "email": user.email}
-                )
-
-                # UserResponseに変換
-                user_response = UserResponse(
-                    id=user.id,
-                    username=user.display_name,
-                    email=user.email,
-                    created_at=user.created_at,
-                    is_active=bool(user.is_active)
-                )
-
-                return Token(
-                    access_token=access_token,
-                    token_type="bearer",
-                    user=user_response
-                )
-
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.error(f"[passkey_login] Error: {e}", exc_info=True)
-                raise HTTPException(status_code=500, detail=f"Login failed: {e}")
 
         @self.app.get("/auth/me", response_model=UserResponse)
         async def get_current_user_info(

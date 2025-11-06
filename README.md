@@ -194,25 +194,15 @@ sequenceDiagram
         SA-->>UI: SSE: IntentMandate preview
     end
 
-    %% Phase 2: Passkey Signing (IntentMandate)
+    %% Phase 2: Shipping Address Collection
     rect rgb(255, 250, 240)
-        Note over User,CP: Phase 2: WebAuthn Signing (IntentMandate)
-        UI->>CP: GET /webauthn/options
-        CP->>REDIS: Store challenge (TTL: 60s)
-        CP-->>UI: challenge + options
-        UI->>User: Please sign with Passkey
-        User->>UI: 👆 Fingerprint/FaceID
-        UI->>UI: navigator.credentials.get()
-        UI->>CP: POST /attestations/verify<br/>{intent_mandate, attestation}
-        CP->>REDIS: Verify challenge (replay protection)
-        CP->>CP: Verify WebAuthn signature (ECDSA)
-        CP->>CP: Create SD-JWT+KB user_authorization
-        CP->>DB: Save attestation
-        CP-->>UI: {verified: true, token: "..."}
-        UI->>SA: POST /sign-mandate<br/>{intent_mandate, user_authorization}
-        SA->>SA: Add user_authorization to IntentMandate
-        SA->>DB: Save signed IntentMandate
-        SA-->>UI: Signed IntentMandate
+        Note over User,SA: Phase 2: Shipping Address Collection
+        SA-->>UI: SSE: "配送先を入力してください"
+        UI->>User: Display shipping form
+        User->>UI: Enter shipping address
+        UI->>SA: POST /chat/stream<br/>{shipping_address}
+        SA->>SA: Save shipping_address to session
+        SA->>DB: Update session
     end
 
     %% Phase 3: A2A Communication and CartMandate Generation
@@ -244,27 +234,35 @@ sequenceDiagram
         SA-->>UI: SSE: cart_candidates
     end
 
-    %% Phase 4: Cart Selection and Signing
+    %% Phase 4: Cart Selection and Signing (AP2 Step 5-6)
     rect rgb(255, 245, 240)
-        Note over User,SA: Phase 4: Cart Selection & WebAuthn Signing
+        Note over User,CP: Phase 4: Cart Selection & WebAuthn Signing (AP2 Step 5-6)
         UI->>User: Display cart options (carousel)
         User->>UI: Select cart
-        UI->>SAMCP: MCP: select_cart
-        SAMCP->>SA: Selected cart_id
+        UI->>SA: POST /chat/stream<br/>{user_input: "1番目のカートを選択"}
+        SA->>SA: LangGraph: select_cart_node
+        SA->>SA: Save selected cart_mandate to session
+        SA-->>UI: SSE: signature_request<br/>{mandate_type: "cart", mandate: {...}}
+
+        Note over UI,CP: WebAuthn Signature Collection
         UI->>CP: GET /webauthn/options
         CP->>REDIS: Store challenge (TTL: 60s)
-        CP-->>UI: challenge
-        UI->>User: Please sign with Passkey
-        User->>UI: 👆 Authenticate
-        UI->>CP: POST /attestations/verify<br/>{cart_mandate, attestation}
-        CP->>REDIS: Verify challenge
-        CP->>CP: Verify WebAuthn signature
+        CP-->>UI: {challenge, rp_id, timeout}
+        UI->>User: Please sign CartMandate with Passkey
+        User->>UI: 👆 Fingerprint/FaceID
+        UI->>UI: navigator.credentials.get()
+        UI->>CP: POST /attestations/verify<br/>{mandate: cart_mandate, attestation}
+        CP->>REDIS: Verify challenge (replay protection)
+        CP->>CP: Verify WebAuthn signature (ECDSA)
         CP->>CP: Create SD-JWT+KB user_authorization
-        CP-->>UI: {verified: true, token: "..."}
-        UI->>SA: POST /sign-cart<br/>{cart_id, user_authorization}
+        CP->>DB: Save attestation record
+        CP-->>UI: {verified: true, token: "cred_xxx"}
+
+        Note over UI,SA: Submit Signed CartMandate
+        UI->>SA: POST /cart/submit-signature<br/>{cart_mandate_id, user_authorization: SD-JWT+KB}
         SA->>SA: Add user_authorization to CartMandate
         SA->>DB: Save signed CartMandate
-        SA-->>UI: Signed CartMandate
+        SA-->>UI: {status: "success", cart_mandate_id}
     end
 
     %% Phase 5: Payment Processing (AP2 Step 17-29)
@@ -272,29 +270,34 @@ sequenceDiagram
         Note over User,PP: Phase 5: Payment Processing (AP2 Steps 17-29)
 
         %% Step 17-19: Payment Method Selection & Tokenization
-        UI->>User: Select payment method
-        User->>UI: "Credit Card xxxx-1234"
-        UI->>CP: GET /payment-methods?user_id=...
+        SA-->>UI: SSE: payment_method_selection<br/>{payment_methods: [...]}
+        UI->>User: Display payment methods
+        User->>UI: Select payment method (e.g., "Credit Card xxxx-1234")
+        UI->>SA: POST /chat/stream<br/>{user_input: "1番目の支払い方法"}
+        SA->>SA: LangGraph: select_payment_method_node
+        SA->>CP: GET /payment-methods?user_id=...
         CP->>DB: Fetch payment methods
         DB-->>CP: Payment methods
-        CP-->>UI: Payment methods
-        UI->>CP: POST /payment-methods/tokenize<br/>{payment_method_id}
-        CP->>REDIS: Generate secure token (TTL: 15min)
-        CP-->>UI: {token: "tok_xxx", expires_at: "..."}
+        CP-->>SA: {payment_methods: [...]}
+        SA->>CP: POST /payment-methods/tokenize<br/>{payment_method_id}
+        CP->>REDIS: Generate payment_method_token (TTL: 15min)
+        CP-->>SA: {token: "tok_xxx", expires_at: "..."}
 
-        %% Step 20-22: PaymentMandate Creation
-        UI->>SAMCP: MCP: build_payment<br/>{cart_mandate, payment_method_token}
-        SAMCP->>SAMCP: Risk assessment (amount, method, history)
-        SAMCP->>SAMCP: Create PaymentMandate
-        SAMCP-->>UI: PaymentMandate preview
+        %% Step 20-22: PaymentMandate Creation (LangGraph)
+        SA->>SA: LangGraph: create_payment_mandate_node
+        SA->>SA: Risk assessment (amount, method, history)
+        SA->>SA: Create PaymentMandate with payment_method_token
+        SA-->>UI: SSE: signature_request<br/>{mandate_type: "payment", mandate: {...}}
 
         %% Step 23: WebAuthn Verification & Agent Token Issuance (AP2完全準拠)
+        Note over UI,CP: WebAuthn Signature Collection
         UI->>CP: GET /webauthn/options
         CP->>REDIS: Store challenge (TTL: 60s)
-        CP-->>UI: challenge
+        CP-->>UI: {challenge, rp_id, timeout}
         UI->>User: Final Passkey confirmation
-        User->>UI: 👆 Confirm
-        UI->>CP: POST /attestations/verify<br/>{payment_mandate, attestation}
+        User->>UI: 👆 Confirm Payment
+        UI->>UI: navigator.credentials.get()
+        UI->>CP: POST /attestations/verify<br/>{mandate: payment_mandate, attestation}
         CP->>REDIS: Verify challenge (replay protection)
         CP->>CP: Verify WebAuthn signature (ECDSA)
         CP->>CP: Create SD-JWT+KB user_authorization
@@ -311,8 +314,11 @@ sequenceDiagram
         CP-->>UI: {verified: true, token: "cred_xxx"}
 
         %% Step 24-25: Execute Payment
-        UI->>SAMCP: MCP: execute_payment<br/>{payment_mandate, credential_token}
-        SAMCP->>PP: POST /process<br/>{payment_mandate, cart_mandate, credential_token}
+        Note over UI,PP: Submit Signed PaymentMandate
+        UI->>SA: POST /payment/submit-attestation<br/>{session_id, attestation}
+        SA->>SA: LangGraph: execute_payment_node
+        SA->>SA: Add user_authorization to PaymentMandate
+        SA->>PP: POST /authorize<br/>{payment_mandate (with user_authorization)}
         PP->>PP: Validate PaymentMandate
         PP->>PP: Validate Mandate Chain<br/>(Intent → Cart → Payment)
         PP->>PP: Verify user_authorization (SD-JWT+KB)
