@@ -386,6 +386,74 @@ cd services/payment_network && python main.py
 cd frontend && npm run dev
 ```
 
+## Testing
+
+This project includes comprehensive test coverage for core functionality.
+
+### Running Tests
+
+```bash
+# Install test dependencies
+uv pip install --system pytest pytest-asyncio
+
+# Run all tests
+pytest tests/ -v
+
+# Run specific test file
+pytest tests/test_crypto.py -v
+
+# Run specific test class
+pytest tests/test_database.py::TestProductCRUD -v
+
+# Run with coverage (requires pytest-cov)
+pytest tests/ --cov=common --cov=services --cov-report=html
+```
+
+### Test Structure
+
+```
+tests/
+├── __init__.py
+├── conftest.py                        # Pytest fixtures and configuration
+├── test_crypto.py                     # Cryptography tests (21 tests)
+├── test_database.py                   # Database CRUD tests (28 tests)
+├── test_shopping_agent_api.py         # Shopping Agent API tests (14 tests)
+└── test_payment_processor_api.py      # Payment Processor API tests (13 tests)
+```
+
+### Test Coverage
+
+- **Cryptography Module** (`common/crypto.py`):
+  - JSON canonicalization and mandate hashing
+  - ECDSA and Ed25519 key generation/management
+  - Signature creation and verification
+  - Secure storage encryption/decryption
+  - WebAuthn challenge management
+  - Device attestation
+
+- **Database Module** (`common/database.py`):
+  - Product, User, Mandate CRUD operations
+  - Transaction and session management
+  - Passkey credential storage
+  - Payment method and receipt management
+
+- **API Modules**:
+  - Shopping Agent authentication and mandate structures
+  - Payment Processor validation and tokenization
+  - A2A message structures
+  - Risk assessment logic
+
+### Continuous Integration
+
+Tests are automatically run on every push and pull request via GitHub Actions:
+
+```yaml
+# .github/workflows/test.yml
+# Tests run on Python 3.10 and 3.11
+```
+
+View test results in the Actions tab of the GitHub repository.
+
 ## Technology Stack
 
 ### Backend
