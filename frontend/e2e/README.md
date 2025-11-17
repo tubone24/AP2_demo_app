@@ -76,18 +76,6 @@ npm run test:e2e:report
 - ナビゲーション: `nav-{target}` (例: `nav-shopping-chat`)
 - 商品カード: `product-card-{id}` (例: `product-card-123`)
 
-## CI/CD
-
-GitHub Actionsで自動的にE2Eテストが実行されます。
-
-ワークフローファイル: `.github/workflows/e2e-tests.yml`
-
-- プッシュ時に自動実行
-- プルリクエスト時に自動実行
-- Docker Composeでサービスを起動
-- Playwrightテストを実行
-- テスト結果とレポートをアーティファクトとして保存
-
 ## トラブルシューティング
 
 ### テストが失敗する場合
@@ -99,12 +87,6 @@ GitHub Actionsで自動的にE2Eテストが実行されます。
 ```bash
 npx playwright install chromium
 ```
-
-### CI/CDでテストが失敗する場合
-
-1. GitHub Actionsのログを確認してください
-2. Dockerログを確認してください（ワークフローに含まれています）
-3. アップロードされたPlaywrightレポートを確認してください
 
 ## 参考資料
 
