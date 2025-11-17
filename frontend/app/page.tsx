@@ -1,9 +1,9 @@
 export default function Home() {
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center p-24">
+    <main className="flex min-h-screen flex-col items-center justify-center p-24" data-testid="home-page">
       <div className="z-10 max-w-5xl w-full items-center justify-center font-mono text-sm">
-        <h1 className="text-4xl font-bold mb-4">AP2 Demo App v2</h1>
-        <p className="text-lg text-muted-foreground mb-8">
+        <h1 className="text-4xl font-bold mb-4" data-testid="home-title">AP2 Demo App v2</h1>
+        <p className="text-lg text-muted-foreground mb-8" data-testid="home-subtitle">
           Agent Payments Protocol - Microservices Architecture
         </p>
 
@@ -11,6 +11,7 @@ export default function Home() {
           <a
             href="/chat"
             className="group rounded-lg border border-gray-300 px-5 py-4 transition-colors hover:border-gray-400 hover:bg-gray-100 hover:dark:border-neutral-700 hover:dark:bg-neutral-800/30"
+            data-testid="nav-shopping-chat"
           >
             <h2 className="mb-3 text-2xl font-semibold">
               Shopping Chat{" "}
@@ -26,6 +27,7 @@ export default function Home() {
           <a
             href="/payment-methods"
             className="group rounded-lg border border-blue-300 px-5 py-4 transition-colors hover:border-blue-400 hover:bg-blue-50 hover:dark:border-blue-700 hover:dark:bg-blue-900/30"
+            data-testid="nav-payment-methods"
           >
             <h2 className="mb-3 text-2xl font-semibold">
               支払い方法管理{" "}
@@ -41,6 +43,7 @@ export default function Home() {
           <a
             href="/merchant"
             className="group rounded-lg border border-gray-300 px-5 py-4 transition-colors hover:border-gray-400 hover:bg-gray-100 hover:dark:border-neutral-700 hover:dark:bg-neutral-800/30"
+            data-testid="nav-merchant-dashboard"
           >
             <h2 className="mb-3 text-2xl font-semibold">
               Merchant Dashboard{" "}

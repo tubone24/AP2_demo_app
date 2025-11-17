@@ -22,7 +22,7 @@ export function ProductCard({ product, onAddToCart }: ProductCardProps) {
   const isLocalPath = imageUrl.startsWith("/");
 
   return (
-    <Card className="flex flex-col h-full">
+    <Card className="flex flex-col h-full" data-testid={`product-card-${product.id}`}>
       <CardContent className="flex-1 p-4">
         <div className="aspect-square bg-muted rounded-md mb-3 overflow-hidden relative">
           <Image
@@ -33,15 +33,16 @@ export function ProductCard({ product, onAddToCart }: ProductCardProps) {
             sizes="(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 33vw"
             unoptimized={isLocalPath}
             priority={false}
+            data-testid={`product-image-${product.id}`}
           />
         </div>
-        <h3 className="font-semibold text-sm mb-1 line-clamp-2">{product.name}</h3>
-        <p className="text-xs text-muted-foreground line-clamp-2 mb-2">
+        <h3 className="font-semibold text-sm mb-1 line-clamp-2" data-testid={`product-name-${product.id}`}>{product.name}</h3>
+        <p className="text-xs text-muted-foreground line-clamp-2 mb-2" data-testid={`product-description-${product.id}`}>
           {product.description}
         </p>
-        <p className="text-lg font-bold">{formattedPrice}</p>
+        <p className="text-lg font-bold" data-testid={`product-price-${product.id}`}>{formattedPrice}</p>
         {product.inventory_count !== undefined && (
-          <p className="text-xs text-muted-foreground mt-1">
+          <p className="text-xs text-muted-foreground mt-1" data-testid={`product-inventory-${product.id}`}>
             在庫: {product.inventory_count}点
           </p>
         )}
@@ -52,6 +53,7 @@ export function ProductCard({ product, onAddToCart }: ProductCardProps) {
           size="sm"
           onClick={() => onAddToCart?.(product)}
           disabled={product.inventory_count === 0}
+          data-testid={`add-to-cart-button-${product.id}`}
         >
           <ShoppingCart className="w-4 h-4 mr-2" />
           カートに追加

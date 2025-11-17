@@ -80,7 +80,7 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100 px-4">
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100 px-4" data-testid="login-page">
       <div className="max-w-md w-full bg-white rounded-2xl shadow-xl p-8">
         {/* ヘッダー */}
         <div className="text-center mb-8">
@@ -89,7 +89,7 @@ export default function LoginPage() {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1" />
             </svg>
           </div>
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">
+          <h1 className="text-3xl font-bold text-gray-900 mb-2" data-testid="login-title">
             ログイン
           </h1>
           <p className="text-gray-600">
@@ -101,7 +101,7 @@ export default function LoginPage() {
         </div>
 
         {/* フォーム */}
-        <form onSubmit={handleSubmit} className="space-y-6">
+        <form onSubmit={handleSubmit} className="space-y-6" data-testid="login-form">
           {/* メールアドレス */}
           <div>
             <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-2">
@@ -116,6 +116,7 @@ export default function LoginPage() {
               className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
               disabled={loading}
               required
+              data-testid="login-email-input"
             />
           </div>
 
@@ -133,12 +134,13 @@ export default function LoginPage() {
               className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
               disabled={loading}
               required
+              data-testid="login-password-input"
             />
           </div>
 
           {/* エラーメッセージ */}
           {error && (
-            <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">
+            <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm" data-testid="login-error">
               {error}
             </div>
           )}
@@ -148,6 +150,7 @@ export default function LoginPage() {
             type="submit"
             disabled={loading}
             className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-3 px-4 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+            data-testid="login-submit-button"
           >
             {loading ? (
               <>
@@ -171,7 +174,7 @@ export default function LoginPage() {
           <div className="text-center">
             <p className="text-sm text-gray-600">
               アカウントをお持ちでないですか？{' '}
-              <a href="/auth/register" className="text-indigo-600 hover:text-indigo-800 font-medium">
+              <a href="/auth/register" className="text-indigo-600 hover:text-indigo-800 font-medium" data-testid="register-link">
                 新規登録
               </a>
             </p>
