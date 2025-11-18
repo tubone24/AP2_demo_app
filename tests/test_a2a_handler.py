@@ -199,6 +199,253 @@ class TestA2AMessageHandler:
         is_valid2 = await handler.verify_message_signature(message1)
         assert not is_valid2
 
+    @pytest.mark.asyncio
+    async def test_verify_message_invalid_algorithm(self, setup_handler):
+        """Test verifying message with invalid algorithm"""
+        handler = setup_handler
+
+        # Create a message with valid signature
+        message = handler.create_response_message(
+            recipient="did:ap2:agent:merchant_agent",
+            data_type="ap2.mandates.IntentMandate",
+            data_id="test_001",
+            payload={"intent": "Test"},
+            sign=True
+        )
+
+        # Tamper with algorithm
+        message.header.proof.algorithm = "rsa"  # Invalid algorithm
+
+        # Verification should fail
+        is_valid = await handler.verify_message_signature(message)
+        assert not is_valid
+
+    @pytest.mark.asyncio
+    async def test_verify_message_invalid_kid_format(self, setup_handler):
+        """Test verifying message with invalid KID format"""
+        handler = setup_handler
+
+        # Create a message with valid signature
+        message = handler.create_response_message(
+            recipient="did:ap2:agent:merchant_agent",
+            data_type="ap2.mandates.IntentMandate",
+            data_id="test_001",
+            payload={"intent": "Test"},
+            sign=True
+        )
+
+        # Tamper with KID to invalid format (missing 'did:' prefix)
+        message.header.proof.kid = "invalid_key_id"
+
+        # Verification should fail
+        is_valid = await handler.verify_message_signature(message)
+        assert not is_valid
+
+    @pytest.mark.asyncio
+    async def test_verify_message_kid_did_mismatch(self, setup_handler):
+        """Test verifying message with KID DID mismatch"""
+        handler = setup_handler
+
+        # Create a message with valid signature
+        message = handler.create_response_message(
+            recipient="did:ap2:agent:merchant_agent",
+            data_type="ap2.mandates.IntentMandate",
+            data_id="test_001",
+            payload={"intent": "Test"},
+            sign=True
+        )
+
+        # Tamper with KID to have different DID than sender
+        message.header.proof.kid = "did:ap2:agent:different_agent#key-1"
+
+        # Verification should fail
+        is_valid = await handler.verify_message_signature(message)
+        assert not is_valid
+
+    @pytest.mark.asyncio
+    async def test_verify_message_timestamp_out_of_range(self, setup_handler):
+        """Test verifying message with timestamp out of range"""
+        handler = setup_handler
+        from datetime import timedelta
+
+        # Create a message with valid signature
+        message = handler.create_response_message(
+            recipient="did:ap2:agent:merchant_agent",
+            data_type="ap2.mandates.IntentMandate",
+            data_id="test_001",
+            payload={"intent": "Test"},
+            sign=True
+        )
+
+        # Set timestamp to 10 minutes ago (beyond 5 minute window)
+        old_timestamp = datetime.now(timezone.utc) - timedelta(minutes=10)
+        message.header.timestamp = old_timestamp.isoformat().replace('+00:00', 'Z')
+
+        # Verification should fail
+        is_valid = await handler.verify_message_signature(message)
+        assert not is_valid
+
+    @pytest.mark.asyncio
+    async def test_verify_message_invalid_timestamp_format(self, setup_handler):
+        """Test verifying message with invalid timestamp format"""
+        handler = setup_handler
+
+        # Create a message with valid signature
+        message = handler.create_response_message(
+            recipient="did:ap2:agent:merchant_agent",
+            data_type="ap2.mandates.IntentMandate",
+            data_id="test_001",
+            payload={"intent": "Test"},
+            sign=True
+        )
+
+        # Set invalid timestamp format
+        message.header.timestamp = "invalid_timestamp"
+
+        # Verification should fail
+        is_valid = await handler.verify_message_signature(message)
+        assert not is_valid
+
+    @pytest.mark.asyncio
+    async def test_verify_message_missing_nonce(self, setup_handler):
+        """Test verifying message with missing nonce"""
+        handler = setup_handler
+
+        # Create a message with valid signature
+        message = handler.create_response_message(
+            recipient="did:ap2:agent:merchant_agent",
+            data_type="ap2.mandates.IntentMandate",
+            data_id="test_001",
+            payload={"intent": "Test"},
+            sign=True
+        )
+
+        # Remove nonce
+        message.header.nonce = None
+
+        # Verification should fail
+        is_valid = await handler.verify_message_signature(message)
+        assert not is_valid
+
+    @pytest.mark.asyncio
+    async def test_handle_message_recipient_mismatch(self, setup_handler):
+        """Test handling message with recipient mismatch"""
+        handler = setup_handler
+
+        # Create a message intended for different recipient
+        message = handler.create_response_message(
+            recipient="did:ap2:agent:different_agent",  # Wrong recipient
+            data_type="ap2.mandates.IntentMandate",
+            data_id="test_001",
+            payload={"intent": "Test"},
+            sign=True
+        )
+
+        # Handle message should raise ValueError
+        with pytest.raises(ValueError, match="Message recipient mismatch"):
+            await handler.handle_message(message)
+
+    @pytest.mark.asyncio
+    async def test_handle_message_no_handler_registered(self, setup_handler):
+        """Test handling message with no handler registered"""
+        handler = setup_handler
+
+        # Create a message with type that has no handler
+        message = handler.create_response_message(
+            recipient="did:ap2:agent:shopping_agent",
+            data_type="ap2.requests.ProductSearch",  # Valid type but no handler
+            data_id="test_001",
+            payload={"query": "test"},
+            sign=True
+        )
+
+        # Handle message should raise ValueError
+        with pytest.raises(ValueError, match="No handler registered"):
+            await handler.handle_message(message)
+
+    @pytest.mark.asyncio
+    async def test_handle_message_success(self, setup_handler):
+        """Test successful message handling"""
+        handler = setup_handler
+
+        # Register a test handler
+        async def test_handler(message):
+            return {"status": "processed", "data": message.dataPart.payload}
+
+        handler.register_handler("ap2.requests.ProductSearch", test_handler)
+
+        # Create a message
+        message = handler.create_response_message(
+            recipient="did:ap2:agent:shopping_agent",
+            data_type="ap2.requests.ProductSearch",
+            data_id="test_001",
+            payload={"query": "running shoes"},
+            sign=True
+        )
+
+        # Handle message should succeed
+        result = await handler.handle_message(message)
+
+        assert result["status"] == "processed"
+        assert result["data"]["query"] == "running shoes"
+
+    @pytest.mark.asyncio
+    async def test_verify_message_signature_exception_handling(self, setup_handler):
+        """Test exception handling in signature verification"""
+        handler = setup_handler
+
+        # Create a message
+        message = handler.create_response_message(
+            recipient="did:ap2:agent:merchant_agent",
+            data_type="ap2.mandates.IntentMandate",
+            data_id="test_001",
+            payload={"intent": "Test"},
+            sign=True
+        )
+
+        # Corrupt the signature value to cause verification to fail
+        message.header.proof.signatureValue = "corrupted_signature_value"
+
+        # Should handle exception and return False
+        is_valid = await handler.verify_message_signature(message)
+        assert not is_valid
+
+    @pytest.mark.asyncio
+    async def test_handle_message_invalid_signature(self, setup_handler):
+        """Test handling message with invalid signature"""
+        handler = setup_handler
+
+        # Create a message and corrupt signature
+        message = handler.create_response_message(
+            recipient="did:ap2:agent:shopping_agent",
+            data_type="ap2.mandates.IntentMandate",
+            data_id="test_001",
+            payload={"intent": "test"},
+            sign=True
+        )
+
+        # Corrupt signature
+        message.header.proof.signatureValue = "corrupted"
+
+        # Should raise ValueError for invalid signature
+        with pytest.raises(ValueError, match="Invalid message signature"):
+            await handler.handle_message(message)
+
+    def test_create_error_response_without_details(self, setup_handler):
+        """Test creating error response without details"""
+        handler = setup_handler
+
+        error_response = handler.create_error_response(
+            recipient="did:ap2:agent:merchant_agent",
+            error_code="GENERIC_ERROR",
+            error_message="An error occurred"
+        )
+
+        # Validate structure
+        assert error_response.dataPart.payload["error_code"] == "GENERIC_ERROR"
+        assert error_response.dataPart.payload["error_message"] == "An error occurred"
+        assert error_response.dataPart.payload["details"] == {}
+
 
 class TestNonceManager:
     """Test NonceManager functionality"""
@@ -269,6 +516,165 @@ class TestNonceManager:
 
         # Only one should succeed
         assert sum(results) == 1
+
+    @pytest.mark.asyncio
+    async def test_nonce_manager_get_stats(self):
+        """Test nonce manager statistics retrieval"""
+        from common.nonce_manager import NonceManager
+
+        nonce_manager = NonceManager(ttl_seconds=60)
+
+        # Add some nonces
+        await nonce_manager.is_valid_nonce("nonce_001")
+        await nonce_manager.is_valid_nonce("nonce_002")
+        await nonce_manager.is_valid_nonce("nonce_003")
+
+        # Get stats
+        stats = await nonce_manager.get_stats()
+
+        assert "total_nonces" in stats
+        assert "active_nonces" in stats
+        assert "expired_nonces" in stats
+        assert "ttl_seconds" in stats
+        assert "last_cleanup" in stats
+
+        assert stats["total_nonces"] == 3
+        assert stats["active_nonces"] == 3
+        assert stats["expired_nonces"] == 0
+        assert stats["ttl_seconds"] == 60
+
+    @pytest.mark.asyncio
+    async def test_nonce_manager_clear_all(self):
+        """Test clearing all nonces"""
+        from common.nonce_manager import NonceManager
+
+        nonce_manager = NonceManager(ttl_seconds=60)
+
+        # Add nonces
+        await nonce_manager.is_valid_nonce("nonce_001")
+        await nonce_manager.is_valid_nonce("nonce_002")
+
+        # Verify they're stored
+        stats_before = await nonce_manager.get_stats()
+        assert stats_before["total_nonces"] == 2
+
+        # Clear all
+        await nonce_manager.clear_all()
+
+        # Verify they're cleared
+        stats_after = await nonce_manager.get_stats()
+        assert stats_after["total_nonces"] == 0
+
+    @pytest.mark.asyncio
+    async def test_nonce_cleanup_mechanism(self):
+        """Test automatic cleanup of expired nonces"""
+        from common.nonce_manager import NonceManager
+        import asyncio
+
+        # Short TTL and cleanup interval for testing
+        nonce_manager = NonceManager(ttl_seconds=1, cleanup_interval=1)
+
+        # Add nonces
+        await nonce_manager.is_valid_nonce("nonce_001")
+        await nonce_manager.is_valid_nonce("nonce_002")
+
+        # Wait for expiration
+        await asyncio.sleep(1.5)
+
+        # Add a new nonce to trigger cleanup
+        await nonce_manager.is_valid_nonce("nonce_003")
+
+        # Get stats
+        stats = await nonce_manager.get_stats()
+
+        # Should have 1 active nonce (nonce_003), expired ones should be cleaned
+        assert stats["active_nonces"] == 1
+
+    @pytest.mark.asyncio
+    async def test_nonce_manager_custom_ttl(self):
+        """Test nonce manager with custom TTL"""
+        from common.nonce_manager import NonceManager
+
+        nonce_manager = NonceManager(ttl_seconds=120, cleanup_interval=30)
+
+        # Verify configuration
+        stats = await nonce_manager.get_stats()
+        assert stats["ttl_seconds"] == 120
+
+    @pytest.mark.asyncio
+    async def test_nonce_multiple_expiration_cycles(self):
+        """Test nonce behavior across multiple expiration cycles"""
+        from common.nonce_manager import NonceManager
+        import asyncio
+
+        nonce_manager = NonceManager(ttl_seconds=1)
+        nonce = "test_nonce_cycle"
+
+        # First cycle
+        is_valid1 = await nonce_manager.is_valid_nonce(nonce)
+        assert is_valid1
+
+        # Wait for expiration
+        await asyncio.sleep(1.2)
+
+        # Second cycle (should be valid again)
+        is_valid2 = await nonce_manager.is_valid_nonce(nonce)
+        assert is_valid2
+
+        # Immediate reuse should fail
+        is_valid3 = await nonce_manager.is_valid_nonce(nonce)
+        assert not is_valid3
+
+        # Wait for expiration again
+        await asyncio.sleep(1.2)
+
+        # Third cycle (should be valid again)
+        is_valid4 = await nonce_manager.is_valid_nonce(nonce)
+        assert is_valid4
+
+    @pytest.mark.asyncio
+    async def test_global_nonce_manager_singleton(self):
+        """Test global nonce manager singleton pattern"""
+        from common.nonce_manager import get_global_nonce_manager
+
+        # Get instance twice
+        manager1 = get_global_nonce_manager()
+        manager2 = get_global_nonce_manager()
+
+        # Should be the same instance
+        assert manager1 is manager2
+
+        # Test functionality
+        nonce = "global_nonce_test"
+        is_valid1 = await manager1.is_valid_nonce(nonce)
+        assert is_valid1
+
+        # Should be marked as used in both instances (since they're the same)
+        is_valid2 = await manager2.is_valid_nonce(nonce)
+        assert not is_valid2
+
+    @pytest.mark.asyncio
+    async def test_nonce_manager_many_concurrent_requests(self):
+        """Test nonce manager with many concurrent requests"""
+        from common.nonce_manager import NonceManager
+        import asyncio
+
+        nonce_manager = NonceManager(ttl_seconds=60)
+
+        # Create 10 concurrent requests with different nonces
+        tasks = []
+        for i in range(10):
+            tasks.append(nonce_manager.is_valid_nonce(f"nonce_{i}"))
+
+        results = await asyncio.gather(*tasks)
+
+        # All should be valid (different nonces)
+        assert all(results)
+
+        # Verify stats
+        stats = await nonce_manager.get_stats()
+        assert stats["total_nonces"] == 10
+        assert stats["active_nonces"] == 10
 
 
 class TestRecipientInference:
