@@ -31,7 +31,7 @@ jobs:
     - name: Install dependencies
       run: |
         uv pip install --system -e .
-        uv pip install --system pytest pytest-asyncio httpx
+        uv pip install --system pytest pytest-asyncio pytest-cov httpx
 
     - name: Create test directories
       run: |
@@ -44,12 +44,12 @@ jobs:
       run: |
         pytest tests/ -v --tb=short
 
-    - name: Upload test results
+    - name: Upload coverage reports
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: test-results-${{ matrix.python-version }}
+        name: coverage-report-${{ matrix.python-version }}
         path: |
-          .pytest_cache/
           htmlcov/
+          coverage.xml
         retention-days: 7
