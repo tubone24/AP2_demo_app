@@ -12,13 +12,18 @@ Tests cover:
 import pytest
 import json
 import base64
+import hashlib
 from datetime import datetime, timezone
+from unittest.mock import patch, MagicMock, Mock
 
 from common.user_authorization import (
     base64url_encode,
     base64url_decode,
     compute_mandate_hash,
-    create_user_authorization_vp
+    create_user_authorization_vp,
+    convert_vp_to_standard_format,
+    convert_standard_format_to_vp,
+    verify_user_authorization_vp
 )
 
 
@@ -343,3 +348,353 @@ class TestUserAuthorizationSecurity:
 
         # Modification should be detected
         assert original_hash != modified_hash
+
+
+class TestComputeMandateHashErrors:
+    """Test error handling in compute_mandate_hash"""
+
+    def test_compute_mandate_hash_missing_rfc8785(self):
+        """Test that missing rfc8785 library raises ImportError"""
+        mandate = {"type": "CartMandate", "id": "cart_001"}
+
+        with patch.dict('sys.modules', {'rfc8785': None}):
+            with pytest.raises(ImportError) as exc_info:
+                compute_mandate_hash(mandate)
+
+            assert "rfc8785 library is required" in str(exc_info.value)
+
+
+class TestConvertVPFormats:
+    """Test VP format conversion functions"""
+
+    def test_convert_vp_to_standard_format(self):
+        """Test converting VP JSON to standard format"""
+        vp_json = {
+            "issuer_jwt": "header.payload.sig",
+            "kb_jwt": "kb_header.kb_payload.kb_sig"
+        }
+
+        standard_format = convert_vp_to_standard_format(vp_json)
+
+        assert isinstance(standard_format, str)
+        assert standard_format == "header.payload.sig~kb_header.kb_payload.kb_sig~"
+        assert standard_format.count("~") == 2
+
+    def test_convert_vp_to_standard_format_empty(self):
+        """Test converting empty VP to standard format"""
+        vp_json = {
+            "issuer_jwt": "",
+            "kb_jwt": ""
+        }
+
+        standard_format = convert_vp_to_standard_format(vp_json)
+        assert standard_format == "~~"
+
+    def test_convert_standard_format_to_vp(self):
+        """Test converting standard format to VP JSON"""
+        standard_format = "header.payload.sig~kb_header.kb_payload.kb_sig~"
+
+        vp = convert_standard_format_to_vp(standard_format)
+
+        assert isinstance(vp, dict)
+        assert vp["issuer_jwt"] == "header.payload.sig"
+        assert vp["kb_jwt"] == "kb_header.kb_payload.kb_sig"
+
+    def test_convert_standard_format_to_vp_invalid(self):
+        """Test converting invalid standard format raises error"""
+        invalid_format = "only_one_part"
+
+        with pytest.raises(ValueError) as exc_info:
+            convert_standard_format_to_vp(invalid_format)
+
+        assert "Invalid SD-JWT-VC format" in str(exc_info.value)
+
+    def test_convert_standard_format_to_vp_minimal(self):
+        """Test converting minimal standard format"""
+        standard_format = "issuer~kb"
+
+        vp = convert_standard_format_to_vp(standard_format)
+
+        assert vp["issuer_jwt"] == "issuer"
+        assert vp["kb_jwt"] == "kb"
+
+
+class TestCreateUserAuthorizationVPErrors:
+    """Test error cases for create_user_authorization_vp"""
+
+    def test_create_vp_missing_fields(self):
+        """Test creating VP with missing WebAuthn fields"""
+        invalid_assertion = {
+            "id": "cred_id",
+            "response": {
+                # Missing required fields
+            }
+        }
+
+        cart_mandate = {"type": "CartMandate", "id": "cart_001"}
+        payment_mandate = {"type": "PaymentMandate", "id": "pay_001"}
+
+        with pytest.raises(ValueError) as exc_info:
+            create_user_authorization_vp(
+                webauthn_assertion=invalid_assertion,
+                cart_mandate=cart_mandate,
+                payment_mandate_contents=payment_mandate,
+                user_id="user_001",
+                public_key_cose="invalid_key"
+            )
+
+        assert "Invalid WebAuthn assertion" in str(exc_info.value)
+
+    def test_create_vp_invalid_public_key_cose(self):
+        """Test creating VP with invalid COSE public key"""
+        webauthn_assertion = {
+            "id": "credential_id",
+            "response": {
+                "clientDataJSON": base64.urlsafe_b64encode(
+                    json.dumps({"challenge": "test", "type": "webauthn.get", "origin": "https://test.com"}).encode()
+                ).decode(),
+                "authenticatorData": base64.urlsafe_b64encode(b'\x00' * 37).decode(),
+                "signature": base64.urlsafe_b64encode(b'\x00' * 64).decode()
+            }
+        }
+
+        with pytest.raises(ValueError) as exc_info:
+            create_user_authorization_vp(
+                webauthn_assertion=webauthn_assertion,
+                cart_mandate={"type": "CartMandate", "id": "cart_001"},
+                payment_mandate_contents={"type": "PaymentMandate", "id": "pay_001"},
+                user_id="user_001",
+                public_key_cose="invalid_base64_!@#$"
+            )
+
+        assert "Invalid public_key_cose format" in str(exc_info.value)
+
+
+class TestVerifyUserAuthorizationVP:
+    """Test verify_user_authorization_vp function"""
+
+    def test_verify_vp_invalid_format(self):
+        """Test verifying VP with invalid format"""
+        invalid_vp = "no_tilde_separator"
+
+        with pytest.raises(ValueError) as exc_info:
+            verify_user_authorization_vp(invalid_vp)
+
+        assert "Invalid SD-JWT+KB format" in str(exc_info.value)
+
+    def test_verify_vp_invalid_kb_jwt(self):
+        """Test verifying VP with invalid KB JWT"""
+        # Create invalid VP with malformed KB JWT
+        invalid_vp = "issuer.jwt.here~invalid_kb_jwt"
+
+        with pytest.raises(ValueError) as exc_info:
+            verify_user_authorization_vp(invalid_vp)
+
+        assert "Invalid kb_jwt format" in str(exc_info.value)
+
+    def test_verify_vp_missing_transaction_data(self):
+        """Test verifying VP with missing transaction_data"""
+        # Create KB JWT without transaction_data
+        kb_payload = {
+            "aud": "did:ap2:agent:payment_processor",
+            "nonce": "test_nonce",
+            # Missing transaction_data
+        }
+        kb_payload_b64 = base64url_encode(json.dumps(kb_payload).encode())
+
+        vp = f"issuer.jwt.sig~header.{kb_payload_b64}.sig"
+
+        with pytest.raises(ValueError) as exc_info:
+            verify_user_authorization_vp(vp)
+
+        assert "transaction_data must contain" in str(exc_info.value)
+
+    def test_verify_vp_missing_webauthn_data(self):
+        """Test verifying VP with missing webauthn data"""
+        kb_payload = {
+            "aud": "did:ap2:agent:payment_processor",
+            "transaction_data": ["cart_hash", "payment_hash"],
+            # Missing webauthn data
+        }
+        kb_payload_b64 = base64url_encode(json.dumps(kb_payload).encode())
+
+        vp = f"issuer.jwt.sig~header.{kb_payload_b64}.sig"
+
+        with pytest.raises(ValueError) as exc_info:
+            verify_user_authorization_vp(vp)
+
+        assert "webauthn data not found" in str(exc_info.value)
+
+    def test_verify_vp_hash_mismatch(self):
+        """Test verifying VP with mismatched hashes"""
+        kb_payload = {
+            "aud": "did:ap2:agent:payment_processor",
+            "transaction_data": ["actual_cart_hash", "actual_payment_hash"],
+            "webauthn": {"credential_id": "cred_id"}
+        }
+        kb_payload_b64 = base64url_encode(json.dumps(kb_payload).encode())
+
+        vp = f"issuer.jwt.sig~header.{kb_payload_b64}.sig"
+
+        with pytest.raises(ValueError) as exc_info:
+            verify_user_authorization_vp(
+                vp,
+                expected_cart_hash="expected_cart_hash",
+                expected_payment_hash="actual_payment_hash"
+            )
+
+        assert "Cart hash mismatch" in str(exc_info.value)
+
+    def test_verify_vp_payment_hash_mismatch(self):
+        """Test verifying VP with mismatched payment hash"""
+        kb_payload = {
+            "aud": "did:ap2:agent:payment_processor",
+            "transaction_data": ["actual_cart_hash", "actual_payment_hash"],
+            "webauthn": {"credential_id": "cred_id"}
+        }
+        kb_payload_b64 = base64url_encode(json.dumps(kb_payload).encode())
+
+        vp = f"issuer.jwt.sig~header.{kb_payload_b64}.sig"
+
+        with pytest.raises(ValueError) as exc_info:
+            verify_user_authorization_vp(
+                vp,
+                expected_cart_hash="actual_cart_hash",
+                expected_payment_hash="expected_payment_hash"
+            )
+
+        assert "Payment hash mismatch" in str(exc_info.value)
+
+    def test_verify_vp_success_without_hash_check(self):
+        """Test successful VP verification without hash checks"""
+        kb_payload = {
+            "aud": "did:ap2:agent:payment_processor",
+            "transaction_data": ["cart_hash_123", "payment_hash_456"],
+            "webauthn": {
+                "credential_id": "cred_id",
+                "authenticator_data": "auth_data",
+                "client_data_json": "client_data",
+                "user_handle": "user_handle"
+            }
+        }
+        kb_payload_b64 = base64url_encode(json.dumps(kb_payload).encode())
+
+        # Create issuer JWT without cnf claim
+        issuer_payload = {
+            "iss": "did:ap2:user:test",
+            "sub": "did:ap2:user:test"
+        }
+        issuer_payload_b64 = base64url_encode(json.dumps(issuer_payload).encode())
+
+        vp = f"header.{issuer_payload_b64}.~header.{kb_payload_b64}.sig"
+
+        result = verify_user_authorization_vp(vp)
+
+        assert result["verified"] is True
+        assert result["cart_hash"] == "cart_hash_123"
+        assert result["payment_hash"] == "payment_hash_456"
+        assert "webauthn_assertion" in result
+
+    def test_verify_vp_with_signature_verification(self):
+        """Test VP verification with signature verification"""
+        # Create a mock public key
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.hazmat.backends import default_backend
+
+        private_key = ec.generate_private_key(ec.SECP256R1(), default_backend())
+        public_key = private_key.public_key()
+
+        # Get public key coordinates
+        x_bytes = public_key.public_numbers().x.to_bytes(32, byteorder='big')
+        y_bytes = public_key.public_numbers().y.to_bytes(32, byteorder='big')
+
+        # Create issuer JWT with cnf claim
+        issuer_payload = {
+            "iss": "did:ap2:user:test",
+            "sub": "did:ap2:user:test",
+            "cnf": {
+                "jwk": {
+                    "kty": "EC",
+                    "crv": "P-256",
+                    "x": base64url_encode(x_bytes),
+                    "y": base64url_encode(y_bytes)
+                }
+            }
+        }
+        issuer_payload_b64 = base64url_encode(json.dumps(issuer_payload).encode())
+
+        # Create authenticator data and client data
+        authenticator_data = b'\x00' * 37
+        client_data_json = json.dumps({"challenge": "test", "type": "webauthn.get"}).encode()
+
+        # Sign the data
+        from cryptography.hazmat.primitives import hashes
+        signed_data = authenticator_data + hashlib.sha256(client_data_json).digest()
+        signature = private_key.sign(signed_data, ec.ECDSA(hashes.SHA256()))
+
+        # Create KB JWT with webauthn data
+        kb_payload = {
+            "aud": "did:ap2:agent:payment_processor",
+            "transaction_data": ["cart_hash", "payment_hash"],
+            "webauthn": {
+                "credential_id": "cred_id",
+                "authenticator_data": base64url_encode(authenticator_data),
+                "client_data_json": base64url_encode(client_data_json),
+                "user_handle": "user_handle"
+            }
+        }
+        kb_payload_b64 = base64url_encode(json.dumps(kb_payload).encode())
+        signature_b64 = base64url_encode(signature)
+
+        vp = f"header.{issuer_payload_b64}.~header.{kb_payload_b64}.{signature_b64}"
+
+        result = verify_user_authorization_vp(vp)
+
+        assert result["verified"] is True
+        assert result["cart_hash"] == "cart_hash"
+        assert result["payment_hash"] == "payment_hash"
+
+    def test_verify_vp_signature_verification_failed(self):
+        """Test VP verification with invalid signature"""
+        # Create issuer JWT with cnf claim (valid public key)
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.hazmat.backends import default_backend
+
+        private_key = ec.generate_private_key(ec.SECP256R1(), default_backend())
+        public_key = private_key.public_key()
+
+        x_bytes = public_key.public_numbers().x.to_bytes(32, byteorder='big')
+        y_bytes = public_key.public_numbers().y.to_bytes(32, byteorder='big')
+
+        issuer_payload = {
+            "cnf": {
+                "jwk": {
+                    "kty": "EC",
+                    "crv": "P-256",
+                    "x": base64url_encode(x_bytes),
+                    "y": base64url_encode(y_bytes)
+                }
+            }
+        }
+        issuer_payload_b64 = base64url_encode(json.dumps(issuer_payload).encode())
+
+        # Create KB JWT with webauthn data and INVALID signature
+        kb_payload = {
+            "aud": "did:ap2:agent:payment_processor",
+            "transaction_data": ["cart_hash", "payment_hash"],
+            "webauthn": {
+                "credential_id": "cred_id",
+                "authenticator_data": base64url_encode(b'\x00' * 37),
+                "client_data_json": base64url_encode(b'{"test": "data"}'),
+                "user_handle": "user_handle"
+            }
+        }
+        kb_payload_b64 = base64url_encode(json.dumps(kb_payload).encode())
+        invalid_signature = base64url_encode(b'\x00' * 64)  # Invalid signature
+
+        vp = f"header.{issuer_payload_b64}.~header.{kb_payload_b64}.{invalid_signature}"
+
+        with pytest.raises(ValueError) as exc_info:
+            verify_user_authorization_vp(vp)
+
+        assert "WebAuthn signature verification failed" in str(exc_info.value)
