@@ -3,14 +3,22 @@ Tests for Telemetry Module
 
 Tests cover:
 - is_telemetry_enabled (environment variable check)
+- setup_telemetry (tracer provider setup)
+- instrument_fastapi_app (FastAPI instrumentation)
+- create_http_span (HTTP span creation)
+- get_tracer (tracer retrieval)
 - _mask_sensitive_data (sensitive information masking)
 - _truncate_body (body truncation)
+- _add_request_response_to_span (middleware)
 - SENSITIVE_KEYS validation
 - MAX_BODY_SIZE constant
 """
 
 import pytest
 import os
+import json
+import unittest.mock
+from unittest.mock import Mock, MagicMock, AsyncMock, patch, call
 
 
 class TestTelemetryEnabled:
@@ -331,3 +339,431 @@ class TestNonDictData:
 
         # None should be returned unchanged
         assert masked is None
+
+
+class TestSetupTelemetry:
+    """Test setup_telemetry function"""
+
+    def test_setup_telemetry_disabled(self, monkeypatch):
+        """Test setup_telemetry when OTEL_ENABLED=false"""
+        from common.telemetry import setup_telemetry
+
+        monkeypatch.setenv('OTEL_ENABLED', 'false')
+
+        provider = setup_telemetry()
+
+        # Should return None when disabled
+        assert provider is None
+
+    def test_setup_telemetry_enabled_new_provider(self, monkeypatch):
+        """Test setup_telemetry creates new provider when enabled"""
+        from common.telemetry import setup_telemetry
+        from opentelemetry import trace
+
+        monkeypatch.setenv('OTEL_ENABLED', 'true')
+        monkeypatch.setenv('OTEL_SERVICE_NAME', 'test_service')
+        monkeypatch.setenv('OTEL_EXPORTER_OTLP_ENDPOINT', 'http://localhost:4317')
+        monkeypatch.setenv('OTEL_EXPORTER_OTLP_INSECURE', 'true')
+
+        # Mock OpenTelemetry components
+        with patch('common.telemetry.trace.get_tracer_provider') as mock_get_provider, \
+             patch('common.telemetry.TracerProvider') as mock_tracer_provider_class, \
+             patch('common.telemetry.OTLPSpanExporter') as mock_exporter_class, \
+             patch('common.telemetry.BatchSpanProcessor') as mock_processor_class, \
+             patch('common.telemetry.trace.set_tracer_provider') as mock_set_provider, \
+             patch('common.telemetry.Resource') as mock_resource_class:
+
+            # Mock get_tracer_provider to return ProxyTracerProvider (uninitialized state)
+            mock_existing = MagicMock()
+            mock_existing.__class__ = trace.ProxyTracerProvider
+            mock_get_provider.return_value = mock_existing
+
+            # Mock TracerProvider instance
+            mock_provider = MagicMock()
+            mock_tracer_provider_class.return_value = mock_provider
+
+            # Mock OTLPSpanExporter
+            mock_exporter = MagicMock()
+            mock_exporter_class.return_value = mock_exporter
+
+            # Mock BatchSpanProcessor
+            mock_processor = MagicMock()
+            mock_processor_class.return_value = mock_processor
+
+            # Mock Resource
+            mock_resource = MagicMock()
+            mock_resource_class.return_value = mock_resource
+
+            provider = setup_telemetry()
+
+            # Should create and return new provider
+            assert provider == mock_provider
+            mock_tracer_provider_class.assert_called_once_with(resource=mock_resource)
+            mock_exporter_class.assert_called_once_with(
+                endpoint='http://localhost:4317',
+                insecure=True
+            )
+            mock_provider.add_span_processor.assert_called_once_with(mock_processor)
+            mock_set_provider.assert_called_once_with(mock_provider)
+
+    def test_setup_telemetry_custom_service_name(self, monkeypatch):
+        """Test setup_telemetry with custom service name"""
+        from common.telemetry import setup_telemetry
+        from opentelemetry import trace
+
+        monkeypatch.setenv('OTEL_ENABLED', 'true')
+
+        with patch('common.telemetry.trace.get_tracer_provider') as mock_get_provider, \
+             patch('common.telemetry.TracerProvider') as mock_tracer_provider_class, \
+             patch('common.telemetry.OTLPSpanExporter'), \
+             patch('common.telemetry.BatchSpanProcessor'), \
+             patch('common.telemetry.trace.set_tracer_provider'), \
+             patch('common.telemetry.Resource') as mock_resource_class, \
+             patch('common.telemetry.SERVICE_NAME', 'service.name'):
+
+            mock_existing = MagicMock()
+            mock_existing.__class__ = trace.ProxyTracerProvider
+            mock_get_provider.return_value = mock_existing
+
+            mock_provider = MagicMock()
+            mock_tracer_provider_class.return_value = mock_provider
+
+            provider = setup_telemetry(service_name='custom_service')
+
+            # Should use custom service name
+            mock_resource_class.assert_called_once()
+            call_args = mock_resource_class.call_args
+            assert 'attributes' in call_args.kwargs
+            assert call_args.kwargs['attributes']['service.name'] == 'custom_service'
+
+    def test_setup_telemetry_existing_provider(self, monkeypatch):
+        """Test setup_telemetry with existing TracerProvider"""
+        from common.telemetry import setup_telemetry
+        from opentelemetry.sdk.trace import TracerProvider
+
+        monkeypatch.setenv('OTEL_ENABLED', 'true')
+
+        with patch('common.telemetry.trace.get_tracer_provider') as mock_get_provider, \
+             patch('common.telemetry.OTLPSpanExporter') as mock_exporter_class, \
+             patch('common.telemetry.BatchSpanProcessor') as mock_processor_class:
+
+            # Mock existing provider (not NoOp or Proxy) - use real TracerProvider class
+            mock_existing = MagicMock()
+            mock_existing.__class__ = TracerProvider
+            mock_existing.resource = MagicMock()
+            mock_existing.resource.attributes = {'service.name': 'existing_service'}
+            mock_get_provider.return_value = mock_existing
+
+            # Mock exporter and processor
+            mock_exporter = MagicMock()
+            mock_exporter_class.return_value = mock_exporter
+            mock_processor = MagicMock()
+            mock_processor_class.return_value = mock_processor
+
+            provider = setup_telemetry()
+
+            # Should return existing provider and add OTLP exporter
+            assert provider == mock_existing
+            mock_existing.add_span_processor.assert_called_once_with(mock_processor)
+
+    def test_setup_telemetry_exception_handling(self, monkeypatch):
+        """Test setup_telemetry handles exceptions gracefully"""
+        from common.telemetry import setup_telemetry
+
+        monkeypatch.setenv('OTEL_ENABLED', 'true')
+
+        with patch('common.telemetry.trace.get_tracer_provider', side_effect=Exception("Test error")):
+            provider = setup_telemetry()
+
+            # Should return None on exception
+            assert provider is None
+
+    def test_setup_telemetry_insecure_false(self, monkeypatch):
+        """Test setup_telemetry with OTEL_EXPORTER_OTLP_INSECURE=false"""
+        from common.telemetry import setup_telemetry
+        from opentelemetry import trace
+
+        monkeypatch.setenv('OTEL_ENABLED', 'true')
+        monkeypatch.setenv('OTEL_EXPORTER_OTLP_INSECURE', 'false')
+
+        with patch('common.telemetry.trace.get_tracer_provider') as mock_get_provider, \
+             patch('common.telemetry.TracerProvider') as mock_tracer_provider_class, \
+             patch('common.telemetry.OTLPSpanExporter') as mock_exporter_class, \
+             patch('common.telemetry.BatchSpanProcessor'), \
+             patch('common.telemetry.trace.set_tracer_provider'), \
+             patch('common.telemetry.Resource'):
+
+            mock_existing = MagicMock()
+            mock_existing.__class__ = trace.ProxyTracerProvider
+            mock_get_provider.return_value = mock_existing
+            mock_provider = MagicMock()
+            mock_tracer_provider_class.return_value = mock_provider
+
+            setup_telemetry()
+
+            # Should pass insecure=False
+            mock_exporter_class.assert_called_once()
+            call_kwargs = mock_exporter_class.call_args.kwargs
+            assert call_kwargs['insecure'] is False
+
+
+class TestInstrumentFastAPIApp:
+    """Test instrument_fastapi_app function"""
+
+    def test_instrument_fastapi_disabled(self, monkeypatch):
+        """Test instrument_fastapi_app when telemetry is disabled"""
+        from common.telemetry import instrument_fastapi_app
+
+        monkeypatch.setenv('OTEL_ENABLED', 'false')
+
+        mock_app = MagicMock()
+
+        with patch('common.telemetry.FastAPIInstrumentor') as mock_instrumentor:
+            instrument_fastapi_app(mock_app)
+
+            # Should not instrument when disabled
+            mock_instrumentor.instrument_app.assert_not_called()
+
+    def test_instrument_fastapi_enabled(self, monkeypatch):
+        """Test instrument_fastapi_app when telemetry is enabled"""
+        from common.telemetry import instrument_fastapi_app
+
+        monkeypatch.setenv('OTEL_ENABLED', 'true')
+
+        mock_app = MagicMock()
+        # Remove the _is_instrumented_by_opentelemetry attribute so hasattr returns False
+        if hasattr(mock_app, '_is_instrumented_by_opentelemetry'):
+            delattr(mock_app, '_is_instrumented_by_opentelemetry')
+
+        with patch('common.telemetry.FastAPIInstrumentor') as mock_instrumentor_class:
+            mock_instrumentor = MagicMock()
+            mock_instrumentor_class.return_value = mock_instrumentor
+            mock_instrumentor_class.instrument_app = MagicMock()
+
+            instrument_fastapi_app(mock_app)
+
+            # Should instrument app
+            mock_instrumentor_class.instrument_app.assert_called_once_with(mock_app)
+            mock_app.add_middleware.assert_called_once()
+            assert mock_app._is_instrumented_by_opentelemetry is True
+
+    def test_instrument_fastapi_already_instrumented(self, monkeypatch):
+        """Test instrument_fastapi_app with already instrumented app"""
+        from common.telemetry import instrument_fastapi_app
+
+        monkeypatch.setenv('OTEL_ENABLED', 'true')
+
+        mock_app = MagicMock()
+        mock_app._is_instrumented_by_opentelemetry = True
+
+        with patch('common.telemetry.FastAPIInstrumentor') as mock_instrumentor:
+            instrument_fastapi_app(mock_app)
+
+            # Should skip instrumentation
+            mock_instrumentor.instrument_app.assert_not_called()
+            mock_app.add_middleware.assert_not_called()
+
+    def test_instrument_fastapi_exception_handling(self, monkeypatch):
+        """Test instrument_fastapi_app handles exceptions"""
+        from common.telemetry import instrument_fastapi_app
+
+        monkeypatch.setenv('OTEL_ENABLED', 'true')
+
+        mock_app = MagicMock()
+
+        with patch('common.telemetry.FastAPIInstrumentor.instrument_app', side_effect=Exception("Test error")):
+            # Should not raise exception
+            instrument_fastapi_app(mock_app)
+
+
+class TestCreateHTTPSpan:
+    """Test create_http_span function"""
+
+    def test_create_http_span_basic(self):
+        """Test create_http_span creates span with basic attributes"""
+        from common.telemetry import create_http_span
+
+        mock_tracer = MagicMock()
+        mock_span = MagicMock()
+
+        # Mock the context manager
+        mock_context_manager = MagicMock()
+        mock_context_manager.__enter__ = MagicMock(return_value=mock_span)
+        mock_context_manager.__exit__ = MagicMock(return_value=False)
+        mock_tracer.start_as_current_span.return_value = mock_context_manager
+
+        with create_http_span(mock_tracer, "POST", "http://example.com/api") as span:
+            assert span == mock_span
+
+        # Verify span attributes were set
+        assert mock_span.set_attribute.call_count >= 2
+        mock_span.set_attribute.assert_any_call("http.method", "POST")
+        mock_span.set_attribute.assert_any_call("http.url", "http://example.com/api")
+
+    def test_create_http_span_with_custom_attributes(self):
+        """Test create_http_span with custom attributes"""
+        from common.telemetry import create_http_span
+
+        mock_tracer = MagicMock()
+        mock_span = MagicMock()
+
+        mock_context_manager = MagicMock()
+        mock_context_manager.__enter__ = MagicMock(return_value=mock_span)
+        mock_context_manager.__exit__ = MagicMock(return_value=False)
+        mock_tracer.start_as_current_span.return_value = mock_context_manager
+
+        with create_http_span(
+            mock_tracer,
+            "GET",
+            "http://example.com",
+            message_type="ap2/IntentMandate",
+            custom_attr="custom_value"
+        ) as span:
+            assert span == mock_span
+
+        # Verify custom attributes were set
+        mock_span.set_attribute.assert_any_call("message_type", "ap2/IntentMandate")
+        mock_span.set_attribute.assert_any_call("custom_attr", "custom_value")
+
+    def test_create_http_span_kind(self):
+        """Test create_http_span sets correct span kind"""
+        from common.telemetry import create_http_span
+        import common.telemetry as telemetry_module
+
+        mock_tracer = MagicMock()
+        mock_span = MagicMock()
+
+        mock_context_manager = MagicMock()
+        mock_context_manager.__enter__ = MagicMock(return_value=mock_span)
+        mock_context_manager.__exit__ = MagicMock(return_value=False)
+        mock_tracer.start_as_current_span.return_value = mock_context_manager
+
+        with patch.object(telemetry_module.trace, 'SpanKind') as mock_span_kind:
+            mock_span_kind.CLIENT = 'CLIENT'
+
+            with create_http_span(mock_tracer, "POST", "http://example.com"):
+                pass
+
+            # Verify span was created with CLIENT kind
+            mock_tracer.start_as_current_span.assert_called_once()
+            call_args = mock_tracer.start_as_current_span.call_args
+            assert call_args.kwargs.get('kind') == 'CLIENT'
+
+
+class TestAddRequestResponseToSpan:
+    """Test _add_request_response_to_span middleware"""
+
+    @pytest.mark.asyncio
+    async def test_middleware_no_span(self):
+        """Test middleware when no span is recording"""
+        from common.telemetry import _add_request_response_to_span
+
+        mock_request = MagicMock()
+        mock_response = MagicMock()
+
+        async def mock_call_next(request):
+            return mock_response
+
+        with patch('common.telemetry.trace.get_current_span') as mock_get_span:
+            # Mock span that is not recording
+            mock_span = MagicMock()
+            mock_span.is_recording.return_value = False
+            mock_get_span.return_value = mock_span
+
+            response = await _add_request_response_to_span(mock_request, mock_call_next)
+
+            # Should return response without processing
+            assert response == mock_response
+            mock_span.set_attribute.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_middleware_json_request_body(self):
+        """Test middleware with JSON request body"""
+        from common.telemetry import _add_request_response_to_span
+
+        mock_request = MagicMock()
+        mock_request.method = "POST"
+        mock_request.headers = {"content-type": "application/json"}
+
+        request_body = {"username": "test_user", "password": "secret123"}
+        mock_request.body = AsyncMock(return_value=json.dumps(request_body).encode('utf-8'))
+
+        mock_response = MagicMock()
+
+        async def mock_call_next(request):
+            return mock_response
+
+        with patch('common.telemetry.trace.get_current_span') as mock_get_span:
+            mock_span = MagicMock()
+            mock_span.is_recording.return_value = True
+            mock_get_span.return_value = mock_span
+
+            response = await _add_request_response_to_span(mock_request, mock_call_next)
+
+            # Verify request body was masked and added to span
+            mock_span.set_attribute.assert_any_call("http.request.body", unittest.mock.ANY)
+
+            # Find the call with http.request.body
+            for call in mock_span.set_attribute.call_args_list:
+                if call[0][0] == "http.request.body":
+                    body_value = json.loads(call[0][1])
+                    # Password should be masked
+                    assert body_value['password'] == '[REDACTED]'
+                    assert body_value['username'] == 'test_user'
+
+    @pytest.mark.asyncio
+    async def test_middleware_response_duration(self):
+        """Test middleware records response duration"""
+        from common.telemetry import _add_request_response_to_span
+
+        mock_request = MagicMock()
+        mock_request.method = "GET"
+        mock_request.headers = {}
+
+        mock_response = MagicMock()
+
+        async def mock_call_next(request):
+            return mock_response
+
+        with patch('common.telemetry.trace.get_current_span') as mock_get_span:
+            mock_span = MagicMock()
+            mock_span.is_recording.return_value = True
+            mock_get_span.return_value = mock_span
+
+            response = await _add_request_response_to_span(mock_request, mock_call_next)
+
+            # Verify duration was recorded
+            duration_calls = [call for call in mock_span.set_attribute.call_args_list
+                             if call[0][0] == "http.response.duration_ms"]
+            assert len(duration_calls) > 0
+
+    @pytest.mark.asyncio
+    async def test_middleware_exception_handling(self):
+        """Test middleware handles exceptions"""
+        from common.telemetry import _add_request_response_to_span
+
+        mock_request = MagicMock()
+        mock_request.method = "GET"
+        mock_request.headers = {}
+
+        test_exception = Exception("Test error")
+
+        async def mock_call_next(request):
+            raise test_exception
+
+        with patch('common.telemetry.trace.get_current_span') as mock_get_span, \
+             patch('common.telemetry.trace.Status') as mock_status, \
+             patch('common.telemetry.trace.StatusCode') as mock_status_code:
+
+            mock_span = MagicMock()
+            mock_span.is_recording.return_value = True
+            mock_get_span.return_value = mock_span
+
+            mock_status_code.ERROR = 'ERROR'
+
+            with pytest.raises(Exception) as exc_info:
+                await _add_request_response_to_span(mock_request, mock_call_next)
+
+            # Verify exception was recorded
+            mock_span.record_exception.assert_called_once_with(test_exception)
+            assert exc_info.value == test_exception
