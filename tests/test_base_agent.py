@@ -292,8 +292,9 @@ class TestA2AMessageHandling:
         mock_handler_instance = Mock()
         mock_a2a_handler_class.return_value = mock_handler_instance
 
-        # Mock successful message handling
-        mock_handler_instance.handle_message = Mock(return_value={
+        # Mock successful message handling - use AsyncMock since handle_message is async
+        from unittest.mock import AsyncMock
+        mock_handler_instance.handle_message = AsyncMock(return_value={
             "type": "test/Response",
             "id": "response_123",
             "payload": {"status": "success"}
@@ -318,11 +319,12 @@ class TestA2AMessageHandling:
             header=A2AMessageHeader(
                 message_id="test_msg_123",
                 sender="did:ap2:agent:sender",
-                receiver="did:ap2:agent:test",
-                timestamp="2024-01-01T00:00:00Z"
+                recipient="did:ap2:agent:test",
+                timestamp="2024-01-01T00:00:00Z",
+                nonce="a" * 64  # Required nonce field
             ),
             dataPart=A2ADataPart(
-                type="test/Message",
+                type="ap2.responses.Acknowledgement",
                 id="data_123"
             )
         )
@@ -349,12 +351,17 @@ class TestA2AMessageHandling:
         mock_handler_instance = Mock()
         mock_a2a_handler_class.return_value = mock_handler_instance
 
-        # Mock validation error
-        mock_handler_instance.handle_message = Mock(side_effect=ValueError("Invalid signature"))
-        mock_handler_instance.create_error_response = Mock(return_value={
+        # Mock validation error - use AsyncMock since handle_message is async
+        from unittest.mock import AsyncMock
+        mock_handler_instance.handle_message = AsyncMock(side_effect=ValueError("Invalid signature"))
+
+        # Mock error response with model_dump method
+        mock_error_response = Mock()
+        mock_error_response.model_dump.return_value = {
             "header": {"message_id": "error_123"},
             "dataPart": {"type": "error/Response", "error_code": "invalid_request"}
-        })
+        }
+        mock_handler_instance.create_error_response = Mock(return_value=mock_error_response)
 
         # Create agent
         agent = ConcreteAgent(
@@ -370,11 +377,12 @@ class TestA2AMessageHandling:
             header=A2AMessageHeader(
                 message_id="test_msg_123",
                 sender="did:ap2:agent:sender",
-                receiver="did:ap2:agent:test",
-                timestamp="2024-01-01T00:00:00Z"
+                recipient="did:ap2:agent:test",
+                timestamp="2024-01-01T00:00:00Z",
+                nonce="a" * 64  # Required nonce field
             ),
             dataPart=A2ADataPart(
-                type="test/Message",
+                type="ap2.responses.Acknowledgement",
                 id="data_123"
             )
         )
@@ -401,12 +409,17 @@ class TestA2AMessageHandling:
         mock_handler_instance = Mock()
         mock_a2a_handler_class.return_value = mock_handler_instance
 
-        # Mock internal error
-        mock_handler_instance.handle_message = Mock(side_effect=Exception("Internal error"))
-        mock_handler_instance.create_error_response = Mock(return_value={
+        # Mock internal error - use AsyncMock since handle_message is async
+        from unittest.mock import AsyncMock
+        mock_handler_instance.handle_message = AsyncMock(side_effect=Exception("Internal error"))
+
+        # Mock error response with model_dump method
+        mock_error_response = Mock()
+        mock_error_response.model_dump.return_value = {
             "header": {"message_id": "error_123"},
             "dataPart": {"type": "error/Response", "error_code": "internal_error"}
-        })
+        }
+        mock_handler_instance.create_error_response = Mock(return_value=mock_error_response)
 
         # Create agent
         agent = ConcreteAgent(
@@ -422,11 +435,12 @@ class TestA2AMessageHandling:
             header=A2AMessageHeader(
                 message_id="test_msg_123",
                 sender="did:ap2:agent:sender",
-                receiver="did:ap2:agent:test",
-                timestamp="2024-01-01T00:00:00Z"
+                recipient="did:ap2:agent:test",
+                timestamp="2024-01-01T00:00:00Z",
+                nonce="a" * 64  # Required nonce field
             ),
             dataPart=A2ADataPart(
-                type="test/Message",
+                type="ap2.responses.Acknowledgement",
                 id="data_123"
             )
         )
@@ -453,8 +467,9 @@ class TestA2AMessageHandling:
         mock_handler_instance = Mock()
         mock_a2a_handler_class.return_value = mock_handler_instance
 
-        # Mock artifact response
-        mock_handler_instance.handle_message = Mock(return_value={
+        # Mock artifact response - use AsyncMock since handle_message is async
+        from unittest.mock import AsyncMock
+        mock_handler_instance.handle_message = AsyncMock(return_value={
             "is_artifact": True,
             "artifact_name": "TestArtifact",
             "artifact_data": {"test": "data"},
@@ -480,11 +495,12 @@ class TestA2AMessageHandling:
             header=A2AMessageHeader(
                 message_id="test_msg_123",
                 sender="did:ap2:agent:sender",
-                receiver="did:ap2:agent:test",
-                timestamp="2024-01-01T00:00:00Z"
+                recipient="did:ap2:agent:test",
+                timestamp="2024-01-01T00:00:00Z",
+                nonce="a" * 64  # Required nonce field
             ),
             dataPart=A2ADataPart(
-                type="test/Message",
+                type="ap2.responses.Acknowledgement",
                 id="data_123"
             )
         )

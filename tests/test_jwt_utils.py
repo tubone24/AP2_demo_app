@@ -24,6 +24,7 @@ from common.jwt_utils import (
     MerchantAuthorizationJWT,
     UserAuthorizationSDJWT
 )
+from common.user_authorization import compute_mandate_hash
 
 
 class TestCanonicalHashComputation:
@@ -326,9 +327,11 @@ class TestUserAuthorizationSDJWT:
         key_manager = Mock()
         signature_manager = Mock()
 
-        # Mock signature object
+        # Mock signature object with base64-encoded value
         mock_signature = Mock()
-        mock_signature.signature = "0" * 128  # Hex-encoded signature
+        # Create a dummy 64-byte signature and encode as base64
+        dummy_sig_bytes = b'\x00' * 64
+        mock_signature.value = base64.b64encode(dummy_sig_bytes).decode('utf-8')
 
         signature_manager.sign_data.return_value = mock_signature
 
@@ -802,9 +805,13 @@ class TestMerchantAuthorizationJWTVerification:
         key_manager = KeyManager(keys_directory="/tmp/test_jwt_keys")
         signature_manager = SignatureManager(key_manager)
 
-        # Generate test key
+        # Generate test key using "merchant" as key_id (matches get_private_key() logic)
+        # The DID for merchant will be "did:ap2:merchant:test"
         merchant_id = "did:ap2:merchant:test"
-        key_manager.generate_key_pair(merchant_id)
+        private_key, public_key = key_manager.generate_key_pair("merchant")  # Store key as "merchant"
+
+        # Save public key so verify() can load it
+        key_manager.save_public_key("merchant", public_key)
 
         return key_manager, signature_manager, merchant_id
 
@@ -822,7 +829,7 @@ class TestMerchantAuthorizationJWTVerification:
         # Generate JWT
         jwt_token = jwt_generator.generate_with_hash(
             merchant_id=merchant_id,
-            cart_hash=compute_canonical_hash(cart_mandate)
+            cart_hash=compute_mandate_hash(cart_mandate)
         )
 
         # Verify JWT
@@ -857,7 +864,7 @@ class TestMerchantAuthorizationJWTVerification:
         # Generate JWT with original cart
         jwt_token = jwt_generator.generate_with_hash(
             merchant_id=merchant_id,
-            cart_hash=compute_canonical_hash(original_cart)
+            cart_hash=compute_mandate_hash(original_cart)
         )
 
         # Try to verify with different cart
@@ -875,7 +882,7 @@ class TestMerchantAuthorizationJWTVerification:
         # Generate JWT with negative expiration (already expired)
         jwt_token = jwt_generator.generate_with_hash(
             merchant_id=merchant_id,
-            cart_hash=compute_canonical_hash(cart_mandate),
+            cart_hash=compute_mandate_hash(cart_mandate),
             expiration_minutes=-1
         )
 
@@ -890,16 +897,19 @@ class TestMerchantAuthorizationJWTVerification:
         jwt_generator = MerchantAuthorizationJWT(signature_manager, key_manager)
 
         # Manually create JWT without kid
+        cart_mandate = {"type": "CartMandate"}
+        cart_hash = compute_mandate_hash(cart_mandate)  # Use proper cart_hash
+
         header = {"alg": "ES256", "typ": "JWT"}
-        payload = {"iss": merchant_id, "cart_hash": "test"}
+        # Add expiration far in the future to pass expiration check
+        future_exp = int((datetime.now(timezone.utc) + timedelta(days=1)).timestamp())
+        payload = {"iss": merchant_id, "cart_hash": cart_hash, "exp": future_exp}
 
         header_b64 = base64.urlsafe_b64encode(json.dumps(header).encode()).decode().rstrip('=')
         payload_b64 = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip('=')
         signature_b64 = "fake_signature"
 
         invalid_jwt = f"{header_b64}.{payload_b64}.{signature_b64}"
-
-        cart_mandate = {"type": "CartMandate"}
 
         with pytest.raises(ValueError) as exc_info:
             jwt_generator.verify(invalid_jwt, cart_mandate)
@@ -917,9 +927,13 @@ class TestUserAuthorizationSDJWTVerification:
         key_manager = KeyManager(keys_directory="/tmp/test_sd_jwt_keys")
         signature_manager = SignatureManager(key_manager)
 
-        # Generate test key
+        # Generate test key using "test" as key_id (last part of DID)
+        # The DID for user will be "did:ap2:user:test"
         user_id = "did:ap2:user:test"
-        key_manager.generate_key_pair(user_id)
+        private_key, public_key = key_manager.generate_key_pair("test")  # Store key as "test"
+
+        # Save public key so verify() can load it
+        key_manager.save_public_key("test", public_key)
 
         return key_manager, signature_manager, user_id
 
@@ -1048,7 +1062,11 @@ class TestEd25519Algorithm:
         merchant_id = "did:ap2:merchant:ed25519_test"
 
         # For now, use ECDSA but test the Ed25519 code path
-        key_manager.generate_key_pair(merchant_id)
+        # Store key as "merchant" (matches get_private_key() logic)
+        private_key, public_key = key_manager.generate_key_pair("merchant")
+
+        # Save public key so verify() can load it
+        key_manager.save_public_key("merchant", public_key)
 
         return key_manager, signature_manager, merchant_id
 
@@ -1104,8 +1122,9 @@ class TestEd25519Algorithm:
         """Test user SD-JWT generation with ECDSA"""
         key_manager, signature_manager, user_id = ed25519_crypto_setup
 
-        # Generate user key
-        key_manager.generate_key_pair(user_id)
+        # Generate user key (note: user_id is actually merchant_id from fixture)
+        # For merchant DIDs, use "merchant" as key_id
+        key_manager.generate_key_pair("merchant")
 
         sd_jwt_generator = UserAuthorizationSDJWT(signature_manager, key_manager)
 
