@@ -706,3 +706,134 @@ class TestDIDFormatValidation:
             assert did.startswith("did:ap2:cp:")
             parts = did.split(":")
             assert len(parts) == 4
+
+
+class TestPersistedDIDDocumentLoading:
+    """Test loading persisted DID documents from file"""
+
+    def test_init_demo_registry_with_existing_file(self, tmp_path, monkeypatch):
+        """Test loading persisted DID document from existing file"""
+        from common.did_resolver import DIDResolver
+
+        # Create a temporary DID document directory structure
+        # The code expects: {AP2_KEYS_DIRECTORY}/../data/did_documents/
+        keys_dir = tmp_path / "keys"
+        keys_dir.mkdir()
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        did_doc_dir = data_dir / "did_documents"
+        did_doc_dir.mkdir()
+
+        # Use one of the demo agents from the hardcoded list
+        did = "did:ap2:agent:shopping_agent"
+        agent_key = "shopping_agent"
+        did_doc_file = did_doc_dir / f"{agent_key}_did.json"
+
+        # Create a valid DID document with service endpoint
+        did_doc_data = {
+            "id": did,
+            "verificationMethod": [{
+                "id": f"{did}#key-1",
+                "type": "EcdsaSecp256r1VerificationKey2019",
+                "controller": did,
+                "publicKeyPem": "-----BEGIN PUBLIC KEY-----\\ntest\\n-----END PUBLIC KEY-----"
+            }],
+            "authentication": [f"{did}#key-1"],
+            "assertionMethod": [f"{did}#key-1"],
+            "service": [{
+                "id": f"{did}#payment-service",
+                "type": "PaymentService",
+                "serviceEndpoint": "https://example.com/payment",
+                "name": "Test Payment Service",
+                "description": "Test service",
+                "supported_methods": ["card", "bank"],
+                "logo_url": "https://example.com/logo.png"
+            }]
+        }
+
+        did_doc_file.write_text(json.dumps(did_doc_data))
+
+        # Mock the key manager
+        mock_key_manager = MagicMock()
+
+        # Set environment variable to point to our temp keys directory
+        monkeypatch.setenv("AP2_KEYS_DIRECTORY", str(keys_dir))
+
+        # Initialize resolver - it should load from our temp directory
+        resolver = DIDResolver(key_manager=mock_key_manager)
+
+        # Verify the DID document was loaded
+        assert did in resolver._did_registry
+        loaded_doc = resolver._did_registry[did]
+        assert loaded_doc.id == did
+        assert len(loaded_doc.verificationMethod) == 1
+        assert loaded_doc.service is not None
+        assert len(loaded_doc.service) == 1
+        assert loaded_doc.service[0].name == "Test Payment Service"
+
+    def test_resolve_async_with_service_endpoints(self):
+        """Test async resolution returns service endpoints"""
+        from common.did_resolver import DIDResolver
+        from common.models import DIDDocument, VerificationMethod, ServiceEndpoint
+
+        mock_key_manager = MagicMock()
+
+        with patch.object(DIDResolver, '_init_demo_registry'):
+            resolver = DIDResolver(key_manager=mock_key_manager)
+
+        # Create DID document with service endpoint
+        did = "did:ap2:agent:test"
+        service = ServiceEndpoint(
+            id=f"{did}#service-1",
+            type="TestService",
+            serviceEndpoint="https://test.example.com",
+            name="Test Service",
+            description="A test service",
+            supported_methods=["method1", "method2"]
+        )
+
+        vm = VerificationMethod(
+            id=f"{did}#key-1",
+            type="EcdsaSecp256r1VerificationKey2019",
+            controller=did,
+            publicKeyPem="-----BEGIN PUBLIC KEY-----\\ntest\\n-----END PUBLIC KEY-----"
+        )
+
+        did_doc = DIDDocument(
+            id=did,
+            verificationMethod=[vm],
+            authentication=[f"{did}#key-1"],
+            service=[service]
+        )
+
+        resolver._did_registry[did] = did_doc
+
+        # Resolve and verify service endpoint
+        import asyncio
+        result = asyncio.run(resolver.resolve_async(did))
+
+        assert result is not None
+        assert result.service is not None
+        assert len(result.service) == 1
+        assert result.service[0].name == "Test Service"
+        assert result.service[0].supported_methods == ["method1", "method2"]
+
+    def test_resolve_merchant_did_registry_exception(self):
+        """Test merchant DID resolution with registry exception"""
+        from common.did_resolver import DIDResolver
+
+        mock_key_manager = MagicMock()
+        mock_merchant_registry = MagicMock()
+
+        # Mock registry to raise exception
+        mock_merchant_registry.get_merchant_info.side_effect = Exception("Registry error")
+
+        with patch.object(DIDResolver, '_init_demo_registry'):
+            resolver = DIDResolver(
+                key_manager=mock_key_manager,
+                merchant_registry=mock_merchant_registry
+            )
+
+        # Should handle exception and return None
+        result = resolver.resolve("did:ap2:merchant:test")
+        assert result is None
