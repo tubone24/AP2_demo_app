@@ -312,19 +312,18 @@ class TestA2AMessageHandling:
         )
 
         # Create test A2A message
-        from common.models import A2AMessage, A2AHeader, DataPart
+        from common.models import A2AMessage, A2AMessageHeader, A2ADataPart
 
         test_message = A2AMessage(
-            header=A2AHeader(
+            header=A2AMessageHeader(
                 message_id="test_msg_123",
                 sender="did:ap2:agent:sender",
                 receiver="did:ap2:agent:test",
                 timestamp="2024-01-01T00:00:00Z"
             ),
-            dataPart=DataPart(
+            dataPart=A2ADataPart(
                 type="test/Message",
-                id="data_123",
-                **{"payload": {}}
+                id="data_123"
             )
         )
 
@@ -365,19 +364,18 @@ class TestA2AMessageHandling:
         )
 
         # Create test A2A message
-        from common.models import A2AMessage, A2AHeader, DataPart
+        from common.models import A2AMessage, A2AMessageHeader, A2ADataPart
 
         test_message = A2AMessage(
-            header=A2AHeader(
+            header=A2AMessageHeader(
                 message_id="test_msg_123",
                 sender="did:ap2:agent:sender",
                 receiver="did:ap2:agent:test",
                 timestamp="2024-01-01T00:00:00Z"
             ),
-            dataPart=DataPart(
+            dataPart=A2ADataPart(
                 type="test/Message",
-                id="data_123",
-                **{"payload": {}}
+                id="data_123"
             )
         )
 
@@ -418,19 +416,18 @@ class TestA2AMessageHandling:
         )
 
         # Create test A2A message
-        from common.models import A2AMessage, A2AHeader, DataPart
+        from common.models import A2AMessage, A2AMessageHeader, A2ADataPart
 
         test_message = A2AMessage(
-            header=A2AHeader(
+            header=A2AMessageHeader(
                 message_id="test_msg_123",
                 sender="did:ap2:agent:sender",
                 receiver="did:ap2:agent:test",
                 timestamp="2024-01-01T00:00:00Z"
             ),
-            dataPart=DataPart(
+            dataPart=A2ADataPart(
                 type="test/Message",
-                id="data_123",
-                **{"payload": {}}
+                id="data_123"
             )
         )
 
@@ -477,19 +474,18 @@ class TestA2AMessageHandling:
         )
 
         # Create test A2A message
-        from common.models import A2AMessage, A2AHeader, DataPart
+        from common.models import A2AMessage, A2AMessageHeader, A2ADataPart
 
         test_message = A2AMessage(
-            header=A2AHeader(
+            header=A2AMessageHeader(
                 message_id="test_msg_123",
                 sender="did:ap2:agent:sender",
                 receiver="did:ap2:agent:test",
                 timestamp="2024-01-01T00:00:00Z"
             ),
-            dataPart=DataPart(
+            dataPart=A2ADataPart(
                 type="test/Message",
-                id="data_123",
-                **{"payload": {}}
+                id="data_123"
             )
         )
 

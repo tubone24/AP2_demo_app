@@ -804,7 +804,7 @@ class TestMerchantAuthorizationJWTVerification:
 
         # Generate test key
         merchant_id = "did:ap2:merchant:test"
-        key_manager.generate_key_pair(merchant_id, algorithm="ECDSA")
+        key_manager.generate_key_pair(merchant_id)
 
         return key_manager, signature_manager, merchant_id
 
@@ -919,7 +919,7 @@ class TestUserAuthorizationSDJWTVerification:
 
         # Generate test key
         user_id = "did:ap2:user:test"
-        key_manager.generate_key_pair(user_id, algorithm="ECDSA")
+        key_manager.generate_key_pair(user_id)
 
         return key_manager, signature_manager, user_id
 
@@ -1048,7 +1048,7 @@ class TestEd25519Algorithm:
         merchant_id = "did:ap2:merchant:ed25519_test"
 
         # For now, use ECDSA but test the Ed25519 code path
-        key_manager.generate_key_pair(merchant_id, algorithm="ECDSA")
+        key_manager.generate_key_pair(merchant_id)
 
         return key_manager, signature_manager, merchant_id
 
@@ -1105,7 +1105,7 @@ class TestEd25519Algorithm:
         key_manager, signature_manager, user_id = ed25519_crypto_setup
 
         # Generate user key
-        key_manager.generate_key_pair(user_id, algorithm="ECDSA")
+        key_manager.generate_key_pair(user_id)
 
         sd_jwt_generator = UserAuthorizationSDJWT(signature_manager, key_manager)
 
