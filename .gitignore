@@ -26,6 +26,14 @@ ENV/
 env/
 .venv
 
+# Coverage reports
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+.pytest_cache/
+
 # Database
 data/*.db
 data/*.db-journal
@@ -69,3 +77,8 @@ keys/*.enc
 !keys/.gitkeep
 data/receipts/txn_*.pdf
 data/did_documents/*.json
+
+# Frontend
+frontend/.next/
+frontend/node_modules/
+frontend/coverage/
