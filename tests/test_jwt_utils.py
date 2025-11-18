@@ -14,10 +14,20 @@ import base64
 import hashlib
 from datetime import datetime, timezone, timedelta
 import json
+from unittest.mock import Mock, patch, MagicMock
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives import hashes
+
+# Import the actual module to test
+from common.jwt_utils import (
+    compute_canonical_hash,
+    MerchantAuthorizationJWT,
+    UserAuthorizationSDJWT
+)
 
 
 class TestCanonicalHashComputation:
-    """Test canonical hash computation"""
+    """Test canonical hash computation using actual compute_canonical_hash function"""
 
     def test_canonical_hash_basic(self):
         """Test basic canonical hash computation"""
@@ -27,12 +37,8 @@ class TestCanonicalHashComputation:
             "merchant_id": "test"
         }
 
-        # Hash should be deterministic
-        # Simulate canonical hash (RFC 8785)
-        import rfc8785
-        canonical_json = rfc8785.dumps(data)
-        hash_digest = hashlib.sha256(canonical_json).digest()
-        hash_value = base64.urlsafe_b64encode(hash_digest).decode('utf-8').rstrip('=')
+        # Use the actual function
+        hash_value = compute_canonical_hash(data)
 
         # Validate hash
         assert isinstance(hash_value, str)
@@ -43,17 +49,11 @@ class TestCanonicalHashComputation:
     def test_canonical_hash_deterministic(self):
         """Test that canonical hash is deterministic"""
         data = {"b": 2, "a": 1, "c": 3}
-
-        import rfc8785
-        # Should produce same hash regardless of key order
-        hash1 = base64.urlsafe_b64encode(
-            hashlib.sha256(rfc8785.dumps(data)).digest()
-        ).decode('utf-8').rstrip('=')
-
         data2 = {"c": 3, "a": 1, "b": 2}
-        hash2 = base64.urlsafe_b64encode(
-            hashlib.sha256(rfc8785.dumps(data2)).digest()
-        ).decode('utf-8').rstrip('=')
+
+        # Should produce same hash regardless of key order
+        hash1 = compute_canonical_hash(data)
+        hash2 = compute_canonical_hash(data2)
 
         # Hashes should be the same (canonical ordering)
         assert hash1 == hash2
@@ -67,18 +67,148 @@ class TestCanonicalHashComputation:
             }
         }
 
-        import rfc8785
-        canonical_json = rfc8785.dumps(data)
-        hash_digest = hashlib.sha256(canonical_json).digest()
-        hash_value = base64.urlsafe_b64encode(hash_digest).decode('utf-8').rstrip('=')
+        # Use the actual function
+        hash_value = compute_canonical_hash(data)
 
         # Should produce valid hash
         assert isinstance(hash_value, str)
         assert len(hash_value) > 0
 
+    def test_canonical_hash_empty_dict(self):
+        """Test canonical hash with empty dictionary"""
+        data = {}
+        hash_value = compute_canonical_hash(data)
+
+        # Should still produce a valid hash
+        assert isinstance(hash_value, str)
+        assert len(hash_value) > 0
+
+    def test_canonical_hash_with_arrays(self):
+        """Test canonical hash with arrays"""
+        data = {
+            "items": [
+                {"id": 1, "name": "Item1"},
+                {"id": 2, "name": "Item2"}
+            ]
+        }
+
+        hash_value = compute_canonical_hash(data)
+        assert isinstance(hash_value, str)
+        assert len(hash_value) > 0
+
 
 class TestMerchantAuthorizationJWT:
-    """Test Merchant Authorization JWT"""
+    """Test Merchant Authorization JWT with actual implementation"""
+
+    @pytest.fixture
+    def mock_crypto(self):
+        """Create mock crypto managers"""
+        from cryptography.hazmat.primitives.asymmetric import utils as asym_utils
+
+        key_manager = Mock()
+        signature_manager = Mock()
+
+        # Mock private key with valid DER signature
+        # Create a valid DER signature for r=1, s=1
+        r = 1
+        s = 1
+        valid_der_signature = asym_utils.encode_dss_signature(r, s)
+
+        mock_private_key = Mock()
+        mock_private_key.sign.return_value = valid_der_signature
+
+        key_manager.get_private_key.return_value = mock_private_key
+
+        return key_manager, signature_manager
+
+    def test_jwt_generation_basic(self, mock_crypto):
+        """Test basic JWT generation"""
+        key_manager, signature_manager = mock_crypto
+        jwt_generator = MerchantAuthorizationJWT(signature_manager, key_manager)
+
+        merchant_id = "did:ap2:merchant:test"
+        cart_contents = {
+            "items": [{"sku": "ITEM-001", "quantity": 1, "price": 1000}],
+            "total_amount": {"value": "1000.00", "currency": "JPY"}
+        }
+
+        # Generate JWT
+        jwt_token = jwt_generator.generate(
+            merchant_id=merchant_id,
+            cart_contents=cart_contents,
+            audience="payment_processor",
+            expiration_minutes=10
+        )
+
+        # Validate JWT structure
+        parts = jwt_token.split('.')
+        assert len(parts) == 3
+
+        # Decode and validate header
+        header_b64, payload_b64, signature_b64 = parts
+        header_padded = header_b64 + '=' * (4 - len(header_b64) % 4)
+        header = json.loads(base64.urlsafe_b64decode(header_padded))
+
+        assert header["alg"] == "ES256"
+        assert header["typ"] == "JWT"
+        assert "kid" in header
+        assert "#key-1" in header["kid"]
+
+    def test_jwt_generation_with_hash(self, mock_crypto):
+        """Test JWT generation with pre-computed hash"""
+        key_manager, signature_manager = mock_crypto
+        jwt_generator = MerchantAuthorizationJWT(signature_manager, key_manager)
+
+        merchant_id = "did:ap2:merchant:test"
+        cart_hash = "test_hash_value"
+
+        # Generate JWT with hash
+        jwt_token = jwt_generator.generate_with_hash(
+            merchant_id=merchant_id,
+            cart_hash=cart_hash,
+            audience="payment_processor",
+            expiration_minutes=10
+        )
+
+        # Validate JWT structure
+        parts = jwt_token.split('.')
+        assert len(parts) == 3
+
+        # Decode and validate payload
+        header_b64, payload_b64, signature_b64 = parts
+        payload_padded = payload_b64 + '=' * (4 - len(payload_b64) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(payload_padded))
+
+        assert payload["cart_hash"] == cart_hash
+        assert payload["iss"] == merchant_id
+        assert payload["sub"] == merchant_id
+        assert payload["aud"] == "payment_processor"
+
+    def test_jwt_payload_structure(self, mock_crypto):
+        """Test JWT payload structure"""
+        key_manager, signature_manager = mock_crypto
+        jwt_generator = MerchantAuthorizationJWT(signature_manager, key_manager)
+
+        merchant_id = "did:ap2:merchant:test"
+        cart_contents = {"total": 1000}
+
+        jwt_token = jwt_generator.generate(
+            merchant_id=merchant_id,
+            cart_contents=cart_contents
+        )
+
+        # Decode payload
+        parts = jwt_token.split('.')
+        payload_b64 = parts[1]
+        payload_padded = payload_b64 + '=' * (4 - len(payload_b64) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(payload_padded))
+
+        # Validate required claims
+        required_claims = ["iss", "sub", "aud", "iat", "exp", "jti", "cart_hash"]
+        for claim in required_claims:
+            assert claim in payload
+
+        assert payload["exp"] > payload["iat"]
 
     def test_jwt_structure(self):
         """Test JWT structure (header.payload.signature)"""
@@ -188,7 +318,114 @@ class TestMerchantAuthorizationJWT:
 
 
 class TestUserAuthorizationSDJWT:
-    """Test User Authorization SD-JWT"""
+    """Test User Authorization SD-JWT with actual implementation"""
+
+    @pytest.fixture
+    def mock_crypto(self):
+        """Create mock crypto managers"""
+        key_manager = Mock()
+        signature_manager = Mock()
+
+        # Mock signature object
+        mock_signature = Mock()
+        mock_signature.signature = "0" * 128  # Hex-encoded signature
+
+        signature_manager.sign_data.return_value = mock_signature
+
+        return key_manager, signature_manager
+
+    def test_sd_jwt_generation(self, mock_crypto):
+        """Test SD-JWT-VC generation"""
+        key_manager, signature_manager = mock_crypto
+        sd_jwt_generator = UserAuthorizationSDJWT(signature_manager, key_manager)
+
+        user_id = "did:ap2:user:test"
+        cart_mandate = {"type": "CartMandate", "id": "cart_001"}
+        payment_mandate_contents = {"payment_total": {"value": "1000.00"}}
+        audience = "payment_processor"
+        nonce = "unique_nonce_123"
+
+        # Generate SD-JWT-VC
+        sd_jwt_vc = sd_jwt_generator.generate(
+            user_id=user_id,
+            cart_mandate=cart_mandate,
+            payment_mandate_contents=payment_mandate_contents,
+            audience=audience,
+            nonce=nonce
+        )
+
+        # Validate format
+        assert "~" in sd_jwt_vc
+        parts = sd_jwt_vc.split("~")
+        assert len(parts) >= 2
+
+        # Validate issuer JWT structure
+        issuer_jwt = parts[0]
+        issuer_parts = issuer_jwt.split('.')
+        assert len(issuer_parts) == 3
+
+    def test_sd_jwt_issuer_payload(self, mock_crypto):
+        """Test SD-JWT issuer JWT payload"""
+        key_manager, signature_manager = mock_crypto
+        sd_jwt_generator = UserAuthorizationSDJWT(signature_manager, key_manager)
+
+        user_id = "did:ap2:user:test"
+        cart_mandate = {"type": "CartMandate"}
+        payment_mandate_contents = {"payment_total": {"value": "1000.00"}}
+
+        sd_jwt_vc = sd_jwt_generator.generate(
+            user_id=user_id,
+            cart_mandate=cart_mandate,
+            payment_mandate_contents=payment_mandate_contents,
+            audience="payment_processor",
+            nonce="nonce_123"
+        )
+
+        # Extract issuer JWT
+        parts = sd_jwt_vc.split("~")
+        issuer_jwt = parts[0]
+        issuer_payload_b64 = issuer_jwt.split('.')[1]
+        issuer_payload_padded = issuer_payload_b64 + '=' * (4 - len(issuer_payload_b64) % 4)
+        issuer_payload = json.loads(base64.urlsafe_b64decode(issuer_payload_padded))
+
+        # Validate issuer payload
+        assert issuer_payload["iss"] == user_id
+        assert issuer_payload["sub"] == user_id
+        assert "cnf" in issuer_payload
+        assert issuer_payload["cnf"]["kid"] == user_id
+
+    def test_sd_jwt_kb_payload(self, mock_crypto):
+        """Test SD-JWT key-binding JWT payload"""
+        key_manager, signature_manager = mock_crypto
+        sd_jwt_generator = UserAuthorizationSDJWT(signature_manager, key_manager)
+
+        user_id = "did:ap2:user:test"
+        cart_mandate = {"type": "CartMandate"}
+        payment_mandate_contents = {"payment_total": {"value": "1000.00"}}
+        audience = "payment_processor"
+        nonce = "nonce_123"
+
+        sd_jwt_vc = sd_jwt_generator.generate(
+            user_id=user_id,
+            cart_mandate=cart_mandate,
+            payment_mandate_contents=payment_mandate_contents,
+            audience=audience,
+            nonce=nonce
+        )
+
+        # Extract KB JWT
+        parts = sd_jwt_vc.split("~")
+        kb_jwt = parts[1]
+        kb_payload_b64 = kb_jwt.split('.')[1]
+        kb_payload_padded = kb_payload_b64 + '=' * (4 - len(kb_payload_b64) % 4)
+        kb_payload = json.loads(base64.urlsafe_b64decode(kb_payload_padded))
+
+        # Validate KB payload
+        assert kb_payload["aud"] == audience
+        assert kb_payload["nonce"] == nonce
+        assert "sd_hash" in kb_payload
+        assert "transaction_data" in kb_payload
+        assert len(kb_payload["transaction_data"]) == 2
 
     def test_sd_jwt_vc_format(self):
         """Test SD-JWT-VC format (issuer~kb~)"""
