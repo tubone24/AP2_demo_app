@@ -20,6 +20,9 @@ wheels/
 .installed.cfg
 *.egg
 
+# Allow frontend lib directory
+!frontend/lib/
+
 # Virtual environments
 venv/
 ENV/
