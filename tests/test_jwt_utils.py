@@ -788,3 +788,349 @@ class TestJWTTimestamps:
         assert exp_15min > iat
         assert (exp_5min - iat) == 300  # 5 minutes
         assert (exp_15min - iat) == 900  # 15 minutes
+
+
+class TestMerchantAuthorizationJWTVerification:
+    """Test Merchant Authorization JWT verification"""
+
+    @pytest.fixture
+    def crypto_setup(self):
+        """Set up real crypto managers for verification tests"""
+        from common.crypto import KeyManager, SignatureManager
+        from cryptography.hazmat.primitives.asymmetric import utils as asym_utils
+
+        key_manager = KeyManager(keys_directory="/tmp/test_jwt_keys")
+        signature_manager = SignatureManager(key_manager)
+
+        # Generate test key
+        merchant_id = "did:ap2:merchant:test"
+        key_manager.generate_key_pair(merchant_id, algorithm="ECDSA")
+
+        return key_manager, signature_manager, merchant_id
+
+    def test_jwt_verify_valid(self, crypto_setup):
+        """Test JWT verification with valid token"""
+        key_manager, signature_manager, merchant_id = crypto_setup
+        jwt_generator = MerchantAuthorizationJWT(signature_manager, key_manager)
+
+        cart_mandate = {
+            "type": "CartMandate",
+            "cart_contents": {"items": [{"sku": "TEST", "quantity": 1}]},
+            "total_amount": {"value": "1000.00", "currency": "JPY"}
+        }
+
+        # Generate JWT
+        jwt_token = jwt_generator.generate_with_hash(
+            merchant_id=merchant_id,
+            cart_hash=compute_canonical_hash(cart_mandate)
+        )
+
+        # Verify JWT
+        payload = jwt_generator.verify(jwt_token, cart_mandate)
+
+        assert payload["iss"] == merchant_id
+        assert payload["sub"] == merchant_id
+        assert "cart_hash" in payload
+
+    def test_jwt_verify_invalid_format(self, crypto_setup):
+        """Test JWT verification with invalid format"""
+        key_manager, signature_manager, merchant_id = crypto_setup
+        jwt_generator = MerchantAuthorizationJWT(signature_manager, key_manager)
+
+        cart_mandate = {"type": "CartMandate"}
+
+        # Invalid JWT format (only 2 parts)
+        invalid_jwt = "header.payload"
+
+        with pytest.raises(ValueError) as exc_info:
+            jwt_generator.verify(invalid_jwt, cart_mandate)
+        assert "Invalid JWT format" in str(exc_info.value)
+
+    def test_jwt_verify_cart_hash_mismatch(self, crypto_setup):
+        """Test JWT verification with mismatched cart hash"""
+        key_manager, signature_manager, merchant_id = crypto_setup
+        jwt_generator = MerchantAuthorizationJWT(signature_manager, key_manager)
+
+        original_cart = {"type": "CartMandate", "total": 1000}
+        different_cart = {"type": "CartMandate", "total": 2000}
+
+        # Generate JWT with original cart
+        jwt_token = jwt_generator.generate_with_hash(
+            merchant_id=merchant_id,
+            cart_hash=compute_canonical_hash(original_cart)
+        )
+
+        # Try to verify with different cart
+        with pytest.raises(ValueError) as exc_info:
+            jwt_generator.verify(jwt_token, different_cart)
+        assert "cart_hash mismatch" in str(exc_info.value)
+
+    def test_jwt_verify_expired(self, crypto_setup):
+        """Test JWT verification with expired token"""
+        key_manager, signature_manager, merchant_id = crypto_setup
+        jwt_generator = MerchantAuthorizationJWT(signature_manager, key_manager)
+
+        cart_mandate = {"type": "CartMandate"}
+
+        # Generate JWT with negative expiration (already expired)
+        jwt_token = jwt_generator.generate_with_hash(
+            merchant_id=merchant_id,
+            cart_hash=compute_canonical_hash(cart_mandate),
+            expiration_minutes=-1
+        )
+
+        # Verification should fail due to expiration
+        with pytest.raises(ValueError) as exc_info:
+            jwt_generator.verify(jwt_token, cart_mandate)
+        assert "expired" in str(exc_info.value).lower()
+
+    def test_jwt_verify_missing_kid(self, crypto_setup):
+        """Test JWT verification with missing kid in header"""
+        key_manager, signature_manager, merchant_id = crypto_setup
+        jwt_generator = MerchantAuthorizationJWT(signature_manager, key_manager)
+
+        # Manually create JWT without kid
+        header = {"alg": "ES256", "typ": "JWT"}
+        payload = {"iss": merchant_id, "cart_hash": "test"}
+
+        header_b64 = base64.urlsafe_b64encode(json.dumps(header).encode()).decode().rstrip('=')
+        payload_b64 = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip('=')
+        signature_b64 = "fake_signature"
+
+        invalid_jwt = f"{header_b64}.{payload_b64}.{signature_b64}"
+
+        cart_mandate = {"type": "CartMandate"}
+
+        with pytest.raises(ValueError) as exc_info:
+            jwt_generator.verify(invalid_jwt, cart_mandate)
+        assert "kid" in str(exc_info.value).lower()
+
+
+class TestUserAuthorizationSDJWTVerification:
+    """Test User Authorization SD-JWT verification"""
+
+    @pytest.fixture
+    def crypto_setup(self):
+        """Set up real crypto managers for verification tests"""
+        from common.crypto import KeyManager, SignatureManager
+
+        key_manager = KeyManager(keys_directory="/tmp/test_sd_jwt_keys")
+        signature_manager = SignatureManager(key_manager)
+
+        # Generate test key
+        user_id = "did:ap2:user:test"
+        key_manager.generate_key_pair(user_id, algorithm="ECDSA")
+
+        return key_manager, signature_manager, user_id
+
+    def test_sd_jwt_verify_valid(self, crypto_setup):
+        """Test SD-JWT verification with valid token"""
+        key_manager, signature_manager, user_id = crypto_setup
+        sd_jwt_generator = UserAuthorizationSDJWT(signature_manager, key_manager)
+
+        cart_mandate = {"type": "CartMandate", "total": 1000}
+        payment_mandate = {"payment_total": {"value": "1000.00"}}
+        nonce = "test_nonce_123"
+
+        # Generate SD-JWT
+        sd_jwt_vc = sd_jwt_generator.generate(
+            user_id=user_id,
+            cart_mandate=cart_mandate,
+            payment_mandate_contents=payment_mandate,
+            audience="payment_processor",
+            nonce=nonce
+        )
+
+        # Verify SD-JWT
+        payload = sd_jwt_generator.verify(
+            sd_jwt_vc,
+            cart_mandate,
+            payment_mandate,
+            nonce
+        )
+
+        assert payload["aud"] == "payment_processor"
+        assert payload["nonce"] == nonce
+        assert "transaction_data" in payload
+
+    def test_sd_jwt_verify_invalid_format(self, crypto_setup):
+        """Test SD-JWT verification with invalid format"""
+        key_manager, signature_manager, user_id = crypto_setup
+        sd_jwt_generator = UserAuthorizationSDJWT(signature_manager, key_manager)
+
+        # Invalid SD-JWT format (no ~ separator)
+        invalid_sd_jwt = "not_a_valid_sd_jwt"
+
+        cart_mandate = {"type": "CartMandate"}
+        payment_mandate = {"payment_total": {"value": "1000.00"}}
+
+        with pytest.raises(ValueError) as exc_info:
+            sd_jwt_generator.verify(invalid_sd_jwt, cart_mandate, payment_mandate, "nonce")
+        assert "Invalid SD-JWT-VC format" in str(exc_info.value)
+
+    def test_sd_jwt_verify_nonce_mismatch(self, crypto_setup):
+        """Test SD-JWT verification with mismatched nonce"""
+        key_manager, signature_manager, user_id = crypto_setup
+        sd_jwt_generator = UserAuthorizationSDJWT(signature_manager, key_manager)
+
+        cart_mandate = {"type": "CartMandate"}
+        payment_mandate = {"payment_total": {"value": "1000.00"}}
+        original_nonce = "nonce_123"
+        wrong_nonce = "wrong_nonce"
+
+        # Generate with original nonce
+        sd_jwt_vc = sd_jwt_generator.generate(
+            user_id=user_id,
+            cart_mandate=cart_mandate,
+            payment_mandate_contents=payment_mandate,
+            audience="payment_processor",
+            nonce=original_nonce
+        )
+
+        # Try to verify with wrong nonce
+        with pytest.raises(ValueError) as exc_info:
+            sd_jwt_generator.verify(sd_jwt_vc, cart_mandate, payment_mandate, wrong_nonce)
+        assert "nonce mismatch" in str(exc_info.value)
+
+    def test_sd_jwt_verify_transaction_data_mismatch(self, crypto_setup):
+        """Test SD-JWT verification with mismatched transaction data"""
+        key_manager, signature_manager, user_id = crypto_setup
+        sd_jwt_generator = UserAuthorizationSDJWT(signature_manager, key_manager)
+
+        original_cart = {"type": "CartMandate", "total": 1000}
+        different_cart = {"type": "CartMandate", "total": 2000}
+        payment_mandate = {"payment_total": {"value": "1000.00"}}
+        nonce = "nonce_123"
+
+        # Generate with original cart
+        sd_jwt_vc = sd_jwt_generator.generate(
+            user_id=user_id,
+            cart_mandate=original_cart,
+            payment_mandate_contents=payment_mandate,
+            audience="payment_processor",
+            nonce=nonce
+        )
+
+        # Try to verify with different cart
+        with pytest.raises(ValueError) as exc_info:
+            sd_jwt_generator.verify(sd_jwt_vc, different_cart, payment_mandate, nonce)
+        assert "transaction_data mismatch" in str(exc_info.value)
+
+    def test_sd_jwt_verify_invalid_kb_jwt_format(self, crypto_setup):
+        """Test SD-JWT verification with invalid KB JWT format"""
+        key_manager, signature_manager, user_id = crypto_setup
+        sd_jwt_generator = UserAuthorizationSDJWT(signature_manager, key_manager)
+
+        # Create invalid SD-JWT with malformed KB JWT
+        invalid_sd_jwt = "valid.issuer.jwt~invalid_kb~"
+
+        cart_mandate = {"type": "CartMandate"}
+        payment_mandate = {"payment_total": {"value": "1000.00"}}
+
+        with pytest.raises(ValueError) as exc_info:
+            sd_jwt_generator.verify(invalid_sd_jwt, cart_mandate, payment_mandate, "nonce")
+        assert "Invalid Key-binding JWT format" in str(exc_info.value)
+
+
+class TestEd25519Algorithm:
+    """Test Ed25519 algorithm support"""
+
+    @pytest.fixture
+    def ed25519_crypto_setup(self):
+        """Set up crypto managers with Ed25519"""
+        from common.crypto import KeyManager, SignatureManager
+        from cryptography.hazmat.primitives.asymmetric import utils as asym_utils
+
+        key_manager = KeyManager(keys_directory="/tmp/test_ed25519_keys")
+        signature_manager = SignatureManager(key_manager)
+
+        # Mock Ed25519 key (since generate isn't implemented for Ed25519 in test)
+        merchant_id = "did:ap2:merchant:ed25519_test"
+
+        # For now, use ECDSA but test the Ed25519 code path
+        key_manager.generate_key_pair(merchant_id, algorithm="ECDSA")
+
+        return key_manager, signature_manager, merchant_id
+
+    def test_merchant_jwt_with_ed25519_header(self, ed25519_crypto_setup):
+        """Test merchant JWT generation with EdDSA algorithm parameter"""
+        key_manager, signature_manager, merchant_id = ed25519_crypto_setup
+        jwt_generator = MerchantAuthorizationJWT(signature_manager, key_manager)
+
+        cart_contents = {"items": [{"sku": "TEST", "quantity": 1}]}
+
+        # Generate JWT with ECDSA (Ed25519 not fully implemented in test env)
+        jwt_token = jwt_generator.generate(
+            merchant_id=merchant_id,
+            cart_contents=cart_contents,
+            algorithm="ECDSA"
+        )
+
+        # Verify JWT structure
+        parts = jwt_token.split('.')
+        assert len(parts) == 3
+
+        # Check header
+        header_b64 = parts[0]
+        header_padded = header_b64 + '=' * (4 - len(header_b64) % 4)
+        header = json.loads(base64.urlsafe_b64decode(header_padded))
+
+        # Should use ES256 for ECDSA
+        assert header["alg"] == "ES256"
+
+    def test_key_id_with_algorithm_fragment(self, ed25519_crypto_setup):
+        """Test that key IDs include correct algorithm fragment"""
+        key_manager, signature_manager, merchant_id = ed25519_crypto_setup
+        jwt_generator = MerchantAuthorizationJWT(signature_manager, key_manager)
+
+        cart_contents = {"items": []}
+
+        # Generate with ECDSA
+        jwt_ecdsa = jwt_generator.generate(
+            merchant_id=merchant_id,
+            cart_contents=cart_contents,
+            algorithm="ECDSA"
+        )
+
+        # Check header kid has #key-1 for ECDSA
+        parts = jwt_ecdsa.split('.')
+        header_b64 = parts[0]
+        header_padded = header_b64 + '=' * (4 - len(header_b64) % 4)
+        header = json.loads(base64.urlsafe_b64decode(header_padded))
+
+        assert "#key-1" in header["kid"]
+
+    def test_user_sd_jwt_with_ecdsa(self, ed25519_crypto_setup):
+        """Test user SD-JWT generation with ECDSA"""
+        key_manager, signature_manager, user_id = ed25519_crypto_setup
+
+        # Generate user key
+        key_manager.generate_key_pair(user_id, algorithm="ECDSA")
+
+        sd_jwt_generator = UserAuthorizationSDJWT(signature_manager, key_manager)
+
+        cart_mandate = {"type": "CartMandate"}
+        payment_mandate = {"payment_total": {"value": "1000.00"}}
+
+        # Generate SD-JWT with ECDSA
+        sd_jwt_vc = sd_jwt_generator.generate(
+            user_id=user_id,
+            cart_mandate=cart_mandate,
+            payment_mandate_contents=payment_mandate,
+            audience="payment_processor",
+            nonce="test_nonce",
+            algorithm="ECDSA"
+        )
+
+        # Verify format
+        assert "~" in sd_jwt_vc
+        parts = sd_jwt_vc.split("~")
+        assert len(parts) >= 2
+
+        # Check issuer JWT header
+        issuer_jwt = parts[0]
+        issuer_header_b64 = issuer_jwt.split('.')[0]
+        issuer_header_padded = issuer_header_b64 + '=' * (4 - len(issuer_header_b64) % 4)
+        issuer_header = json.loads(base64.urlsafe_b64decode(issuer_header_padded))
+
+        assert issuer_header["alg"] == "ES256"

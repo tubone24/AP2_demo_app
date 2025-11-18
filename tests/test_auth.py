@@ -189,3 +189,258 @@ class TestJWTTokens:
         with pytest.raises(HTTPException) as exc_info:
             verify_access_token(token)
         assert exc_info.value.status_code == 401
+
+
+class TestGetCurrentUser:
+    """Test get_current_user dependency"""
+
+    @pytest.mark.asyncio
+    async def test_get_current_user_success(self):
+        """Test successful user retrieval"""
+        from unittest.mock import AsyncMock, Mock
+        from fastapi.security import HTTPAuthorizationCredentials
+        from common.auth import get_current_user
+        from common.models import UserInDB
+        from common.database import DatabaseManager
+
+        # Create mock credentials
+        credentials = Mock(spec=HTTPAuthorizationCredentials)
+        data = {"user_id": "user_123", "email": "test@example.com"}
+        credentials.credentials = create_access_token(data)
+
+        # Create mock database manager
+        db_manager = Mock(spec=DatabaseManager)
+        mock_session = AsyncMock()
+        db_manager.get_session.return_value.__aenter__.return_value = mock_session
+
+        # Create mock user from database
+        from unittest.mock import MagicMock
+        mock_db_user = MagicMock()
+        mock_db_user.id = "user_123"
+        mock_db_user.email = "test@example.com"
+        mock_db_user.display_name = "Test User"
+        mock_db_user.hashed_password = "hashed_password"
+        mock_db_user.created_at = datetime.now(timezone.utc)
+        mock_db_user.is_active = True
+
+        # Mock UserCRUD.get_by_id
+        with pytest.mock.patch('common.auth.UserCRUD.get_by_id', new_callable=AsyncMock) as mock_get_by_id:
+            mock_get_by_id.return_value = mock_db_user
+
+            # Call get_current_user
+            user = await get_current_user(credentials, db_manager)
+
+            # Verify result
+            assert isinstance(user, UserInDB)
+            assert user.id == "user_123"
+            assert user.email == "test@example.com"
+            assert user.is_active is True
+
+    @pytest.mark.asyncio
+    async def test_get_current_user_no_db_manager(self):
+        """Test get_current_user without database manager"""
+        from fastapi.security import HTTPAuthorizationCredentials
+        from common.auth import get_current_user
+
+        # Create mock credentials
+        credentials = Mock(spec=HTTPAuthorizationCredentials)
+        data = {"user_id": "user_123", "email": "test@example.com"}
+        credentials.credentials = create_access_token(data)
+
+        # Call without db_manager
+        with pytest.raises(HTTPException) as exc_info:
+            await get_current_user(credentials, db_manager=None)
+
+        assert exc_info.value.status_code == 500
+        assert "Database manager not configured" in exc_info.value.detail
+
+    @pytest.mark.asyncio
+    async def test_get_current_user_not_found(self):
+        """Test get_current_user when user not found"""
+        from unittest.mock import AsyncMock, Mock
+        from fastapi.security import HTTPAuthorizationCredentials
+        from common.auth import get_current_user
+        from common.database import DatabaseManager
+
+        # Create mock credentials
+        credentials = Mock(spec=HTTPAuthorizationCredentials)
+        data = {"user_id": "nonexistent_user", "email": "test@example.com"}
+        credentials.credentials = create_access_token(data)
+
+        # Create mock database manager
+        db_manager = Mock(spec=DatabaseManager)
+        mock_session = AsyncMock()
+        db_manager.get_session.return_value.__aenter__.return_value = mock_session
+
+        # Mock UserCRUD.get_by_id returns None
+        with pytest.mock.patch('common.auth.UserCRUD.get_by_id', new_callable=AsyncMock) as mock_get_by_id:
+            mock_get_by_id.return_value = None
+
+            # Call get_current_user
+            with pytest.raises(HTTPException) as exc_info:
+                await get_current_user(credentials, db_manager)
+
+            assert exc_info.value.status_code == 401
+            assert "User not found" in exc_info.value.detail
+
+    @pytest.mark.asyncio
+    async def test_get_current_user_inactive(self):
+        """Test get_current_user with inactive user"""
+        from unittest.mock import AsyncMock, Mock, MagicMock
+        from fastapi.security import HTTPAuthorizationCredentials
+        from common.auth import get_current_user
+        from common.database import DatabaseManager
+
+        # Create mock credentials
+        credentials = Mock(spec=HTTPAuthorizationCredentials)
+        data = {"user_id": "user_123", "email": "test@example.com"}
+        credentials.credentials = create_access_token(data)
+
+        # Create mock database manager
+        db_manager = Mock(spec=DatabaseManager)
+        mock_session = AsyncMock()
+        db_manager.get_session.return_value.__aenter__.return_value = mock_session
+
+        # Create mock inactive user
+        mock_db_user = MagicMock()
+        mock_db_user.id = "user_123"
+        mock_db_user.email = "test@example.com"
+        mock_db_user.display_name = "Test User"
+        mock_db_user.hashed_password = "hashed_password"
+        mock_db_user.created_at = datetime.now(timezone.utc)
+        mock_db_user.is_active = False  # Inactive user
+
+        # Mock UserCRUD.get_by_id
+        with pytest.mock.patch('common.auth.UserCRUD.get_by_id', new_callable=AsyncMock) as mock_get_by_id:
+            mock_get_by_id.return_value = mock_db_user
+
+            # Call get_current_user
+            with pytest.raises(HTTPException) as exc_info:
+                await get_current_user(credentials, db_manager)
+
+            assert exc_info.value.status_code == 403
+            assert "Inactive user" in exc_info.value.detail
+
+    @pytest.mark.asyncio
+    async def test_get_current_user_invalid_token(self):
+        """Test get_current_user with invalid token"""
+        from fastapi.security import HTTPAuthorizationCredentials
+        from common.auth import get_current_user
+        from common.database import DatabaseManager
+
+        # Create mock credentials with invalid token
+        credentials = Mock(spec=HTTPAuthorizationCredentials)
+        credentials.credentials = "invalid.token.here"
+
+        # Create mock database manager
+        db_manager = Mock(spec=DatabaseManager)
+
+        # Call get_current_user
+        with pytest.raises(HTTPException) as exc_info:
+            await get_current_user(credentials, db_manager)
+
+        assert exc_info.value.status_code == 401
+
+
+class TestPasswordStrengthEdgeCases:
+    """Test password strength edge cases"""
+
+    def test_validate_password_exactly_8_chars(self):
+        """Test password with exactly 8 characters"""
+        # Valid 8-char password
+        assert validate_password_strength("Test1234") is True
+
+    def test_validate_password_with_special_chars(self):
+        """Test password with special characters (should still pass)"""
+        # Password with special chars
+        assert validate_password_strength("Test123!@#") is True
+
+    def test_validate_password_long_password(self):
+        """Test very long password"""
+        # Very long password (should still pass)
+        long_password = "Test1234" * 10
+        assert validate_password_strength(long_password) is True
+
+    def test_validate_password_unicode_chars(self):
+        """Test password with unicode characters"""
+        # Password with unicode should pass if it meets requirements
+        assert validate_password_strength("Test1234日本語") is True
+
+
+class TestJWTTokenEdgeCases:
+    """Test JWT token edge cases"""
+
+    def test_create_token_with_extra_claims(self):
+        """Test creating token with extra custom claims"""
+        data = {
+            "user_id": "user_123",
+            "email": "test@example.com",
+            "custom_field": "custom_value"
+        }
+        token = create_access_token(data)
+
+        # Decode and verify
+        payload = pyjwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        assert payload["user_id"] == "user_123"
+        assert payload["email"] == "test@example.com"
+        assert payload["custom_field"] == "custom_value"
+
+    def test_verify_token_with_extra_claims(self):
+        """Test verifying token with extra claims"""
+        data = {
+            "user_id": "user_123",
+            "email": "test@example.com",
+            "role": "admin"
+        }
+        token = create_access_token(data)
+
+        # Verify
+        token_data = verify_access_token(token)
+        assert token_data.user_id == "user_123"
+        assert token_data.email == "test@example.com"
+
+    def test_token_expiration_boundary(self):
+        """Test token at exact expiration boundary"""
+        data = {"user_id": "user_123"}
+        # Create token that expires in 1 second
+        expires_delta = timedelta(seconds=1)
+        token = create_access_token(data, expires_delta=expires_delta)
+
+        # Should be valid immediately
+        token_data = verify_access_token(token)
+        assert token_data.user_id == "user_123"
+
+        # After 2 seconds, should be expired
+        import time
+        time.sleep(2)
+        with pytest.raises(HTTPException) as exc_info:
+            verify_access_token(token)
+        assert exc_info.value.status_code == 401
+
+
+class TestPasswordHashingEdgeCases:
+    """Test password hashing edge cases"""
+
+    def test_hash_empty_string(self):
+        """Test hashing empty string"""
+        # Empty string should still be hashable
+        hashed = hash_password("")
+        assert isinstance(hashed, str)
+        assert hashed.startswith("$argon2")
+
+    def test_verify_empty_password(self):
+        """Test verifying empty password"""
+        hashed = hash_password("")
+        assert verify_password("", hashed) is True
+        assert verify_password("not_empty", hashed) is False
+
+    def test_hash_very_long_password(self):
+        """Test hashing very long password"""
+        long_password = "A" * 1000
+        hashed = hash_password(long_password)
+        assert verify_password(long_password, hashed) is True
+
+    def test_verify_with_wrong_hash_format(self):
+        """Test verifying with invalid hash format"""
+        # Invalid hash format should return False
+        assert verify_password("password", "invalid_hash") is False
