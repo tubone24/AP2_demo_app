@@ -98,7 +98,8 @@ class TestPaymentMandateValidation:
                 "payment_method": {
                     "type": "card",
                     "token": "tok_test_123"
-                }
+                },
+                "user_authorization": "mock_user_auth_jwt"
             }
 
             # Should not raise exception
@@ -248,8 +249,18 @@ class TestPaymentProcessing:
                 "payment_method": {
                     "token": "tok_test_123"
                 },
-                "risk_score": 10
+                "risk_score": 10,
+                "user_authorization": "mock_jwt"
             }
+
+            # Need to mock _verify_credential_with_cp to return awaitable
+            async def mock_verify():
+                return {
+                    "payment_method_id": "pm_123",
+                    "agent_token": "agent_tok_test_123"
+                }
+
+            service._verify_credential_with_cp = mock_verify
 
             result = await service._process_payment_mock(
                 transaction_id="txn_001",
@@ -280,8 +291,14 @@ class TestPaymentProcessing:
                     "token": "tok_test_123"
                 },
                 "risk_score": 85,  # High risk
-                "fraud_indicators": ["suspicious_location"]
+                "fraud_indicators": ["suspicious_location"],
+                "user_authorization": "mock_jwt"
             }
+
+            # Mock credential verification to avoid async issues
+            async def mock_verify(token, payer_id, amount):
+                return {"agent_token": "test_token"}
+            service._verify_credential_with_cp = mock_verify
 
             result = await service._process_payment_mock(
                 transaction_id="txn_001",
@@ -333,18 +350,20 @@ class TestCredentialVerification:
              patch('common.base_agent.KeyManager'):
             service = PaymentProcessorService()
 
-            # Mock HTTP client
-            mock_http_client = AsyncMock()
+            # Mock HTTP client properly as awaitable
             mock_response = AsyncMock()
             mock_response.status_code = 200
-            mock_response.json.return_value = {
+            mock_response.json = AsyncMock(return_value={
                 "verified": True,
                 "credential_info": {
                     "payment_method_id": "pm_123",
                     "agent_token": "agent_tok_test"
                 }
-            }
-            mock_http_client.post.return_value = mock_response
+            })
+            mock_response.raise_for_status = AsyncMock()
+
+            mock_http_client = AsyncMock()
+            mock_http_client.post = AsyncMock(return_value=mock_response)
             service.http_client = mock_http_client
 
             result = await service._verify_credential_with_cp(
@@ -366,15 +385,17 @@ class TestCredentialVerification:
              patch('common.base_agent.KeyManager'):
             service = PaymentProcessorService()
 
-            # Mock HTTP client
-            mock_http_client = AsyncMock()
+            # Mock HTTP client properly as awaitable
             mock_response = AsyncMock()
             mock_response.status_code = 200
-            mock_response.json.return_value = {
+            mock_response.json = AsyncMock(return_value={
                 "verified": False,
                 "error": "Invalid token"
-            }
-            mock_http_client.post.return_value = mock_response
+            })
+            mock_response.raise_for_status = AsyncMock()
+
+            mock_http_client = AsyncMock()
+            mock_http_client.post = AsyncMock(return_value=mock_response)
             service.http_client = mock_http_client
 
             with pytest.raises(ValueError, match="Credential verification failed"):
