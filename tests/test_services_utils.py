@@ -635,7 +635,7 @@ class TestA2AHelpers:
         mock_span.__enter__ = MagicMock(return_value=mock_span)
         mock_span.__exit__ = MagicMock(return_value=False)
 
-        with patch('services.shopping_agent.utils.a2a_helpers.create_http_span', return_value=mock_span):
+        with patch('common.telemetry.create_http_span', return_value=mock_span):
             result = await helpers.send_cart_request_via_a2a(cart_request)
 
         assert result == {"status": "success"}
