@@ -24,13 +24,13 @@ from fastapi.testclient import TestClient
 class TestPaymentProcessorServiceInit:
     """Test PaymentProcessorService initialization"""
 
-    @patch('services.payment_processor.processor.DatabaseManager')
-    @patch('services.payment_processor.processor.LoggingAsyncClient')
-    @patch('services.payment_processor.processor.JWTHelpers')
-    @patch('services.payment_processor.processor.MandateHelpers')
     @patch('common.base_agent.KeyManager')
-    def test_service_initialization(self, mock_mandate_helpers, mock_jwt_helpers,
-                                    mock_http_client, mock_db_manager):
+    @patch('services.payment_processor.processor.MandateHelpers')
+    @patch('services.payment_processor.processor.JWTHelpers')
+    @patch('services.payment_processor.processor.LoggingAsyncClient')
+    @patch('services.payment_processor.processor.DatabaseManager')
+    def test_service_initialization(self, mock_db_manager, mock_http_client,
+                                    mock_jwt_helpers, mock_mandate_helpers, mock_key_manager):
         """Test service initializes with correct configuration"""
         from services.payment_processor.processor import PaymentProcessorService
 
