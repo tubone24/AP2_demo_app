@@ -399,3 +399,320 @@ class TestCredentialProviderEndpoints:
         assert "user_id" in request
         assert "payment_method_id" in request
         assert "user_authorization" in request
+
+
+# ============================================================================
+# Endpoint Implementation Tests - Improve Coverage
+# ============================================================================
+
+
+class TestCredentialProviderEndpointImplementation:
+    """Test actual Credential Provider endpoint implementations"""
+
+    @pytest.mark.asyncio
+    async def test_get_payment_methods_endpoint(self, credential_provider_client, db_manager):
+        """Test GET /payment-methods/{user_id} endpoint"""
+        from common.database import PaymentMethodCRUD
+
+        # Create test payment method
+        async with db_manager.get_session() as session:
+            await PaymentMethodCRUD.create(session, {
+                "id": "pm_test_001",
+                "user_id": "user_test_001",
+                "payment_method": {
+                    "type": "https://a2a-protocol.org/payment-methods/ap2-payment",
+                    "display_name": "Test Card (****1234)",
+                    "card_last4": "1234",
+                    "card_brand": "Visa",
+                    "billing_address": {
+                        "country": "JP",
+                        "postal_code": "100-0001"
+                    },
+                    "requires_step_up": False
+                }
+            })
+
+        # Get payment methods
+        response = credential_provider_client.get("/payment-methods/user_test_001")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["user_id"] == "user_test_001"
+        assert "payment_methods" in data
+        assert len(data["payment_methods"]) > 0
+
+    @pytest.mark.asyncio
+    async def test_add_payment_method_endpoint(self, credential_provider_client):
+        """Test POST /payment-methods endpoint"""
+        request_data = {
+            "user_id": "user_test_002",
+            "payment_method": {
+                "type": "https://a2a-protocol.org/payment-methods/ap2-payment",
+                "display_name": "New Card (****5678)",
+                "card_last4": "5678",
+                "card_brand": "Mastercard",
+                "billing_address": {
+                    "country": "JP",
+                    "postal_code": "150-0001"
+                },
+                "requires_step_up": False
+            }
+        }
+
+        response = credential_provider_client.post("/payment-methods", json=request_data)
+
+        assert response.status_code == 200
+        data = response.json()
+        assert "id" in data
+        assert data["user_id"] == "user_test_002"
+
+    @pytest.mark.asyncio
+    async def test_delete_payment_method_endpoint(self, credential_provider_client, db_manager):
+        """Test DELETE /payment-methods/{payment_method_id} endpoint"""
+        from common.database import PaymentMethodCRUD
+
+        # Create test payment method
+        async with db_manager.get_session() as session:
+            pm = await PaymentMethodCRUD.create(session, {
+                "id": "pm_delete_001",
+                "user_id": "user_test_003",
+                "payment_method": {
+                    "type": "https://a2a-protocol.org/payment-methods/ap2-payment",
+                    "display_name": "Test Card",
+                    "card_last4": "9999",
+                    "card_brand": "Visa",
+                    "billing_address": {},
+                    "requires_step_up": False
+                }
+            })
+
+        # Delete payment method
+        response = credential_provider_client.delete("/payment-methods/pm_delete_001")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "deleted"
+
+        # Verify it's deleted
+        async with db_manager.get_session() as session:
+            pm = await PaymentMethodCRUD.get_by_id(session, "pm_delete_001")
+            assert pm is None
+
+    @pytest.mark.asyncio
+    async def test_tokenize_payment_method_endpoint(self, credential_provider_client, db_manager):
+        """Test POST /tokenize-payment-method endpoint"""
+        from common.database import PaymentMethodCRUD
+
+        # Create test payment method
+        async with db_manager.get_session() as session:
+            await PaymentMethodCRUD.create(session, {
+                "id": "pm_tokenize_001",
+                "user_id": "user_test_004",
+                "payment_method": {
+                    "type": "https://a2a-protocol.org/payment-methods/ap2-payment",
+                    "display_name": "Test Card (****4242)",
+                    "card_last4": "4242",
+                    "card_brand": "Visa",
+                    "billing_address": {},
+                    "requires_step_up": False
+                }
+            })
+
+        request_data = {
+            "user_id": "user_test_004",
+            "payment_method_id": "pm_tokenize_001"
+        }
+
+        response = credential_provider_client.post("/tokenize-payment-method", json=request_data)
+
+        assert response.status_code == 200
+        data = response.json()
+        assert "token" in data
+        assert "expires_at" in data
+        assert data["card_last4"] == "4242"
+        assert data["card_brand"] == "Visa"
+
+    @pytest.mark.asyncio
+    async def test_get_passkey_public_key_endpoint(self, credential_provider_client, db_manager):
+        """Test POST /passkey-public-key endpoint"""
+        from common.database import PasskeyCredentialCRUD
+
+        # Create test passkey credential
+        async with db_manager.get_session() as session:
+            await PasskeyCredentialCRUD.create(session, {
+                "credential_id": "cred_test_001",
+                "user_id": "user_test_005",
+                "public_key_cose": base64.urlsafe_b64encode(b"test_public_key").decode(),
+                "sign_count": 0,
+                "created_at": datetime.now(timezone.utc).isoformat()
+            })
+
+        request_data = {
+            "credential_id": "cred_test_001"
+        }
+
+        response = credential_provider_client.post("/passkey-public-key", json=request_data)
+
+        assert response.status_code == 200
+        data = response.json()
+        assert "public_key_cose" in data
+        assert "user_id" in data
+        assert data["user_id"] == "user_test_005"
+
+    @pytest.mark.asyncio
+    async def test_receive_receipt_endpoint(self, credential_provider_client):
+        """Test POST /receipts endpoint"""
+        receipt_data = {
+            "transaction_id": "txn_test_001",
+            "receipt_url": "http://example.com/receipt/001",
+            "payer_id": "user_test_006",
+            "amount": {"value": "10000", "currency": "JPY"},
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+
+        response = credential_provider_client.post("/receipts", json=receipt_data)
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "received"
+        assert data["transaction_id"] == "txn_test_001"
+
+    @pytest.mark.asyncio
+    async def test_get_receipts_endpoint(self, credential_provider_client, db_manager):
+        """Test GET /receipts/{user_id} endpoint"""
+        from common.database import ReceiptCRUD
+
+        # Create test receipt
+        async with db_manager.get_session() as session:
+            await ReceiptCRUD.create(session, {
+                "transaction_id": "txn_get_test_001",
+                "payer_id": "user_test_007",
+                "receipt_url": "http://example.com/receipt/get001",
+                "amount": 50000,
+                "currency": "JPY",
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            })
+
+        response = credential_provider_client.get("/receipts/user_test_007")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["user_id"] == "user_test_007"
+        assert "receipts" in data
+        assert data["total_count"] > 0
+
+
+class TestCredentialProviderErrorHandling:
+    """Test error handling in Credential Provider endpoints"""
+
+    @pytest.mark.asyncio
+    async def test_get_payment_methods_not_found(self, credential_provider_client):
+        """Test GET /payment-methods/{user_id} with non-existent user"""
+        response = credential_provider_client.get("/payment-methods/nonexistent_user")
+
+        assert response.status_code == 200  # Returns empty list, not 404
+        data = response.json()
+        assert data["user_id"] == "nonexistent_user"
+        assert len(data["payment_methods"]) == 0
+
+    @pytest.mark.asyncio
+    async def test_delete_payment_method_not_found(self, credential_provider_client):
+        """Test DELETE /payment-methods/{payment_method_id} with non-existent ID"""
+        response = credential_provider_client.delete("/payment-methods/nonexistent_pm")
+
+        assert response.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_tokenize_payment_method_not_found(self, credential_provider_client):
+        """Test POST /tokenize-payment-method with non-existent payment method"""
+        request_data = {
+            "user_id": "user_test",
+            "payment_method_id": "nonexistent_pm"
+        }
+
+        response = credential_provider_client.post("/tokenize-payment-method", json=request_data)
+
+        assert response.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_get_passkey_public_key_not_found(self, credential_provider_client):
+        """Test POST /passkey-public-key with non-existent credential"""
+        request_data = {
+            "credential_id": "nonexistent_cred"
+        }
+
+        response = credential_provider_client.post("/passkey-public-key", json=request_data)
+
+        assert response.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_receive_receipt_missing_fields(self, credential_provider_client):
+        """Test POST /receipts with missing required fields"""
+        receipt_data = {
+            "transaction_id": "txn_incomplete"
+            # Missing required fields
+        }
+
+        response = credential_provider_client.post("/receipts", json=receipt_data)
+
+        assert response.status_code == 400
+
+
+class TestCredentialProviderHelperMethods:
+    """Test helper methods in Credential Provider"""
+
+    @pytest.mark.asyncio
+    async def test_generate_token_method(self):
+        """Test _generate_token helper method"""
+        from services.credential_provider.provider import CredentialProviderService
+
+        service = CredentialProviderService()
+
+        payment_mandate = {
+            "payer_id": "user_test_helper",
+            "id": "pm_helper_001"
+        }
+
+        attestation = {
+            "verified": True
+        }
+
+        token = service._generate_token(payment_mandate, attestation)
+
+        assert isinstance(token, str)
+        assert token.startswith("cred_token_")
+        assert len(token) > 20  # Should be reasonably long
+
+    @pytest.mark.asyncio
+    async def test_save_attestation_method(self, db_manager):
+        """Test _save_attestation helper method"""
+        from services.credential_provider.provider import CredentialProviderService
+
+        service = CredentialProviderService()
+        service.db_manager = db_manager
+
+        attestation_raw = {
+            "type": "webauthn",
+            "credential_id": "cred_save_test"
+        }
+
+        await service._save_attestation(
+            user_id="user_save_test",
+            attestation_raw=attestation_raw,
+            verified=True,
+            token="test_token_123",
+            agent_token="agent_token_456"
+        )
+
+        # Verify it was saved
+        async with db_manager.get_session() as session:
+            from common.database import Attestation
+            from sqlalchemy.future import select
+
+            result = await session.execute(
+                select(Attestation).where(Attestation.user_id == "user_save_test")
+            )
+            attestation = result.scalar_one_or_none()
+
+            assert attestation is not None
+            assert attestation.verified == 1  # True stored as 1
