@@ -520,3 +520,114 @@ class TestSeedFunctions:
                 mock_seed_products.assert_called_once_with(mock_db_manager)
                 mock_seed_users.assert_called_once_with(mock_db_manager)
                 mock_seed_pm.assert_called_once_with(mock_db_manager)
+
+
+class TestSeedDataEdgeCases:
+    """Test edge cases and additional coverage for seed_data"""
+
+    @pytest.mark.asyncio
+    async def test_seed_products_with_all_fields(self, db_manager):
+        """Test that all product fields are properly saved"""
+        from common.seed_data import seed_products, SAMPLE_PRODUCTS
+        from common.database import ProductCRUD
+
+        # Seed products
+        with patch('builtins.print'):
+            await seed_products(db_manager)
+
+        # Verify all fields for a specific product
+        async with db_manager.get_session() as session:
+            test_product_data = SAMPLE_PRODUCTS[0]
+            product = await ProductCRUD.get_by_sku(session, test_product_data["sku"])
+
+            assert product is not None
+            assert product.sku == test_product_data["sku"]
+            assert product.name == test_product_data["name"]
+            assert product.description == test_product_data["description"]
+            assert product.price == test_product_data["price"]
+            assert product.inventory_count == test_product_data["inventory_count"]
+            assert product.image_url == test_product_data["image_url"]
+
+    @pytest.mark.asyncio
+    async def test_seed_users_with_all_fields(self, db_manager):
+        """Test that all user fields are properly saved"""
+        from common.seed_data import seed_users, SAMPLE_USERS
+        from common.database import User
+        from sqlalchemy.future import select
+
+        # Seed users
+        with patch('builtins.print'):
+            await seed_users(db_manager)
+
+        # Verify all fields for a specific user
+        async with db_manager.get_session() as session:
+            test_user_data = SAMPLE_USERS[0]
+            result = await session.execute(
+                select(User).where(User.id == test_user_data["id"])
+            )
+            user = result.scalar_one_or_none()
+
+            assert user is not None
+            assert user.id == test_user_data["id"]
+            assert user.display_name == test_user_data["display_name"]
+            assert user.email == test_user_data["email"]
+
+    @pytest.mark.asyncio
+    async def test_seed_payment_methods_with_all_fields(self, db_manager):
+        """Test that all payment method fields are properly saved"""
+        from common.seed_data import seed_payment_methods, SAMPLE_PAYMENT_METHODS
+        from common.database import PaymentMethodCRUD
+        import json
+
+        # Seed payment methods
+        with patch('builtins.print'):
+            await seed_payment_methods(db_manager)
+
+        # Verify all fields for a specific payment method
+        async with db_manager.get_session() as session:
+            test_pm_data = SAMPLE_PAYMENT_METHODS[0]
+            pm = await PaymentMethodCRUD.get_by_id(session, test_pm_data["id"])
+
+            assert pm is not None
+            assert pm.id == test_pm_data["id"]
+            assert pm.user_id == test_pm_data["user_id"]
+
+            payment_data = json.loads(pm.payment_data)
+            expected_pm = test_pm_data["payment_method"]
+            assert payment_data["type"] == expected_pm["type"]
+            assert payment_data["display_name"] == expected_pm["display_name"]
+            assert payment_data["card_last4"] == expected_pm["card_last4"]
+            assert payment_data["card_brand"] == expected_pm["card_brand"]
+            assert payment_data["requires_step_up"] == expected_pm["requires_step_up"]
+
+    @pytest.mark.asyncio
+    async def test_seed_multiple_times_idempotent(self, db_manager):
+        """Test that seeding multiple times is idempotent"""
+        from common.seed_data import seed_products, seed_users, seed_payment_methods
+        from common.database import ProductCRUD, User, PaymentMethodCRUD
+        from sqlalchemy.future import select
+
+        # First seed
+        with patch('builtins.print'):
+            await seed_products(db_manager)
+            await seed_users(db_manager)
+            await seed_payment_methods(db_manager)
+
+        # Count records after first seed
+        async with db_manager.get_session() as session:
+            products_result = await session.execute(select(User))
+            first_count = len(products_result.scalars().all())
+
+        # Second seed
+        with patch('builtins.print'):
+            await seed_products(db_manager)
+            await seed_users(db_manager)
+            await seed_payment_methods(db_manager)
+
+        # Count records after second seed
+        async with db_manager.get_session() as session:
+            products_result = await session.execute(select(User))
+            second_count = len(products_result.scalars().all())
+
+        # Count should be the same (idempotent)
+        assert first_count == second_count
