@@ -915,6 +915,114 @@ class TestMerchantAuthorizationJWTVerification:
             jwt_generator.verify(invalid_jwt, cart_mandate)
         assert "kid" in str(exc_info.value).lower()
 
+    def test_jwt_generate_missing_private_key(self, crypto_setup):
+        """Test JWT generation when private key is not found"""
+        key_manager, signature_manager, merchant_id = crypto_setup
+        jwt_generator = MerchantAuthorizationJWT(signature_manager, key_manager)
+
+        # Mock get_private_key to return None (key not found)
+        key_manager.get_private_key = Mock(return_value=None)
+
+        cart_contents = {"items": [{"sku": "TEST", "quantity": 1}]}
+
+        with pytest.raises(ValueError) as exc_info:
+            jwt_generator.generate(
+                merchant_id=merchant_id,
+                cart_contents=cart_contents
+            )
+        assert "秘密鍵が見つかりません" in str(exc_info.value)
+
+    def test_jwt_generate_with_hash_missing_private_key(self, crypto_setup):
+        """Test JWT generation with hash when private key is not found"""
+        key_manager, signature_manager, merchant_id = crypto_setup
+        jwt_generator = MerchantAuthorizationJWT(signature_manager, key_manager)
+
+        # Mock get_private_key to return None (key not found)
+        key_manager.get_private_key = Mock(return_value=None)
+
+        cart_hash = "test_hash_value"
+
+        with pytest.raises(ValueError) as exc_info:
+            jwt_generator.generate_with_hash(
+                merchant_id=merchant_id,
+                cart_hash=cart_hash
+            )
+        assert "秘密鍵が見つかりません" in str(exc_info.value)
+
+    def test_jwt_verify_public_key_load_failure(self, crypto_setup):
+        """Test JWT verification when public key loading fails"""
+        key_manager, signature_manager, merchant_id = crypto_setup
+        jwt_generator = MerchantAuthorizationJWT(signature_manager, key_manager)
+
+        cart_mandate = {"type": "CartMandate"}
+
+        # Generate a valid JWT first
+        jwt_token = jwt_generator.generate_with_hash(
+            merchant_id=merchant_id,
+            cart_hash=compute_mandate_hash(cart_mandate)
+        )
+
+        # Mock load_public_key to raise an exception
+        key_manager.load_public_key = Mock(side_effect=Exception("Key not found"))
+
+        with pytest.raises(ValueError) as exc_info:
+            jwt_generator.verify(jwt_token, cart_mandate)
+        assert "Failed to load public key" in str(exc_info.value)
+
+    def test_jwt_verify_invalid_signature_length(self, crypto_setup):
+        """Test JWT verification with invalid signature length"""
+        key_manager, signature_manager, merchant_id = crypto_setup
+        jwt_generator = MerchantAuthorizationJWT(signature_manager, key_manager)
+
+        cart_mandate = {"type": "CartMandate"}
+
+        # Generate a valid JWT first to get proper format
+        jwt_token = jwt_generator.generate_with_hash(
+            merchant_id=merchant_id,
+            cart_hash=compute_mandate_hash(cart_mandate)
+        )
+
+        # Parse the JWT and replace signature with invalid length
+        parts = jwt_token.split('.')
+        header_b64, payload_b64 = parts[0], parts[1]
+
+        # Create invalid signature (32 bytes instead of 64)
+        invalid_sig_bytes = b'\x00' * 32
+        signature_b64 = base64.urlsafe_b64encode(invalid_sig_bytes).decode().rstrip('=')
+
+        invalid_jwt = f"{header_b64}.{payload_b64}.{signature_b64}"
+
+        with pytest.raises(ValueError) as exc_info:
+            jwt_generator.verify(invalid_jwt, cart_mandate)
+        assert "Invalid ES256 signature length" in str(exc_info.value)
+
+    def test_jwt_verify_signature_verification_failure(self, crypto_setup):
+        """Test JWT verification when signature verification fails"""
+        key_manager, signature_manager, merchant_id = crypto_setup
+        jwt_generator = MerchantAuthorizationJWT(signature_manager, key_manager)
+
+        cart_mandate = {"type": "CartMandate"}
+
+        # Generate a valid JWT first
+        jwt_token = jwt_generator.generate_with_hash(
+            merchant_id=merchant_id,
+            cart_hash=compute_mandate_hash(cart_mandate)
+        )
+
+        # Parse the JWT and replace signature with invalid one (but valid length)
+        parts = jwt_token.split('.')
+        header_b64, payload_b64 = parts[0], parts[1]
+
+        # Create invalid signature (64 bytes but incorrect values)
+        invalid_sig_bytes = b'\x00' * 64
+        signature_b64 = base64.urlsafe_b64encode(invalid_sig_bytes).decode().rstrip('=')
+
+        invalid_jwt = f"{header_b64}.{payload_b64}.{signature_b64}"
+
+        with pytest.raises(ValueError) as exc_info:
+            jwt_generator.verify(invalid_jwt, cart_mandate)
+        assert "JWT signature verification failed" in str(exc_info.value)
+
 
 class TestUserAuthorizationSDJWTVerification:
     """Test User Authorization SD-JWT verification"""
@@ -1044,6 +1152,122 @@ class TestUserAuthorizationSDJWTVerification:
         with pytest.raises(ValueError) as exc_info:
             sd_jwt_generator.verify(invalid_sd_jwt, cart_mandate, payment_mandate, "nonce")
         assert "Invalid Key-binding JWT format" in str(exc_info.value)
+
+    def test_sd_jwt_verify_sd_hash_mismatch(self, crypto_setup):
+        """Test SD-JWT verification with mismatched sd_hash"""
+        key_manager, signature_manager, user_id = crypto_setup
+        sd_jwt_generator = UserAuthorizationSDJWT(signature_manager, key_manager)
+
+        cart_mandate = {"type": "CartMandate"}
+        payment_mandate = {"payment_total": {"value": "1000.00"}}
+        nonce = "test_nonce"
+
+        # Generate a valid SD-JWT
+        sd_jwt_vc = sd_jwt_generator.generate(
+            user_id=user_id,
+            cart_mandate=cart_mandate,
+            payment_mandate_contents=payment_mandate,
+            audience="payment_processor",
+            nonce=nonce
+        )
+
+        # Tamper with the issuer JWT to cause sd_hash mismatch
+        parts = sd_jwt_vc.split('~')
+        tampered_issuer_jwt = parts[0] + "tampered"
+        tampered_sd_jwt = f"{tampered_issuer_jwt}~{parts[1]}~"
+
+        with pytest.raises(ValueError) as exc_info:
+            sd_jwt_generator.verify(tampered_sd_jwt, cart_mandate, payment_mandate, nonce)
+        assert "sd_hash mismatch" in str(exc_info.value)
+
+    def test_sd_jwt_verify_missing_kid_in_kb_jwt(self, crypto_setup):
+        """Test SD-JWT verification when KB JWT header is missing kid"""
+        key_manager, signature_manager, user_id = crypto_setup
+        sd_jwt_generator = UserAuthorizationSDJWT(signature_manager, key_manager)
+
+        cart_mandate = {"type": "CartMandate"}
+        payment_mandate = {"payment_total": {"value": "1000.00"}}
+        nonce = "test_nonce"
+
+        # Create a valid issuer JWT
+        issuer_jwt = "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJ0ZXN0In0.sig"
+
+        # Compute proper hashes
+        cart_hash = compute_canonical_hash(cart_mandate)
+        payment_hash = compute_canonical_hash(payment_mandate)
+        sd_hash = base64.urlsafe_b64encode(
+            hashlib.sha256(issuer_jwt.encode('utf-8')).digest()
+        ).decode('utf-8').rstrip('=')
+
+        # Create KB JWT without kid in header
+        kb_header = {"alg": "ES256", "typ": "kb+jwt"}  # Missing kid
+        kb_payload = {
+            "aud": "payment_processor",
+            "nonce": nonce,
+            "sd_hash": sd_hash,
+            "transaction_data": [cart_hash, payment_hash]
+        }
+
+        kb_header_b64 = base64.urlsafe_b64encode(json.dumps(kb_header).encode()).decode().rstrip('=')
+        kb_payload_b64 = base64.urlsafe_b64encode(json.dumps(kb_payload).encode()).decode().rstrip('=')
+        kb_signature_b64 = "fake_signature"
+
+        kb_jwt = f"{kb_header_b64}.{kb_payload_b64}.{kb_signature_b64}"
+        invalid_sd_jwt = f"{issuer_jwt}~{kb_jwt}~"
+
+        with pytest.raises(ValueError) as exc_info:
+            sd_jwt_generator.verify(invalid_sd_jwt, cart_mandate, payment_mandate, nonce)
+        assert "Key-binding JWT header missing 'kid' field" in str(exc_info.value)
+
+    def test_sd_jwt_verify_public_key_load_failure(self, crypto_setup):
+        """Test SD-JWT verification when public key loading fails"""
+        key_manager, signature_manager, user_id = crypto_setup
+        sd_jwt_generator = UserAuthorizationSDJWT(signature_manager, key_manager)
+
+        cart_mandate = {"type": "CartMandate"}
+        payment_mandate = {"payment_total": {"value": "1000.00"}}
+        nonce = "test_nonce"
+
+        # Generate a valid SD-JWT first
+        sd_jwt_vc = sd_jwt_generator.generate(
+            user_id=user_id,
+            cart_mandate=cart_mandate,
+            payment_mandate_contents=payment_mandate,
+            audience="payment_processor",
+            nonce=nonce
+        )
+
+        # Mock load_public_key to raise an exception
+        key_manager.load_public_key = Mock(side_effect=Exception("Key not found"))
+
+        with pytest.raises(ValueError) as exc_info:
+            sd_jwt_generator.verify(sd_jwt_vc, cart_mandate, payment_mandate, nonce)
+        assert "Failed to load public key" in str(exc_info.value)
+
+    def test_sd_jwt_verify_signature_verification_failure(self, crypto_setup):
+        """Test SD-JWT verification when signature verification fails"""
+        key_manager, signature_manager, user_id = crypto_setup
+        sd_jwt_generator = UserAuthorizationSDJWT(signature_manager, key_manager)
+
+        cart_mandate = {"type": "CartMandate"}
+        payment_mandate = {"payment_total": {"value": "1000.00"}}
+        nonce = "test_nonce"
+
+        # Generate a valid SD-JWT first
+        sd_jwt_vc = sd_jwt_generator.generate(
+            user_id=user_id,
+            cart_mandate=cart_mandate,
+            payment_mandate_contents=payment_mandate,
+            audience="payment_processor",
+            nonce=nonce
+        )
+
+        # Mock verify_signature to return False
+        signature_manager.verify_signature = Mock(return_value=False)
+
+        with pytest.raises(ValueError) as exc_info:
+            sd_jwt_generator.verify(sd_jwt_vc, cart_mandate, payment_mandate, nonce)
+        assert "Key-binding JWT signature verification failed" in str(exc_info.value)
 
 
 class TestEd25519Algorithm:

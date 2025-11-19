@@ -595,3 +595,121 @@ class TestAgentKeyDirectory:
         assert "ap2" in ap2_ext["uri"].lower()
         assert "roles" in ap2_ext["params"]
         assert ap2_ext["params"]["roles"] == ["merchant", "shopper"]
+
+
+class TestAdditionalCoverage:
+    """Additional tests to improve coverage to 95%+"""
+
+    @patch('common.base_agent.KeyManager')
+    @patch('common.base_agent.SignatureManager')
+    @patch('common.base_agent.A2AMessageHandler')
+    @patch('common.base_agent.setup_telemetry')
+    def test_ed25519_key_initialization_failure(self, mock_telemetry, mock_a2a, mock_sig_mgr, mock_key_mgr):
+        """Test Ed25519 key initialization failure (lines 171-185)"""
+        # Mock KeyManager that succeeds for ECDSA but fails for Ed25519
+        mock_key_instance = Mock()
+        mock_key_mgr.return_value = mock_key_instance
+
+        # First call (ECDSA) succeeds, second call (Ed25519) fails
+        mock_key_instance.load_private_key_encrypted.side_effect = [
+            None,  # ECDSA succeeds
+            Exception("Ed25519 key not found")  # Ed25519 fails
+        ]
+
+        # Should raise RuntimeError for Ed25519 key not found
+        with pytest.raises(RuntimeError) as exc_info:
+            ConcreteAgent(
+                agent_id="did:ap2:agent:test",
+                agent_name="Test Agent",
+                passphrase="test_passphrase"
+            )
+
+        assert "Ed25519鍵が見つかりません" in str(exc_info.value)
+
+    @patch('common.base_agent.KeyManager')
+    @patch('common.base_agent.SignatureManager')
+    @patch('common.base_agent.A2AMessageHandler')
+    @patch('common.base_agent.setup_telemetry')
+    def test_agent_card_endpoint_error(self, mock_telemetry, mock_a2a, mock_sig_mgr, mock_key_mgr):
+        """Test agent card endpoint error handling (lines 318-320)"""
+        # Mock KeyManager
+        mock_key_instance = Mock()
+        mock_key_mgr.return_value = mock_key_instance
+        mock_key_instance.load_private_key_encrypted.return_value = None
+
+        # Create a concrete agent that raises an exception in get_ap2_roles
+        class FailingAgent(BaseAgent):
+            def register_a2a_handlers(self):
+                pass
+
+            def register_endpoints(self):
+                pass
+
+            def get_ap2_roles(self):
+                raise Exception("Failed to get roles")
+
+            def get_agent_description(self):
+                return "Failing Agent"
+
+        # Create agent
+        agent = FailingAgent(
+            agent_id="did:ap2:agent:test",
+            agent_name="Failing Agent",
+            passphrase="test_passphrase"
+        )
+
+        # Test agent card endpoint - should return 500 error
+        client = TestClient(agent.app)
+        response = client.get("/.well-known/agent-card.json")
+
+        assert response.status_code == 500
+        assert "Failed to generate AgentCard" in response.json()["detail"]
+
+    @patch('common.base_agent.KeyManager')
+    @patch('common.base_agent.SignatureManager')
+    @patch('common.base_agent.A2AMessageHandler')
+    @patch('common.base_agent.setup_telemetry')
+    def test_abstract_methods_with_super_calls(self, mock_telemetry, mock_a2a, mock_sig_mgr, mock_key_mgr):
+        """Test abstract methods by calling super() to execute base class pass statements (lines 330, 342, 353, 363)"""
+        # Mock KeyManager
+        mock_key_instance = Mock()
+        mock_key_mgr.return_value = mock_key_instance
+        mock_key_instance.load_private_key_encrypted.return_value = None
+
+        # Create a concrete agent that calls super() for abstract methods
+        class SuperCallingAgent(BaseAgent):
+            def register_a2a_handlers(self):
+                # Call parent's abstract method to cover line 330
+                super().register_a2a_handlers()
+
+            def register_endpoints(self):
+                # Call parent's abstract method to cover line 342
+                super().register_endpoints()
+
+            def get_ap2_roles(self):
+                # Call parent's abstract method to cover line 353
+                super().get_ap2_roles()
+                return ["test"]
+
+            def get_agent_description(self):
+                # Call parent's abstract method to cover line 363
+                super().get_agent_description()
+                return "Test"
+
+        # Create agent - this should execute the super() calls which hit the pass statements
+        agent = SuperCallingAgent(
+            agent_id="did:ap2:agent:test",
+            agent_name="Super Calling Agent",
+            passphrase="test_passphrase"
+        )
+
+        # Verify agent was created successfully
+        assert agent.agent_id == "did:ap2:agent:test"
+        assert agent.agent_name == "Super Calling Agent"
+
+        # Explicitly call the methods to ensure super() paths are executed
+        roles = agent.get_ap2_roles()
+        assert roles == ["test"]
+
+        description = agent.get_agent_description()
+        assert description == "Test"

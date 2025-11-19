@@ -1221,3 +1221,758 @@ class TestUtilityFunctionsAdvanced:
         # dataPart should be preserved
         assert "dataPart" in result
         assert result["dataPart"]["payload"]["important"] == "data"
+
+
+class TestImportErrorHandling:
+    """Test import error handling and edge cases"""
+
+    def test_canonicalize_json_without_rfc8785(self):
+        """Test canonicalize_json raises error when rfc8785 is not available"""
+        import common.crypto as crypto_module
+
+        # Save original value
+        original_value = crypto_module.RFC8785_AVAILABLE
+
+        try:
+            # Simulate rfc8785 not being available
+            crypto_module.RFC8785_AVAILABLE = False
+
+            # Should raise ImportError
+            with pytest.raises(ImportError, match="rfc8785 library is required"):
+                canonicalize_json({"test": "data"})
+        finally:
+            # Restore original value
+            crypto_module.RFC8785_AVAILABLE = original_value
+
+    def test_public_key_to_multibase_without_multibase(self, key_manager):
+        """Test public_key_to_multibase raises error when multibase is not available"""
+        import common.crypto as crypto_module
+
+        # Generate a key
+        _, public_key = key_manager.generate_key_pair("test_multibase")
+
+        # Save original value
+        original_value = crypto_module.MULTIBASE_AVAILABLE
+
+        try:
+            # Simulate multibase not being available
+            crypto_module.MULTIBASE_AVAILABLE = False
+
+            # Should raise ImportError
+            with pytest.raises(ImportError, match="multibase library is required"):
+                key_manager.public_key_to_multibase(public_key)
+        finally:
+            # Restore original value
+            crypto_module.MULTIBASE_AVAILABLE = original_value
+
+    def test_public_key_from_multibase_without_multibase(self, key_manager):
+        """Test public_key_from_multibase raises error when multibase is not available"""
+        import common.crypto as crypto_module
+
+        # Save original value
+        original_value = crypto_module.MULTIBASE_AVAILABLE
+
+        try:
+            # Simulate multibase not being available
+            crypto_module.MULTIBASE_AVAILABLE = False
+
+            # Should raise ImportError
+            with pytest.raises(ImportError, match="multibase library is required"):
+                key_manager.public_key_from_multibase("z6MkTest")
+        finally:
+            # Restore original value
+            crypto_module.MULTIBASE_AVAILABLE = original_value
+
+    def test_public_key_to_multibase_unsupported_key_type(self, key_manager):
+        """Test public_key_to_multibase with unsupported key type"""
+        # Create a mock unsupported key type
+        class UnsupportedKey:
+            pass
+
+        unsupported_key = UnsupportedKey()
+
+        with pytest.raises(CryptoError, match="Unsupported public key type"):
+            key_manager.public_key_to_multibase(unsupported_key)
+
+
+class TestDIDParsingEdgeCases:
+    """Test DID parsing edge cases and fallback logic"""
+
+    def test_load_public_key_with_unknown_entity_type(self, key_manager):
+        """Test loading public key with unknown DID entity type (fallback case)"""
+        # Generate and save a key with "test_entity" as key_id
+        _, public_key = key_manager.generate_key_pair("test_entity")
+        key_manager.save_public_key("test_entity", public_key)
+
+        # Test with an unknown entity type DID (should use fallback logic)
+        loaded_key = key_manager.load_public_key("did:ap2:unknown:test_entity")
+        assert loaded_key is not None
+
+    def test_get_private_key_with_unknown_entity_type(self, key_manager):
+        """Test getting private key with unknown DID entity type (fallback case)"""
+        # Generate a key with "test_entity" as key_id
+        key_manager.generate_key_pair("test_entity")
+
+        # Test with an unknown entity type DID (should use fallback logic)
+        private_key = key_manager.get_private_key("did:ap2:unknown:test_entity")
+        assert private_key is not None
+
+
+class TestSignatureManagerEdgeCases:
+    """Test SignatureManager edge cases"""
+
+    def test_hash_data_with_non_dict_non_str(self, signature_manager):
+        """Test _hash_data with data that's not dict or str"""
+        # Test with integer
+        hash_result = signature_manager._hash_data(12345)
+        assert hash_result is not None
+        assert len(hash_result) == 32  # SHA-256 is 32 bytes
+
+    def test_convert_enums_method(self, signature_manager):
+        """Test _convert_enums internal method"""
+        from common.models import AttestationType
+
+        # Test with dict containing enums
+        data_with_enums = {
+            "type": AttestationType.BIOMETRIC,
+            "nested": {
+                "attestation": AttestationType.WEBAUTHN
+            },
+            "list": [AttestationType.BIOMETRIC, "string", 123]
+        }
+
+        converted = signature_manager._convert_enums(data_with_enums)
+
+        assert converted["type"] == "biometric"
+        assert converted["nested"]["attestation"] == "webauthn"
+        assert converted["list"][0] == "biometric"
+        assert converted["list"][1] == "string"
+        assert converted["list"][2] == 123
+
+
+class TestCanonicalizeA2AMessageEdgeCases:
+    """Test canonicalize_a2a_message edge cases"""
+
+    def test_canonicalize_a2a_message_with_non_dict_values(self):
+        """Test canonicalize_a2a_message with non-dict values (line 153)"""
+        message = {
+            "header": {
+                "message_id": "msg_004",
+                "sender": "test_sender"
+            },
+            "dataPart": "simple_string_value",  # Non-dict value
+            "timestamp": 1234567890  # Non-dict value
+        }
+
+        canonical = canonicalize_a2a_message(message)
+        import json
+        result = json.loads(canonical)
+
+        # Non-dict values should be preserved
+        assert result["dataPart"] == "simple_string_value"
+        assert result["timestamp"] == 1234567890
+
+
+class TestWebAuthnSignatureVerification:
+    """Test complete WebAuthn signature verification flow"""
+
+    def test_verify_webauthn_signature_complete_flow(self, key_manager, device_attestation_manager):
+        """Test complete WebAuthn signature verification with valid data"""
+        import base64
+        import json
+        import struct
+        import hashlib
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.hazmat.primitives import hashes
+
+        # Generate a P-256 key pair for WebAuthn
+        private_key = ec.generate_private_key(ec.SECP256R1())
+        public_key = private_key.public_key()
+
+        # Create COSE public key format
+        public_numbers = public_key.public_numbers()
+        x_bytes = public_numbers.x.to_bytes(32, byteorder='big')
+        y_bytes = public_numbers.y.to_bytes(32, byteorder='big')
+
+        import cbor2
+        cose_key = {
+            1: 2,  # kty: EC2
+            3: -7,  # alg: ES256
+            -1: 1,  # crv: P-256
+            -2: x_bytes,  # x coordinate
+            -3: y_bytes   # y coordinate
+        }
+        public_key_cose = cbor2.dumps(cose_key)
+        public_key_cose_b64 = base64.b64encode(public_key_cose).decode('utf-8')
+
+        # Create challenge
+        challenge = "test_challenge_value_123"
+
+        # Create clientDataJSON
+        client_data = {
+            "type": "webauthn.get",
+            "challenge": challenge,
+            "origin": "https://localhost"
+        }
+        client_data_json_bytes = json.dumps(client_data).encode('utf-8')
+        client_data_json_b64 = base64.urlsafe_b64encode(client_data_json_bytes).decode('utf-8').rstrip('=')
+
+        # Create authenticatorData
+        rp_id = "localhost"
+        rp_id_hash = hashlib.sha256(rp_id.encode('utf-8')).digest()
+        flags = 0x01  # User present
+        sign_count = 1
+        authenticator_data = rp_id_hash + struct.pack('B', flags) + struct.pack('>I', sign_count)
+        authenticator_data_b64 = base64.urlsafe_b64encode(authenticator_data).decode('utf-8').rstrip('=')
+
+        # Create signed data
+        client_data_hash = hashlib.sha256(client_data_json_bytes).digest()
+        signed_data = authenticator_data + client_data_hash
+
+        # Sign with private key
+        signature_bytes = private_key.sign(signed_data, ec.ECDSA(hashes.SHA256()))
+        signature_b64 = base64.urlsafe_b64encode(signature_bytes).decode('utf-8').rstrip('=')
+
+        # Create WebAuthn result
+        webauthn_result = {
+            "clientDataJSON": client_data_json_b64,
+            "authenticatorData": authenticator_data_b64,
+            "signature": signature_b64
+        }
+
+        # Verify
+        is_valid, new_counter = device_attestation_manager.verify_webauthn_signature(
+            webauthn_result,
+            challenge,
+            public_key_cose_b64,
+            stored_counter=0,
+            rp_id=rp_id
+        )
+
+        assert is_valid
+        assert new_counter == 1
+
+    def test_verify_webauthn_signature_with_zero_counters(self, key_manager, device_attestation_manager):
+        """Test WebAuthn signature verification with zero counters (AP2 compliant)"""
+        import base64
+        import json
+        import struct
+        import hashlib
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.hazmat.primitives import hashes
+
+        # Generate a P-256 key pair
+        private_key = ec.generate_private_key(ec.SECP256R1())
+        public_key = private_key.public_key()
+
+        # Create COSE public key
+        public_numbers = public_key.public_numbers()
+        x_bytes = public_numbers.x.to_bytes(32, byteorder='big')
+        y_bytes = public_numbers.y.to_bytes(32, byteorder='big')
+
+        import cbor2
+        cose_key = {
+            1: 2, 3: -7, -1: 1, -2: x_bytes, -3: y_bytes
+        }
+        public_key_cose_b64 = base64.b64encode(cbor2.dumps(cose_key)).decode('utf-8')
+
+        # Create challenge
+        challenge = "test_challenge_zero"
+
+        # Create clientDataJSON
+        client_data = {
+            "type": "webauthn.get",
+            "challenge": challenge,
+            "origin": "https://localhost"
+        }
+        client_data_json_bytes = json.dumps(client_data).encode('utf-8')
+        client_data_json_b64 = base64.urlsafe_b64encode(client_data_json_bytes).decode('utf-8').rstrip('=')
+
+        # Create authenticatorData with counter = 0
+        rp_id = "localhost"
+        rp_id_hash = hashlib.sha256(rp_id.encode('utf-8')).digest()
+        flags = 0x01
+        sign_count = 0  # Zero counter
+        authenticator_data = rp_id_hash + struct.pack('B', flags) + struct.pack('>I', sign_count)
+        authenticator_data_b64 = base64.urlsafe_b64encode(authenticator_data).decode('utf-8').rstrip('=')
+
+        # Create and sign data
+        client_data_hash = hashlib.sha256(client_data_json_bytes).digest()
+        signed_data = authenticator_data + client_data_hash
+        signature_bytes = private_key.sign(signed_data, ec.ECDSA(hashes.SHA256()))
+        signature_b64 = base64.urlsafe_b64encode(signature_bytes).decode('utf-8').rstrip('=')
+
+        webauthn_result = {
+            "clientDataJSON": client_data_json_b64,
+            "authenticatorData": authenticator_data_b64,
+            "signature": signature_b64
+        }
+
+        # Verify with stored_counter = 0
+        is_valid, new_counter = device_attestation_manager.verify_webauthn_signature(
+            webauthn_result, challenge, public_key_cose_b64, stored_counter=0, rp_id=rp_id
+        )
+
+        assert is_valid
+        assert new_counter == 0
+
+    def test_verify_webauthn_signature_counter_anomaly(self, key_manager, device_attestation_manager):
+        """Test WebAuthn signature verification with counter anomaly"""
+        import base64
+        import json
+        import struct
+        import hashlib
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.hazmat.primitives import hashes
+
+        # Generate a P-256 key pair
+        private_key = ec.generate_private_key(ec.SECP256R1())
+        public_key = private_key.public_key()
+
+        # Create COSE public key
+        public_numbers = public_key.public_numbers()
+        x_bytes = public_numbers.x.to_bytes(32, byteorder='big')
+        y_bytes = public_numbers.y.to_bytes(32, byteorder='big')
+
+        import cbor2
+        cose_key = {
+            1: 2, 3: -7, -1: 1, -2: x_bytes, -3: y_bytes
+        }
+        public_key_cose_b64 = base64.b64encode(cbor2.dumps(cose_key)).decode('utf-8')
+
+        challenge = "test_challenge_counter"
+
+        # Create clientDataJSON
+        client_data = {
+            "type": "webauthn.get",
+            "challenge": challenge,
+            "origin": "https://localhost"
+        }
+        client_data_json_bytes = json.dumps(client_data).encode('utf-8')
+        client_data_json_b64 = base64.urlsafe_b64encode(client_data_json_bytes).decode('utf-8').rstrip('=')
+
+        # Create authenticatorData with counter = 5 (but stored counter is 10)
+        rp_id = "localhost"
+        rp_id_hash = hashlib.sha256(rp_id.encode('utf-8')).digest()
+        flags = 0x01
+        sign_count = 5  # Lower than stored counter
+        authenticator_data = rp_id_hash + struct.pack('B', flags) + struct.pack('>I', sign_count)
+        authenticator_data_b64 = base64.urlsafe_b64encode(authenticator_data).decode('utf-8').rstrip('=')
+
+        # Create and sign data
+        client_data_hash = hashlib.sha256(client_data_json_bytes).digest()
+        signed_data = authenticator_data + client_data_hash
+        signature_bytes = private_key.sign(signed_data, ec.ECDSA(hashes.SHA256()))
+        signature_b64 = base64.urlsafe_b64encode(signature_bytes).decode('utf-8').rstrip('=')
+
+        webauthn_result = {
+            "clientDataJSON": client_data_json_b64,
+            "authenticatorData": authenticator_data_b64,
+            "signature": signature_b64
+        }
+
+        # Verify with stored_counter = 10 (should fail due to counter anomaly)
+        is_valid, new_counter = device_attestation_manager.verify_webauthn_signature(
+            webauthn_result, challenge, public_key_cose_b64, stored_counter=10, rp_id=rp_id
+        )
+
+        assert not is_valid
+        assert new_counter == 10  # Should return stored counter on failure
+
+    def test_verify_webauthn_signature_rp_id_mismatch(self, key_manager, device_attestation_manager):
+        """Test WebAuthn signature verification with RP ID hash mismatch"""
+        import base64
+        import json
+        import struct
+        import hashlib
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.hazmat.primitives import hashes
+
+        # Generate a P-256 key pair
+        private_key = ec.generate_private_key(ec.SECP256R1())
+        public_key = private_key.public_key()
+
+        # Create COSE public key
+        public_numbers = public_key.public_numbers()
+        x_bytes = public_numbers.x.to_bytes(32, byteorder='big')
+        y_bytes = public_numbers.y.to_bytes(32, byteorder='big')
+
+        import cbor2
+        cose_key = {
+            1: 2, 3: -7, -1: 1, -2: x_bytes, -3: y_bytes
+        }
+        public_key_cose_b64 = base64.b64encode(cbor2.dumps(cose_key)).decode('utf-8')
+
+        challenge = "test_challenge_rp"
+
+        # Create clientDataJSON
+        client_data = {
+            "type": "webauthn.get",
+            "challenge": challenge,
+            "origin": "https://localhost"
+        }
+        client_data_json_bytes = json.dumps(client_data).encode('utf-8')
+        client_data_json_b64 = base64.urlsafe_b64encode(client_data_json_bytes).decode('utf-8').rstrip('=')
+
+        # Create authenticatorData with WRONG RP ID hash
+        wrong_rp_id = "example.com"
+        rp_id_hash = hashlib.sha256(wrong_rp_id.encode('utf-8')).digest()
+        flags = 0x01
+        sign_count = 1
+        authenticator_data = rp_id_hash + struct.pack('B', flags) + struct.pack('>I', sign_count)
+        authenticator_data_b64 = base64.urlsafe_b64encode(authenticator_data).decode('utf-8').rstrip('=')
+
+        # Create and sign data
+        client_data_hash = hashlib.sha256(client_data_json_bytes).digest()
+        signed_data = authenticator_data + client_data_hash
+        signature_bytes = private_key.sign(signed_data, ec.ECDSA(hashes.SHA256()))
+        signature_b64 = base64.urlsafe_b64encode(signature_bytes).decode('utf-8').rstrip('=')
+
+        webauthn_result = {
+            "clientDataJSON": client_data_json_b64,
+            "authenticatorData": authenticator_data_b64,
+            "signature": signature_b64
+        }
+
+        # Verify with correct RP ID (should fail due to mismatch)
+        is_valid, new_counter = device_attestation_manager.verify_webauthn_signature(
+            webauthn_result, challenge, public_key_cose_b64, stored_counter=0, rp_id="localhost"
+        )
+
+        assert not is_valid
+
+    def test_verify_webauthn_signature_with_response_wrapper(self, key_manager, device_attestation_manager):
+        """Test WebAuthn signature verification with response wrapper structure"""
+        import base64
+        import json
+        import struct
+        import hashlib
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.hazmat.primitives import hashes
+
+        # Generate a P-256 key pair
+        private_key = ec.generate_private_key(ec.SECP256R1())
+        public_key = private_key.public_key()
+
+        # Create COSE public key
+        public_numbers = public_key.public_numbers()
+        x_bytes = public_numbers.x.to_bytes(32, byteorder='big')
+        y_bytes = public_numbers.y.to_bytes(32, byteorder='big')
+
+        import cbor2
+        cose_key = {
+            1: 2, 3: -7, -1: 1, -2: x_bytes, -3: y_bytes
+        }
+        public_key_cose_b64 = base64.b64encode(cbor2.dumps(cose_key)).decode('utf-8')
+
+        challenge = "test_challenge_wrapper"
+
+        # Create clientDataJSON
+        client_data = {
+            "type": "webauthn.get",
+            "challenge": challenge,
+            "origin": "https://localhost"
+        }
+        client_data_json_bytes = json.dumps(client_data).encode('utf-8')
+        client_data_json_b64 = base64.urlsafe_b64encode(client_data_json_bytes).decode('utf-8').rstrip('=')
+
+        # Create authenticatorData
+        rp_id = "localhost"
+        rp_id_hash = hashlib.sha256(rp_id.encode('utf-8')).digest()
+        flags = 0x01
+        sign_count = 2
+        authenticator_data = rp_id_hash + struct.pack('B', flags) + struct.pack('>I', sign_count)
+        authenticator_data_b64 = base64.urlsafe_b64encode(authenticator_data).decode('utf-8').rstrip('=')
+
+        # Create and sign data
+        client_data_hash = hashlib.sha256(client_data_json_bytes).digest()
+        signed_data = authenticator_data + client_data_hash
+        signature_bytes = private_key.sign(signed_data, ec.ECDSA(hashes.SHA256()))
+        signature_b64 = base64.urlsafe_b64encode(signature_bytes).decode('utf-8').rstrip('=')
+
+        # Create WebAuthn result with 'response' wrapper
+        webauthn_result = {
+            "response": {
+                "clientDataJSON": client_data_json_b64,
+                "authenticatorData": authenticator_data_b64,
+                "signature": signature_b64
+            }
+        }
+
+        # Verify
+        is_valid, new_counter = device_attestation_manager.verify_webauthn_signature(
+            webauthn_result, challenge, public_key_cose_b64, stored_counter=0, rp_id=rp_id
+        )
+
+        assert is_valid
+        assert new_counter == 2
+
+
+class TestDeviceAttestationTimezoneHandling:
+    """Test device attestation timezone handling edge cases"""
+
+    def test_verify_device_attestation_without_timezone_info(self, key_manager, device_attestation_manager):
+        """Test verifying device attestation with timestamp lacking timezone info (line 1649)"""
+        from datetime import datetime
+
+        # Generate device key
+        key_manager.generate_key_pair("device_tz_test")
+
+        # Create attestation with timestamp lacking timezone (will be treated as UTC)
+        timestamp_no_tz = datetime.utcnow().isoformat()
+
+        attestation = device_attestation_manager.create_device_attestation(
+            device_id="device_tz_test",
+            payment_mandate_id="payment_tz_test",
+            device_key_id="device_tz_test",
+            timestamp=timestamp_no_tz
+        )
+
+        # Verify (should handle missing timezone by adding UTC)
+        is_valid = device_attestation_manager.verify_device_attestation(
+            attestation, "payment_tz_test", max_age_seconds=300
+        )
+
+        assert is_valid
+
+
+class TestWebAuthnVerificationErrorPaths:
+    """Test WebAuthn verification error paths and edge cases"""
+
+    def test_verify_webauthn_signature_missing_challenge_field(self, device_attestation_manager):
+        """Test WebAuthn verification when challenge field is missing from clientDataJSON"""
+        import base64
+        import json
+
+        # Create clientDataJSON without challenge field
+        client_data = {
+            "type": "webauthn.get",
+            "origin": "https://localhost"
+            # Missing "challenge" field
+        }
+        client_data_json_bytes = json.dumps(client_data).encode('utf-8')
+        client_data_json_b64 = base64.urlsafe_b64encode(client_data_json_bytes).decode('utf-8').rstrip('=')
+
+        webauthn_result = {
+            "clientDataJSON": client_data_json_b64,
+            "authenticatorData": "test_auth_data",
+            "signature": "test_sig"
+        }
+
+        is_valid, counter = device_attestation_manager.verify_webauthn_signature(
+            webauthn_result, "expected_challenge", "public_key", 0
+        )
+
+        assert not is_valid
+        assert counter == 0
+
+    def test_verify_webauthn_signature_cbor2_not_available(self, device_attestation_manager):
+        """Test WebAuthn verification when cbor2 is not available"""
+        import common.crypto as crypto_module
+        import base64
+        import json
+        import struct
+        import hashlib
+
+        # Save original value
+        original_value = crypto_module.CBOR2_AVAILABLE
+
+        try:
+            # Simulate cbor2 not being available
+            crypto_module.CBOR2_AVAILABLE = False
+
+            # Create valid WebAuthn data
+            challenge = "test_challenge"
+            client_data = {
+                "type": "webauthn.get",
+                "challenge": challenge,
+                "origin": "https://localhost"
+            }
+            client_data_json_bytes = json.dumps(client_data).encode('utf-8')
+            client_data_json_b64 = base64.urlsafe_b64encode(client_data_json_bytes).decode('utf-8').rstrip('=')
+
+            rp_id = "localhost"
+            rp_id_hash = hashlib.sha256(rp_id.encode('utf-8')).digest()
+            flags = 0x01
+            sign_count = 1
+            authenticator_data = rp_id_hash + struct.pack('B', flags) + struct.pack('>I', sign_count)
+            authenticator_data_b64 = base64.urlsafe_b64encode(authenticator_data).decode('utf-8').rstrip('=')
+
+            webauthn_result = {
+                "clientDataJSON": client_data_json_b64,
+                "authenticatorData": authenticator_data_b64,
+                "signature": "test_sig"
+            }
+
+            # Should fail because cbor2 is not available
+            is_valid, counter = device_attestation_manager.verify_webauthn_signature(
+                webauthn_result, challenge, "public_key_cose", 0, rp_id=rp_id
+            )
+
+            assert not is_valid
+            assert counter == 0
+        finally:
+            # Restore original value
+            crypto_module.CBOR2_AVAILABLE = original_value
+
+    def test_verify_webauthn_signature_invalid_cose_key_format(self, device_attestation_manager):
+        """Test WebAuthn verification with invalid COSE key format"""
+        import base64
+        import json
+        import struct
+        import hashlib
+
+        challenge = "test_challenge"
+
+        # Create clientDataJSON
+        client_data = {
+            "type": "webauthn.get",
+            "challenge": challenge,
+            "origin": "https://localhost"
+        }
+        client_data_json_bytes = json.dumps(client_data).encode('utf-8')
+        client_data_json_b64 = base64.urlsafe_b64encode(client_data_json_bytes).decode('utf-8').rstrip('=')
+
+        # Create authenticatorData
+        rp_id = "localhost"
+        rp_id_hash = hashlib.sha256(rp_id.encode('utf-8')).digest()
+        flags = 0x01
+        sign_count = 1
+        authenticator_data = rp_id_hash + struct.pack('B', flags) + struct.pack('>I', sign_count)
+        authenticator_data_b64 = base64.urlsafe_b64encode(authenticator_data).decode('utf-8').rstrip('=')
+
+        # Create invalid COSE key (not a dict, just a string encoded as CBOR)
+        import cbor2
+        invalid_cose_key = cbor2.dumps("not_a_dict")
+        invalid_cose_key_b64 = base64.b64encode(invalid_cose_key).decode('utf-8')
+
+        webauthn_result = {
+            "clientDataJSON": client_data_json_b64,
+            "authenticatorData": authenticator_data_b64,
+            "signature": "test_sig"
+        }
+
+        # Should fail because COSE key is not a dict
+        is_valid, counter = device_attestation_manager.verify_webauthn_signature(
+            webauthn_result, challenge, invalid_cose_key_b64, 0, rp_id=rp_id
+        )
+
+        assert not is_valid
+        assert counter == 0
+
+    def test_verify_webauthn_signature_missing_signature_field(self, device_attestation_manager):
+        """Test WebAuthn verification with missing signature field"""
+        import base64
+        import json
+        import struct
+        import hashlib
+        from cryptography.hazmat.primitives.asymmetric import ec
+
+        # Generate a P-256 key pair
+        private_key = ec.generate_private_key(ec.SECP256R1())
+        public_key = private_key.public_key()
+
+        # Create COSE public key
+        public_numbers = public_key.public_numbers()
+        x_bytes = public_numbers.x.to_bytes(32, byteorder='big')
+        y_bytes = public_numbers.y.to_bytes(32, byteorder='big')
+
+        import cbor2
+        cose_key = {
+            1: 2, 3: -7, -1: 1, -2: x_bytes, -3: y_bytes
+        }
+        public_key_cose_b64 = base64.b64encode(cbor2.dumps(cose_key)).decode('utf-8')
+
+        challenge = "test_challenge"
+
+        # Create clientDataJSON
+        client_data = {
+            "type": "webauthn.get",
+            "challenge": challenge,
+            "origin": "https://localhost"
+        }
+        client_data_json_bytes = json.dumps(client_data).encode('utf-8')
+        client_data_json_b64 = base64.urlsafe_b64encode(client_data_json_bytes).decode('utf-8').rstrip('=')
+
+        # Create authenticatorData
+        rp_id = "localhost"
+        rp_id_hash = hashlib.sha256(rp_id.encode('utf-8')).digest()
+        flags = 0x01
+        sign_count = 1
+        authenticator_data = rp_id_hash + struct.pack('B', flags) + struct.pack('>I', sign_count)
+        authenticator_data_b64 = base64.urlsafe_b64encode(authenticator_data).decode('utf-8').rstrip('=')
+
+        # Create WebAuthn result WITHOUT signature field
+        webauthn_result = {
+            "clientDataJSON": client_data_json_b64,
+            "authenticatorData": authenticator_data_b64
+            # Missing "signature" field
+        }
+
+        # Should fail because signature is missing
+        is_valid, counter = device_attestation_manager.verify_webauthn_signature(
+            webauthn_result, challenge, public_key_cose_b64, 0, rp_id=rp_id
+        )
+
+        assert not is_valid
+        assert counter == 0
+
+    def test_verify_webauthn_signature_invalid_signature_exception(self, device_attestation_manager):
+        """Test WebAuthn verification with invalid signature (triggers InvalidSignature exception)"""
+        import base64
+        import json
+        import struct
+        import hashlib
+        from cryptography.hazmat.primitives.asymmetric import ec
+
+        # Generate a P-256 key pair
+        private_key = ec.generate_private_key(ec.SECP256R1())
+        public_key = private_key.public_key()
+
+        # Create COSE public key
+        public_numbers = public_key.public_numbers()
+        x_bytes = public_numbers.x.to_bytes(32, byteorder='big')
+        y_bytes = public_numbers.y.to_bytes(32, byteorder='big')
+
+        import cbor2
+        cose_key = {
+            1: 2, 3: -7, -1: 1, -2: x_bytes, -3: y_bytes
+        }
+        public_key_cose_b64 = base64.b64encode(cbor2.dumps(cose_key)).decode('utf-8')
+
+        challenge = "test_challenge"
+
+        # Create clientDataJSON
+        client_data = {
+            "type": "webauthn.get",
+            "challenge": challenge,
+            "origin": "https://localhost"
+        }
+        client_data_json_bytes = json.dumps(client_data).encode('utf-8')
+        client_data_json_b64 = base64.urlsafe_b64encode(client_data_json_bytes).decode('utf-8').rstrip('=')
+
+        # Create authenticatorData
+        rp_id = "localhost"
+        rp_id_hash = hashlib.sha256(rp_id.encode('utf-8')).digest()
+        flags = 0x01
+        sign_count = 1
+        authenticator_data = rp_id_hash + struct.pack('B', flags) + struct.pack('>I', sign_count)
+        authenticator_data_b64 = base64.urlsafe_b64encode(authenticator_data).decode('utf-8').rstrip('=')
+
+        # Create WRONG signature (will trigger InvalidSignature exception)
+        wrong_signature = b'\x00' * 64  # Invalid signature bytes
+        signature_b64 = base64.urlsafe_b64encode(wrong_signature).decode('utf-8').rstrip('=')
+
+        webauthn_result = {
+            "clientDataJSON": client_data_json_b64,
+            "authenticatorData": authenticator_data_b64,
+            "signature": signature_b64
+        }
+
+        # Should fail because signature is invalid
+        is_valid, counter = device_attestation_manager.verify_webauthn_signature(
+            webauthn_result, challenge, public_key_cose_b64, 0, rp_id=rp_id
+        )
+
+        assert not is_valid
+        assert counter == 0

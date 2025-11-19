@@ -446,6 +446,86 @@ class TestA2AMessageHandler:
         assert error_response.dataPart.payload["error_message"] == "An error occurred"
         assert error_response.dataPart.payload["details"] == {}
 
+    @pytest.mark.asyncio
+    async def test_verify_message_with_did_resolution(self, setup_handler, key_manager):
+        """Test verifying message with DID resolution (lines 179-193)"""
+        handler = setup_handler
+
+        # Create a message with valid signature
+        message = handler.create_response_message(
+            recipient="did:ap2:agent:merchant_agent",
+            data_type="ap2.mandates.IntentMandate",
+            data_id="test_001",
+            payload={"intent": "Test"},
+            sign=True
+        )
+
+        # Mock DID resolver to return a PEM public key
+        with patch.object(handler.did_resolver, 'resolve_public_key') as mock_resolve:
+            # Get the actual public key from key manager's active keys
+            # Ed25519 keys are stored with _ED25519 suffix
+            private_key = key_manager._active_keys.get("shopping_agent_ED25519")
+            public_key = private_key.public_key()
+
+            from cryptography.hazmat.primitives import serialization
+            pem_public_key = public_key.public_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PublicFormat.SubjectPublicKeyInfo
+            ).decode('utf-8')
+
+            # Mock resolver to return PEM key
+            mock_resolve.return_value = pem_public_key
+
+            # Verify signature - should use DID-resolved key
+            is_valid = await handler.verify_message_signature(message)
+            assert is_valid
+
+            # Verify that DID resolver was called
+            mock_resolve.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_verify_message_without_kid(self, setup_handler):
+        """Test verifying message without KID (lines 194-199)"""
+        handler = setup_handler
+
+        # Create a message with valid signature
+        message = handler.create_response_message(
+            recipient="did:ap2:agent:merchant_agent",
+            data_type="ap2.mandates.IntentMandate",
+            data_id="test_001",
+            payload={"intent": "Test"},
+            sign=True
+        )
+
+        # Remove KID from proof
+        message.header.proof.kid = None
+
+        # Verify signature - should use embedded public key
+        is_valid = await handler.verify_message_signature(message)
+        assert is_valid
+
+    @pytest.mark.asyncio
+    async def test_verify_message_unexpected_exception(self, setup_handler):
+        """Test unexpected exception during signature verification (lines 231-233)"""
+        handler = setup_handler
+
+        # Create a message
+        message = handler.create_response_message(
+            recipient="did:ap2:agent:merchant_agent",
+            data_type="ap2.mandates.IntentMandate",
+            data_id="test_001",
+            payload={"intent": "Test"},
+            sign=True
+        )
+
+        # Mock signature_manager to raise unexpected exception
+        with patch.object(handler.signature_manager, 'verify_a2a_message_signature') as mock_verify:
+            mock_verify.side_effect = Exception("Unexpected error during verification")
+
+            # Should handle exception and return False
+            is_valid = await handler.verify_message_signature(message)
+            assert not is_valid
+
 
 class TestNonceManager:
     """Test NonceManager functionality"""

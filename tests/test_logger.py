@@ -776,6 +776,36 @@ class TestMCPLoggingExtended:
             result={'products': []}
         )
 
+    def test_log_mcp_request_debug_level(self):
+        """Test MCP request logging at DEBUG level with full payload"""
+        from common.logger import setup_logger, log_mcp_request
+
+        logger = setup_logger('test_mcp_req_debug', level='DEBUG')
+
+        # Should log detailed payload at DEBUG level (lines 287-294)
+        log_mcp_request(
+            logger=logger,
+            tool_name='search_products',
+            arguments={'query': 'shoes', 'limit': 10},
+            url='http://mcp-server:8000',
+            headers={'X-Request-ID': 'req-123'}
+        )
+
+    def test_log_mcp_response_debug_level(self):
+        """Test MCP response logging at DEBUG level with full payload"""
+        from common.logger import setup_logger, log_mcp_response
+
+        logger = setup_logger('test_mcp_resp_debug', level='DEBUG')
+
+        # Should log detailed payload at DEBUG level (lines 321-328)
+        log_mcp_response(
+            logger=logger,
+            tool_name='search_products',
+            result={'products': [{'id': 1, 'name': 'Shoes'}]},
+            duration_ms=45.5,
+            error=None
+        )
+
 
 class TestCryptoLoggingExtended:
     """Extended tests for crypto logging"""
@@ -1067,3 +1097,67 @@ class TestLoggingAsyncClient:
             timeout = client.timeout
 
             assert timeout == 30.0
+
+    @pytest.mark.asyncio
+    async def test_logging_async_client_content_decode_exception(self):
+        """Test LoggingAsyncClient with content that raises decode exception"""
+        from common.logger import setup_logger, LoggingAsyncClient
+
+        logger = setup_logger('test_async_content_exception', level='DEBUG')
+
+        with patch('httpx.AsyncClient') as mock_client_class:
+            mock_client = AsyncMock()
+            mock_client_class.return_value = mock_client
+
+            mock_response = AsyncMock()
+            mock_response.status_code = 200
+            mock_response.headers = {}
+            mock_response.aread = AsyncMock()
+            mock_response.json.return_value = {}
+            mock_client.request.return_value = mock_response
+
+            client = LoggingAsyncClient(logger)
+
+            # Create a class that fools isinstance and raises on decode
+            class BytesLike:
+                """Class that appears as bytes to isinstance but raises on decode"""
+                __class__ = bytes
+
+                def decode(self, encoding='utf-8'):
+                    raise UnicodeDecodeError('utf-8', b'\xff', 0, 1, 'invalid start byte')
+
+            # This should trigger lines 440-441 (except block)
+            response = await client.post('http://example.com/upload', content=BytesLike())
+
+            assert response.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_logging_async_client_response_text_exception(self):
+        """Test LoggingAsyncClient when both response.json() and response.text raise exceptions"""
+        from common.logger import setup_logger, LoggingAsyncClient
+
+        logger = setup_logger('test_async_response_exception', level='DEBUG')
+
+        with patch('httpx.AsyncClient') as mock_client_class:
+            mock_client = AsyncMock()
+            mock_client_class.return_value = mock_client
+
+            # Create a mock response where both json() and text raise exceptions
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.headers = {}
+            mock_response.aread = AsyncMock()
+            # Both json() and text should raise exceptions to trigger lines 464-468
+            mock_response.json.side_effect = Exception("JSON parse error")
+
+            # Make text property raise exception when accessed
+            type(mock_response).text = property(lambda self: (_ for _ in ()).throw(Exception("Text decode error")))
+
+            mock_client.request.return_value = mock_response
+
+            client = LoggingAsyncClient(logger)
+
+            # This should trigger lines 464-468 (nested exception handling)
+            response = await client.get('http://example.com/binary')
+
+            assert response.status_code == 200
