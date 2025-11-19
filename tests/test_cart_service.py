@@ -352,30 +352,23 @@ class TestCreateCartFromProducts:
         # First call returns pending
         pending_response = AsyncMock()
         pending_response.status_code = 200
-        pending_response.json.return_value = {
+        pending_response.json = AsyncMock(return_value={
             "status": "pending_merchant_signature",
             "cart_mandate_id": "cart_pending_001"
-        }
+        })
+        pending_response.raise_for_status = AsyncMock()
 
-        # Second call (in wait_for_merchant_signature) returns signed
-        signed_response = AsyncMock()
-        signed_response.status_code = 200
-        signed_response.json.return_value = {
-            "status": "signed",
-            "payload": {
-                "contents": {"id": "cart_001"},
-                "merchant_authorization": "jwt_signature"
-            }
-        }
-
-        mock_http_client.post.return_value = pending_response
-        mock_http_client.get.return_value = signed_response
+        mock_http_client.post = AsyncMock(return_value=pending_response)
         mock_agent.http_client = mock_http_client
 
         mock_product = Mock()
 
+        # Mock wait_for_merchant_signature to return signed mandate
+        async def mock_wait(agent, cart_mandate_id, cart_name="", timeout=300, poll_interval=2.0):
+            return {"contents": {"id": "cart_001"}, "merchant_authorization": "jwt_sig"}
+
         with patch('services.merchant_agent.services.cart_service.wait_for_merchant_signature',
-                  return_value={"contents": {"id": "cart_001"}}):
+                  side_effect=mock_wait):
 
             artifact = await cart_service.create_cart_from_products(
                 agent=mock_agent,
@@ -408,14 +401,16 @@ class TestWaitForMerchantSignature:
         mock_http_client = AsyncMock()
         mock_response = AsyncMock()
         mock_response.status_code = 200
-        mock_response.json.return_value = {
+        mock_response.json = AsyncMock(return_value={
             "status": "signed",
             "payload": {
                 "contents": {"id": "cart_001"},
                 "merchant_authorization": "jwt_signature"
             }
-        }
-        mock_http_client.get.return_value = mock_response
+        })
+        mock_response.raise_for_status = AsyncMock()
+
+        mock_http_client.get = AsyncMock(return_value=mock_response)
         mock_agent.http_client = mock_http_client
 
         signed_mandate = await cart_service.wait_for_merchant_signature(
@@ -442,11 +437,13 @@ class TestWaitForMerchantSignature:
         mock_http_client = AsyncMock()
         mock_response = AsyncMock()
         mock_response.status_code = 200
-        mock_response.json.return_value = {
+        mock_response.json = AsyncMock(return_value={
             "status": "rejected",
             "payload": None
-        }
-        mock_http_client.get.return_value = mock_response
+        })
+        mock_response.raise_for_status = AsyncMock()
+
+        mock_http_client.get = AsyncMock(return_value=mock_response)
         mock_agent.http_client = mock_http_client
 
         signed_mandate = await cart_service.wait_for_merchant_signature(
@@ -471,10 +468,12 @@ class TestWaitForMerchantSignature:
         mock_http_client = AsyncMock()
         mock_response = AsyncMock()
         mock_response.status_code = 200
-        mock_response.json.return_value = {
+        mock_response.json = AsyncMock(return_value={
             "status": "pending_merchant_signature"
-        }
-        mock_http_client.get.return_value = mock_response
+        })
+        mock_response.raise_for_status = AsyncMock()
+
+        mock_http_client.get = AsyncMock(return_value=mock_response)
         mock_agent.http_client = mock_http_client
 
         signed_mandate = await cart_service.wait_for_merchant_signature(
