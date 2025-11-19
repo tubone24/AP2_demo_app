@@ -872,7 +872,7 @@ class TestCartHelpers:
             "cart_hash": "a" * 64
         }
 
-        with patch('services.shopping_agent.utils.cart_helpers.MerchantAuthorizationJWT', return_value=mock_jwt_verifier):
+        with patch('common.jwt_utils.MerchantAuthorizationJWT', return_value=mock_jwt_verifier):
             # Should not raise
             helpers.verify_merchant_cart_signature(signed_cart_mandate)
 
@@ -897,7 +897,7 @@ class TestCartHelpers:
         mock_jwt_verifier = MagicMock()
         mock_jwt_verifier.verify.side_effect = Exception("Invalid signature")
 
-        with patch('services.shopping_agent.utils.cart_helpers.MerchantAuthorizationJWT', return_value=mock_jwt_verifier):
+        with patch('common.jwt_utils.MerchantAuthorizationJWT', return_value=mock_jwt_verifier):
             with pytest.raises(ValueError, match="JWT verification failed"):
                 helpers.verify_merchant_cart_signature(signed_cart_mandate)
 
