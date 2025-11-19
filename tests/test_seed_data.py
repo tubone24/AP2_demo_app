@@ -6,9 +6,12 @@ Tests cover:
 - SAMPLE_USERS data structure
 - SAMPLE_PAYMENT_METHODS data structure
 - Data validation
+- Seed functions (seed_products, seed_users, seed_payment_methods)
 """
 
 import pytest
+from unittest.mock import AsyncMock, MagicMock, patch
+from io import StringIO
 
 
 class TestSampleProducts:
@@ -339,3 +342,181 @@ class TestImageUrls:
 
             # Should have a valid image extension
             assert any(image_url.endswith(ext) for ext in valid_extensions)
+
+
+class TestSeedFunctions:
+    """Test seed data functions"""
+
+    @pytest.mark.asyncio
+    async def test_seed_products(self, db_manager):
+        """Test seed_products function"""
+        from common.seed_data import seed_products, SAMPLE_PRODUCTS
+
+        # Seed products
+        with patch('builtins.print'):  # Suppress print output
+            await seed_products(db_manager)
+
+        # Verify products were created
+        async with db_manager.get_session() as session:
+            from common.database import ProductCRUD
+
+            # Check first product
+            first_product = SAMPLE_PRODUCTS[0]
+            product = await ProductCRUD.get_by_sku(session, first_product["sku"])
+
+            assert product is not None
+            assert product.name == first_product["name"]
+            assert product.price == first_product["price"]
+            assert product.inventory_count == first_product["inventory_count"]
+
+    @pytest.mark.asyncio
+    async def test_seed_products_skip_existing(self, db_manager):
+        """Test seed_products skips existing products"""
+        from common.seed_data import seed_products, SAMPLE_PRODUCTS
+
+        # Seed products first time
+        with patch('builtins.print'):
+            await seed_products(db_manager)
+
+        # Seed products second time (should skip)
+        with patch('builtins.print') as mock_print:
+            await seed_products(db_manager)
+
+            # Verify skip message was printed
+            print_calls = [str(call) for call in mock_print.call_args_list]
+            skip_messages = [call for call in print_calls if 'スキップ' in call or '既存' in call]
+            assert len(skip_messages) > 0
+
+    @pytest.mark.asyncio
+    async def test_seed_users(self, db_manager):
+        """Test seed_users function"""
+        from common.seed_data import seed_users, SAMPLE_USERS
+
+        # Seed users
+        with patch('builtins.print'):
+            await seed_users(db_manager)
+
+        # Verify users were created
+        async with db_manager.get_session() as session:
+            from common.database import User
+            from sqlalchemy.future import select
+
+            # Check first user
+            first_user = SAMPLE_USERS[0]
+            result = await session.execute(
+                select(User).where(User.email == first_user["email"])
+            )
+            user = result.scalar_one_or_none()
+
+            assert user is not None
+            assert user.id == first_user["id"]
+            assert user.display_name == first_user["display_name"]
+
+    @pytest.mark.asyncio
+    async def test_seed_users_skip_existing(self, db_manager):
+        """Test seed_users skips existing users"""
+        from common.seed_data import seed_users
+
+        # Seed users first time
+        with patch('builtins.print'):
+            await seed_users(db_manager)
+
+        # Seed users second time (should skip)
+        with patch('builtins.print') as mock_print:
+            await seed_users(db_manager)
+
+            # Verify skip message was printed
+            print_calls = [str(call) for call in mock_print.call_args_list]
+            skip_messages = [call for call in print_calls if 'スキップ' in call or '既存' in call]
+            assert len(skip_messages) > 0
+
+    @pytest.mark.asyncio
+    async def test_seed_payment_methods(self, db_manager):
+        """Test seed_payment_methods function"""
+        from common.seed_data import seed_payment_methods, SAMPLE_PAYMENT_METHODS
+        import json
+
+        # Seed payment methods
+        with patch('builtins.print'):
+            await seed_payment_methods(db_manager)
+
+        # Verify payment methods were created
+        async with db_manager.get_session() as session:
+            from common.database import PaymentMethodCRUD
+
+            # Check first payment method
+            first_pm = SAMPLE_PAYMENT_METHODS[0]
+            pm = await PaymentMethodCRUD.get_by_id(session, first_pm["id"])
+
+            assert pm is not None
+            assert pm.user_id == first_pm["user_id"]
+            payment_data = json.loads(pm.payment_data)
+            assert payment_data["display_name"] == first_pm["payment_method"]["display_name"]
+
+    @pytest.mark.asyncio
+    async def test_seed_payment_methods_skip_existing(self, db_manager):
+        """Test seed_payment_methods skips existing payment methods"""
+        from common.seed_data import seed_payment_methods
+
+        # Seed payment methods first time
+        with patch('builtins.print'):
+            await seed_payment_methods(db_manager)
+
+        # Seed payment methods second time (should skip)
+        with patch('builtins.print') as mock_print:
+            await seed_payment_methods(db_manager)
+
+            # Verify skip message was printed
+            print_calls = [str(call) for call in mock_print.call_args_list]
+            skip_messages = [call for call in print_calls if 'スキップ' in call or '既存' in call]
+            assert len(skip_messages) > 0
+
+    @pytest.mark.asyncio
+    async def test_seed_payment_methods_step_up_flag(self, db_manager):
+        """Test that payment methods correctly store step-up flag"""
+        from common.seed_data import seed_payment_methods, SAMPLE_PAYMENT_METHODS
+        import json
+
+        # Seed payment methods
+        with patch('builtins.print'):
+            await seed_payment_methods(db_manager)
+
+        # Verify step-up flags
+        async with db_manager.get_session() as session:
+            from common.database import PaymentMethodCRUD
+
+            for pm_data in SAMPLE_PAYMENT_METHODS:
+                pm = await PaymentMethodCRUD.get_by_id(session, pm_data["id"])
+
+                expected_step_up = pm_data["payment_method"]["requires_step_up"]
+                payment_data = json.loads(pm.payment_data)
+                actual_step_up = payment_data["requires_step_up"]
+
+                assert actual_step_up == expected_step_up
+
+    @pytest.mark.asyncio
+    async def test_main_function(self):
+        """Test main function execution"""
+        from common.seed_data import main
+
+        # Mock DatabaseManager to avoid actual DB operations
+        with patch('common.seed_data.DatabaseManager') as mock_db_manager_class:
+            mock_db_manager = MagicMock()
+            mock_db_manager.init_db = AsyncMock()
+            mock_db_manager.database_url = "sqlite+aiosqlite:///:memory:"
+            mock_db_manager_class.return_value = mock_db_manager
+
+            # Mock seed functions
+            with patch('common.seed_data.seed_products', new_callable=AsyncMock) as mock_seed_products, \
+                 patch('common.seed_data.seed_users', new_callable=AsyncMock) as mock_seed_users, \
+                 patch('common.seed_data.seed_payment_methods', new_callable=AsyncMock) as mock_seed_pm, \
+                 patch('builtins.print'):
+
+                # Run main
+                await main()
+
+                # Verify all functions were called
+                mock_db_manager.init_db.assert_called_once()
+                mock_seed_products.assert_called_once_with(mock_db_manager)
+                mock_seed_users.assert_called_once_with(mock_db_manager)
+                mock_seed_pm.assert_called_once_with(mock_db_manager)

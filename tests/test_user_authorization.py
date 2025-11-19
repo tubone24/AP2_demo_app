@@ -698,3 +698,263 @@ class TestVerifyUserAuthorizationVP:
             verify_user_authorization_vp(vp)
 
         assert "WebAuthn signature verification failed" in str(exc_info.value)
+
+    def test_verify_vp_missing_signature_fields_warning(self):
+        """Test VP verification when WebAuthn signature fields are missing (warning path)"""
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.hazmat.backends import default_backend
+
+        private_key = ec.generate_private_key(ec.SECP256R1(), default_backend())
+        public_key = private_key.public_key()
+
+        x_bytes = public_key.public_numbers().x.to_bytes(32, byteorder='big')
+        y_bytes = public_key.public_numbers().y.to_bytes(32, byteorder='big')
+
+        issuer_payload = {
+            "cnf": {
+                "jwk": {
+                    "kty": "EC",
+                    "crv": "P-256",
+                    "x": base64url_encode(x_bytes),
+                    "y": base64url_encode(y_bytes)
+                }
+            }
+        }
+        issuer_payload_b64 = base64url_encode(json.dumps(issuer_payload).encode())
+
+        # Create KB JWT with incomplete webauthn data (missing authenticator_data)
+        kb_payload = {
+            "aud": "did:ap2:agent:payment_processor",
+            "transaction_data": ["cart_hash", "payment_hash"],
+            "webauthn": {
+                "credential_id": "cred_id",
+                # Missing authenticator_data, client_data_json, or signature
+                "user_handle": "user_handle"
+            }
+        }
+        kb_payload_b64 = base64url_encode(json.dumps(kb_payload).encode())
+
+        vp = f"header.{issuer_payload_b64}.~header.{kb_payload_b64}"
+
+        # Should succeed but log warning about missing signature fields
+        result = verify_user_authorization_vp(vp)
+        assert result["verified"] is True
+
+    def test_verify_vp_wrong_audience_warning(self):
+        """Test VP verification with wrong audience (warning path)"""
+        kb_payload = {
+            "aud": "did:ap2:wrong:audience",  # Wrong audience
+            "transaction_data": ["cart_hash", "payment_hash"],
+            "webauthn": {
+                "credential_id": "cred_id",
+                "user_handle": "user_handle"
+            }
+        }
+        kb_payload_b64 = base64url_encode(json.dumps(kb_payload).encode())
+
+        # Create minimal issuer payload
+        issuer_payload = {"iss": "test"}
+        issuer_payload_b64 = base64url_encode(json.dumps(issuer_payload).encode())
+
+        vp = f"header.{issuer_payload_b64}.~header.{kb_payload_b64}.sig"
+
+        # Should succeed but log warning about wrong audience
+        result = verify_user_authorization_vp(vp, expected_audience="did:ap2:agent:payment_processor")
+        assert result["verified"] is True
+
+    def test_verify_vp_transaction_data_internal_mismatch(self):
+        """Test VP verification with internal transaction_data mismatch"""
+        kb_payload = {
+            "aud": "did:ap2:agent:payment_processor",
+            "transaction_data": ["cart_hash_1", "payment_hash_1"],
+            "webauthn": {"credential_id": "cred_id"}
+        }
+        kb_payload_b64 = base64url_encode(json.dumps(kb_payload).encode())
+
+        # Create minimal issuer payload
+        issuer_payload = {"iss": "test"}
+        issuer_payload_b64 = base64url_encode(json.dumps(issuer_payload).encode())
+
+        vp = f"header.{issuer_payload_b64}.~header.{kb_payload_b64}.sig"
+
+        # This tests lines 496-500 where we verify the transaction_data array internally
+        # The transaction_data should be consistent
+        result = verify_user_authorization_vp(vp)
+        assert result["verified"] is True
+        assert result["cart_hash"] == "cart_hash_1"
+        assert result["payment_hash"] == "payment_hash_1"
+
+
+class TestCreateUserAuthorizationVPComplete:
+    """Test complete user authorization VP creation with valid COSE keys"""
+
+    def test_create_vp_with_valid_cose_key(self):
+        """Test creating VP with valid COSE public key"""
+        import cbor2
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.hazmat.backends import default_backend
+
+        # Generate a real EC key pair
+        private_key = ec.generate_private_key(ec.SECP256R1(), default_backend())
+        public_key = private_key.public_key()
+
+        # Get public key coordinates
+        x_bytes = public_key.public_numbers().x.to_bytes(32, byteorder='big')
+        y_bytes = public_key.public_numbers().y.to_bytes(32, byteorder='big')
+
+        # Create COSE key format (COSE Key Type ES256)
+        cose_key = {
+            1: 2,        # kty: EC2
+            3: -7,       # alg: ES256
+            -1: 1,       # crv: P-256
+            -2: x_bytes, # x coordinate
+            -3: y_bytes  # y coordinate
+        }
+
+        # Encode to CBOR and then base64
+        cose_key_bytes = cbor2.dumps(cose_key)
+        public_key_cose = base64.b64encode(cose_key_bytes).decode('utf-8')
+
+        # Create WebAuthn assertion
+        client_data = {
+            "type": "webauthn.get",
+            "challenge": "test_challenge_123",
+            "origin": "https://example.com"
+        }
+        client_data_json = json.dumps(client_data).encode('utf-8')
+
+        authenticator_data = b'\x00' * 37
+
+        # Sign the data with the private key
+        from cryptography.hazmat.primitives import hashes
+        signed_data = authenticator_data + hashlib.sha256(client_data_json).digest()
+        signature = private_key.sign(signed_data, ec.ECDSA(hashes.SHA256()))
+
+        webauthn_assertion = {
+            "id": "credential_id_123",
+            "response": {
+                "clientDataJSON": base64url_encode(client_data_json),
+                "authenticatorData": base64url_encode(authenticator_data),
+                "signature": base64url_encode(signature)
+            }
+        }
+
+        cart_mandate = {
+            "type": "CartMandate",
+            "id": "cart_001",
+            "items": [{"sku": "TEST-001", "quantity": 1, "price": 1000}]
+        }
+
+        payment_mandate = {
+            "type": "PaymentMandate",
+            "id": "payment_001",
+            "amount": {"value": "1000.00", "currency": "JPY"}
+        }
+
+        # Create VP - this should cover lines 181-188 and 194-284
+        vp = create_user_authorization_vp(
+            webauthn_assertion=webauthn_assertion,
+            cart_mandate=cart_mandate,
+            payment_mandate_contents=payment_mandate,
+            user_id="user_001",
+            public_key_cose=public_key_cose,
+            payment_processor_id="did:ap2:agent:payment_processor"
+        )
+
+        # Verify structure
+        assert isinstance(vp, str)
+        assert "~" in vp
+
+        parts = vp.split("~")
+        assert len(parts) >= 2
+
+        # Verify the issuer JWT has the expected structure
+        issuer_jwt = parts[0]
+        issuer_parts = issuer_jwt.split(".")
+        assert len(issuer_parts) == 3
+
+        # Decode and verify issuer payload
+        issuer_payload = json.loads(base64url_decode(issuer_parts[1]).decode('utf-8'))
+        assert "iss" in issuer_payload
+        assert "sub" in issuer_payload
+        assert "cnf" in issuer_payload
+        assert "jwk" in issuer_payload["cnf"]
+        assert issuer_payload["cnf"]["jwk"]["kty"] == "EC"
+        assert issuer_payload["cnf"]["jwk"]["crv"] == "P-256"
+
+        # Verify the KB JWT has the expected structure
+        kb_jwt = parts[1]
+        kb_parts = kb_jwt.split(".")
+        assert len(kb_parts) == 3
+
+        # Decode and verify KB payload
+        kb_payload = json.loads(base64url_decode(kb_parts[1]).decode('utf-8'))
+        assert "aud" in kb_payload
+        assert "transaction_data" in kb_payload
+        assert "webauthn" in kb_payload
+        assert len(kb_payload["transaction_data"]) == 2
+
+    def test_create_vp_with_custom_payment_processor(self):
+        """Test creating VP with custom payment processor ID"""
+        import cbor2
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.hazmat.backends import default_backend
+
+        # Generate a real EC key pair
+        private_key = ec.generate_private_key(ec.SECP256R1(), default_backend())
+        public_key = private_key.public_key()
+
+        x_bytes = public_key.public_numbers().x.to_bytes(32, byteorder='big')
+        y_bytes = public_key.public_numbers().y.to_bytes(32, byteorder='big')
+
+        cose_key = {
+            1: 2, 3: -7, -1: 1,
+            -2: x_bytes,
+            -3: y_bytes
+        }
+
+        cose_key_bytes = cbor2.dumps(cose_key)
+        public_key_cose = base64.b64encode(cose_key_bytes).decode('utf-8')
+
+        client_data_json = json.dumps({
+            "type": "webauthn.get",
+            "challenge": "challenge",
+            "origin": "https://test.com"
+        }).encode('utf-8')
+
+        authenticator_data = b'\x00' * 37
+
+        from cryptography.hazmat.primitives import hashes
+        signed_data = authenticator_data + hashlib.sha256(client_data_json).digest()
+        signature = private_key.sign(signed_data, ec.ECDSA(hashes.SHA256()))
+
+        webauthn_assertion = {
+            "id": "cred_id",
+            "response": {
+                "clientDataJSON": base64url_encode(client_data_json),
+                "authenticatorData": base64url_encode(authenticator_data),
+                "signature": base64url_encode(signature)
+            }
+        }
+
+        cart = {"type": "CartMandate", "id": "cart_001"}
+        payment = {"type": "PaymentMandate", "id": "pay_001"}
+
+        custom_processor = "did:ap2:agent:custom_processor"
+
+        vp = create_user_authorization_vp(
+            webauthn_assertion=webauthn_assertion,
+            cart_mandate=cart,
+            payment_mandate_contents=payment,
+            user_id="user_123",
+            public_key_cose=public_key_cose,
+            payment_processor_id=custom_processor
+        )
+
+        # Verify the KB JWT has the custom audience
+        parts = vp.split("~")
+        kb_jwt = parts[1]
+        kb_parts = kb_jwt.split(".")
+        kb_payload = json.loads(base64url_decode(kb_parts[1]).decode('utf-8'))
+
+        assert kb_payload["aud"] == custom_processor

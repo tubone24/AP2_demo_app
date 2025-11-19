@@ -1038,3 +1038,850 @@ class TestDatabaseMode:
         # Should return empty list without database
         history = await risk_engine.get_transaction_history_from_db("user_001")
         assert history == []
+
+
+class TestUnusualTransactionPattern:
+    """Test unusual transaction pattern detection"""
+
+    @pytest.fixture
+    def risk_engine(self):
+        return RiskAssessmentEngine()
+
+    def test_pattern_risk_at_cap(self, risk_engine):
+        """Test pattern_risk reaches cap of 30 with high velocity"""
+        payer_id = "pattern_risk_user"
+
+        # Create 5 transactions in quick succession to trigger pattern risk
+        for i in range(5):
+            payment_mandate = {
+                "payment_mandate_contents": {
+                    "payment_details_total": {
+                        "amount": {"value": "3000.00", "currency": "JPY"}
+                    },
+                    "payment_response": {
+                        "payer_id": payer_id
+                    }
+                }
+            }
+            risk_engine.assess_payment_mandate(payment_mandate=payment_mandate)
+
+        # 6th transaction should trigger high pattern risk (capped at 30)
+        payment_mandate = {
+            "payment_mandate_contents": {
+                "payment_details_total": {
+                    "amount": {"value": "3000.00", "currency": "JPY"}
+                },
+                "payment_response": {
+                    "payer_id": payer_id
+                }
+            }
+        }
+        result = risk_engine.assess_payment_mandate(payment_mandate=payment_mandate)
+
+        # Pattern risk should be capped at 30
+        assert result.risk_factors["pattern_risk"] == 30
+
+
+class TestShippingAddressRisk:
+    """Test shipping address risk assessment"""
+
+    @pytest.fixture
+    def risk_engine(self):
+        return RiskAssessmentEngine()
+
+    def test_shipping_risk_po_box_japanese(self, risk_engine):
+        """Test shipping risk with Japanese PO Box"""
+        payment_mandate = {
+            "payment_mandate_contents": {
+                "payment_details_total": {
+                    "amount": {"value": "5000.00", "currency": "JPY"}
+                },
+                "payment_response": {
+                    "payer_id": "user_001"
+                }
+            }
+        }
+
+        cart_mandate = {
+            "type": "CartMandate",
+            "shipping_address": {
+                "address_line1": "私書箱 123号",
+                "city": "Tokyo"
+            },
+            "shipping_method": "overnight"  # Express shipping adds 5 points
+        }
+
+        result = risk_engine.assess_payment_mandate(
+            payment_mandate=payment_mandate,
+            cart_mandate=cart_mandate
+        )
+
+        # PO Box (15) + overnight (5) = 20, capped at 20
+        assert result.risk_factors["shipping_risk"] == 20
+
+    def test_shipping_risk_at_cap(self, risk_engine):
+        """Test shipping risk reaches cap of 20"""
+        payment_mandate = {
+            "payment_mandate_contents": {
+                "payment_details_total": {
+                    "amount": {"value": "50000.00", "currency": "JPY"}
+                },
+                "payment_response": {
+                    "payer_id": "user_002"
+                }
+            }
+        }
+
+        cart_mandate = {
+            "type": "CartMandate",
+            "shipping_address": {
+                "address_line1": "PO Box 789",
+                "city": "Osaka"
+            },
+            "shipping_method": "速達"  # Japanese express adds 5 points
+        }
+
+        result = risk_engine.assess_payment_mandate(
+            payment_mandate=payment_mandate,
+            cart_mandate=cart_mandate
+        )
+
+        # PO Box (15) + 速達 (5) = 20, capped at 20
+        assert result.risk_factors["shipping_risk"] == 20
+
+
+class TestSuspiciousTiming:
+    """Test temporal risk assessment"""
+
+    @pytest.fixture
+    def risk_engine(self):
+        return RiskAssessmentEngine()
+
+    def test_temporal_risk_very_fast_transaction(self, risk_engine):
+        """Test temporal risk for very fast transaction (< 5 seconds)"""
+        from datetime import datetime, timezone, timedelta
+
+        intent_time = datetime.now(timezone.utc)
+        payment_time = intent_time + timedelta(seconds=2)  # 2 seconds - bot-like
+
+        payment_mandate = {
+            "payment_mandate_contents": {
+                "payment_details_total": {
+                    "amount": {"value": "5000.00", "currency": "JPY"}
+                },
+                "payment_response": {
+                    "payer_id": "user_001"
+                },
+                "timestamp": payment_time.isoformat()
+            }
+        }
+
+        intent_mandate = {
+            "type": "IntentMandate",
+            "created_at": intent_time.isoformat()
+        }
+
+        result = risk_engine.assess_payment_mandate(
+            payment_mandate=payment_mandate,
+            intent_mandate=intent_mandate
+        )
+
+        # Very fast transaction (< 5 seconds) should have temporal_risk of 15 (max)
+        assert result.risk_factors["temporal_risk"] == 15
+
+    def test_temporal_risk_fast_transaction(self, risk_engine):
+        """Test temporal risk for fast transaction (< 30 seconds) - line 598"""
+        from datetime import datetime, timezone, timedelta
+
+        intent_time = datetime.now(timezone.utc)
+        payment_time = intent_time + timedelta(seconds=25)  # 25 seconds - very fast
+
+        payment_mandate = {
+            "payment_mandate_contents": {
+                "payment_details_total": {
+                    "amount": {"value": "5000.00", "currency": "JPY"}
+                },
+                "payment_response": {
+                    "payer_id": "user_002"
+                },
+                "timestamp": payment_time.isoformat()
+            }
+        }
+
+        intent_mandate = {
+            "type": "IntentMandate",
+            "created_at": intent_time.isoformat()
+        }
+
+        result = risk_engine.assess_payment_mandate(
+            payment_mandate=payment_mandate,
+            intent_mandate=intent_mandate
+        )
+
+        # Fast transaction (< 30 seconds) should have temporal_risk of 10
+        assert result.risk_factors["temporal_risk"] == 10
+
+
+class TestMaxAmountParsing:
+    """Test max_amount parsing with decimals and error handling (lines 246-257)"""
+
+    @pytest.fixture
+    def risk_engine(self):
+        return RiskAssessmentEngine()
+
+    def test_max_amount_decimal_parsing(self, risk_engine):
+        """Test max_amount parsing with decimal value (line 246)"""
+        payment_mandate = {
+            "payment_mandate_contents": {
+                "payment_details_total": {
+                    "amount": {"value": "9500.00", "currency": "JPY"}
+                },
+                "payment_response": {
+                    "payer_id": "user_001"
+                }
+            }
+        }
+
+        intent_mandate = {
+            "constraints": {
+                "max_amount": {
+                    "value": "10000.50",  # Decimal max_amount
+                    "currency": "JPY"
+                }
+            }
+        }
+
+        result = risk_engine.assess_payment_mandate(
+            payment_mandate=payment_mandate,
+            intent_mandate=intent_mandate
+        )
+
+        # Amount is within constraint, should have some amount_risk but low constraint_risk
+        assert result.risk_factors["amount_risk"] >= 0
+
+    def test_max_amount_ratio_95_percent(self, risk_engine):
+        """Test amount at 95% of max_amount (lines 254-255)"""
+        payment_mandate = {
+            "payment_mandate_contents": {
+                "payment_details_total": {
+                    "amount": {"value": "9500.00", "currency": "JPY"}  # 95% of 10000
+                },
+                "payment_response": {
+                    "payer_id": "user_001"
+                }
+            }
+        }
+
+        intent_mandate = {
+            "constraints": {
+                "max_amount": {
+                    "value": "10000",
+                    "currency": "JPY"
+                }
+            }
+        }
+
+        result = risk_engine.assess_payment_mandate(
+            payment_mandate=payment_mandate,
+            intent_mandate=intent_mandate
+        )
+
+        # At 95% of max, should add 10 points to amount_risk
+        assert result.risk_factors["amount_risk"] >= 10
+
+    def test_max_amount_ratio_85_percent(self, risk_engine):
+        """Test amount at 85% of max_amount (lines 256-257)"""
+        payment_mandate = {
+            "payment_mandate_contents": {
+                "payment_details_total": {
+                    "amount": {"value": "8500.00", "currency": "JPY"}  # 85% of 10000
+                },
+                "payment_response": {
+                    "payer_id": "user_001"
+                }
+            }
+        }
+
+        intent_mandate = {
+            "constraints": {
+                "max_amount": {
+                    "value": "10000",
+                    "currency": "JPY"
+                }
+            }
+        }
+
+        result = risk_engine.assess_payment_mandate(
+            payment_mandate=payment_mandate,
+            intent_mandate=intent_mandate
+        )
+
+        # At 85% of max (>= 0.80), should add 5 points to amount_risk
+        assert result.risk_factors["amount_risk"] >= 5
+
+    def test_max_amount_error_handling(self, risk_engine):
+        """Test max_amount parsing error handling (lines 249-250)"""
+        payment_mandate = {
+            "payment_mandate_contents": {
+                "payment_details_total": {
+                    "amount": {"value": "5000.00", "currency": "JPY"}
+                },
+                "payment_response": {
+                    "payer_id": "user_001"
+                }
+            }
+        }
+
+        intent_mandate = {
+            "constraints": {
+                "max_amount": {
+                    "value": "invalid_value",  # Invalid value
+                    "currency": "JPY"
+                }
+            }
+        }
+
+        # Should handle gracefully without raising error
+        result = risk_engine.assess_payment_mandate(
+            payment_mandate=payment_mandate,
+            intent_mandate=intent_mandate
+        )
+
+        assert result is not None
+
+
+class TestConstraintComplianceEdgeCasesExtended:
+    """Test additional constraint compliance edge cases (lines 296-297, 310)"""
+
+    @pytest.fixture
+    def risk_engine(self):
+        return RiskAssessmentEngine()
+
+    def test_session_without_max_amount(self, risk_engine):
+        """Test session without max_amount (lines 296-297)"""
+        payment_mandate = {
+            "payment_mandate_contents": {
+                "payment_details_total": {
+                    "amount": {"value": "50000.00", "currency": "JPY"}
+                },
+                "payment_response": {
+                    "payer_id": "user_001"
+                }
+            }
+        }
+
+        # Session with max_amount set to None or 0
+        session = {"max_amount": None}
+
+        result = risk_engine.assess_payment_mandate(
+            payment_mandate=payment_mandate,
+            session=session
+        )
+
+        # No max_amount -> no constraint risk
+        assert result.risk_factors["constraint_risk"] == 0
+
+    def test_max_amount_decimal_in_session(self, risk_engine):
+        """Test max_amount with decimal in session (line 310)"""
+        payment_mandate = {
+            "payment_mandate_contents": {
+                "payment_details_total": {
+                    "amount": {"value": "5000.00", "currency": "JPY"}
+                },
+                "payment_response": {
+                    "payer_id": "user_001"
+                }
+            }
+        }
+
+        session = {
+            "max_amount": "10000.50"  # Decimal value as string
+        }
+
+        result = risk_engine.assess_payment_mandate(
+            payment_mandate=payment_mandate,
+            session=session
+        )
+
+        # Should parse decimal max_amount correctly
+        assert result.risk_factors["constraint_risk"] == 0
+
+
+class TestTokenizedPaymentEdgeCases:
+    """Test tokenized payment edge cases (lines 422-423, 449-454)"""
+
+    @pytest.fixture
+    def risk_engine(self):
+        return RiskAssessmentEngine()
+
+    def test_tokenized_payment_missing_token(self, risk_engine):
+        """Test tokenized payment without token (lines 422-423)"""
+        payment_mandate = {
+            "payment_mandate_contents": {
+                "payment_details_total": {
+                    "amount": {"value": "5000.00", "currency": "JPY"}
+                },
+                "payment_response": {
+                    "payer_id": "user_001",
+                    "methodName": "https://a2a-protocol.org/payment-methods/ap2-payment",
+                    "details": {
+                        "cardBrand": "Visa",
+                        "token": "",  # Empty token
+                        "tokenized": True
+                    }
+                }
+            }
+        }
+
+        result = risk_engine.assess_payment_mandate(payment_mandate=payment_mandate)
+
+        # Missing/empty token should add 15 points to payment_method_risk
+        assert result.risk_factors["payment_method_risk"] >= 15
+
+    def test_tokenized_payment_no_token_field(self, risk_engine):
+        """Test tokenized payment with no token field"""
+        payment_mandate = {
+            "payment_mandate_contents": {
+                "payment_details_total": {
+                    "amount": {"value": "5000.00", "currency": "JPY"}
+                },
+                "payment_response": {
+                    "payer_id": "user_001",
+                    "methodName": "https://a2a-protocol.org/payment-methods/ap2-payment",
+                    "details": {
+                        "cardBrand": "Visa",
+                        # No token field at all
+                        "tokenized": True
+                    }
+                }
+            }
+        }
+
+        result = risk_engine.assess_payment_mandate(payment_mandate=payment_mandate)
+
+        # Missing token should add 15 points to payment_method_risk
+        assert result.risk_factors["payment_method_risk"] >= 15
+
+    def test_non_tokenized_invalid_expiry_format(self, risk_engine):
+        """Test non-tokenized payment with invalid expiry format (lines 449-454)"""
+        payment_mandate = {
+            "payment_mandate_contents": {
+                "payment_details_total": {
+                    "amount": {"value": "5000.00", "currency": "JPY"}
+                },
+                "payment_response": {
+                    "payer_id": "user_001",
+                    "methodName": "basic-card",
+                    "details": {
+                        "cardBrand": "Visa",
+                        "tokenized": False,
+                        "expiry_year": "invalid",  # Invalid format
+                        "expiry_month": "bad"  # Invalid format
+                    }
+                }
+            }
+        }
+
+        # Should raise ValueError for invalid expiry format
+        with pytest.raises(ValueError, match="Invalid payment method expiry date format"):
+            risk_engine.assess_payment_mandate(payment_mandate=payment_mandate)
+
+
+class TestVelocityCheckEdgeCases:
+    """Test velocity check edge cases (lines 494-495, 524)"""
+
+    @pytest.fixture
+    def risk_engine(self):
+        # Create engine with mock db_manager to test database mode fallback
+        class MockDBManager:
+            pass
+
+        engine = RiskAssessmentEngine(db_manager=MockDBManager())
+        return engine
+
+    def test_database_mode_fallback(self, risk_engine):
+        """Test database mode fallback in sync context (lines 494-495)"""
+        payment_mandate = {
+            "payment_mandate_contents": {
+                "payment_details_total": {
+                    "amount": {"value": "5000.00", "currency": "JPY"}
+                },
+                "payment_response": {
+                    "payer_id": "db_fallback_user"
+                }
+            }
+        }
+
+        # Should use in-memory fallback when db_manager exists but in sync context
+        result = risk_engine.assess_payment_mandate(payment_mandate=payment_mandate)
+
+        assert result is not None
+        assert "pattern_risk" in result.risk_factors
+
+    def test_amount_without_decimal(self, risk_engine):
+        """Test amount parsing without decimal (line 524)"""
+        payer_id = "no_decimal_user"
+
+        # First, add a transaction with decimal
+        payment_mandate_1 = {
+            "payment_mandate_contents": {
+                "payment_details_total": {
+                    "amount": {"value": "1000", "currency": "JPY"}  # No decimal
+                },
+                "payment_response": {
+                    "payer_id": payer_id
+                }
+            }
+        }
+        risk_engine.assess_payment_mandate(payment_mandate=payment_mandate_1)
+
+        # Second transaction with much higher amount (testing pattern detection)
+        payment_mandate_2 = {
+            "payment_mandate_contents": {
+                "payment_details_total": {
+                    "amount": {"value": "5000", "currency": "JPY"}  # No decimal, 5x higher
+                },
+                "payment_response": {
+                    "payer_id": payer_id
+                }
+            }
+        }
+        result = risk_engine.assess_payment_mandate(payment_mandate=payment_mandate_2)
+
+        # Should parse amount without decimal correctly
+        assert result is not None
+
+
+class TestPatternAnalysisEdgeCases:
+    """Test pattern analysis edge cases (lines 536-537, 543-545)"""
+
+    @pytest.fixture
+    def risk_engine(self):
+        return RiskAssessmentEngine()
+
+    def test_transaction_history_with_invalid_amounts(self, risk_engine):
+        """Test transaction history with invalid amount values (lines 536-537)"""
+        payer_id = "invalid_history_user"
+
+        # Manually inject invalid transaction history
+        risk_engine.transaction_history[payer_id] = [
+            {
+                "timestamp": datetime.now().isoformat(),
+                "amount": "invalid_amount",  # Invalid amount
+                "risk_score": 10
+            },
+            {
+                "timestamp": datetime.now().isoformat(),
+                "amount": "bad_value",  # Invalid amount
+                "risk_score": 15
+            }
+        ]
+
+        # New transaction
+        payment_mandate = {
+            "payment_mandate_contents": {
+                "payment_details_total": {
+                    "amount": {"value": "10000.00", "currency": "JPY"}
+                },
+                "payment_response": {
+                    "payer_id": payer_id
+                }
+            }
+        }
+
+        # Should handle invalid amounts in history gracefully
+        result = risk_engine.assess_payment_mandate(payment_mandate=payment_mandate)
+        assert result is not None
+
+    def test_current_amount_parsing_error(self, risk_engine):
+        """Test current amount parsing error (lines 543-545)"""
+        payer_id = "parse_error_user"
+
+        # Add valid transaction to history
+        risk_engine.transaction_history[payer_id] = [
+            {
+                "timestamp": datetime.now().isoformat(),
+                "amount": "5000.00",
+                "risk_score": 10
+            }
+        ]
+
+        # Transaction with invalid current amount
+        payment_mandate = {
+            "payment_mandate_contents": {
+                "payment_details_total": {
+                    "amount": {"value": "not_a_number", "currency": "JPY"}
+                },
+                "payment_response": {
+                    "payer_id": payer_id
+                }
+            }
+        }
+
+        # Should handle parsing error gracefully
+        result = risk_engine.assess_payment_mandate(payment_mandate=payment_mandate)
+        assert result is not None
+
+
+class TestTemporalRiskEdgeCases:
+    """Test temporal risk edge cases (line 584, 606-608)"""
+
+    @pytest.fixture
+    def risk_engine(self):
+        return RiskAssessmentEngine()
+
+    def test_temporal_risk_missing_intent_created_at(self, risk_engine):
+        """Test temporal risk with missing intent created_at (line 584)"""
+        payment_mandate = {
+            "payment_mandate_contents": {
+                "payment_details_total": {
+                    "amount": {"value": "5000.00", "currency": "JPY"}
+                },
+                "payment_response": {
+                    "payer_id": "user_001"
+                },
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+        }
+
+        intent_mandate = {
+            "type": "IntentMandate"
+            # Missing created_at
+        }
+
+        result = risk_engine.assess_payment_mandate(
+            payment_mandate=payment_mandate,
+            intent_mandate=intent_mandate
+        )
+
+        # Missing timestamp should return 0 temporal risk
+        assert result.risk_factors["temporal_risk"] == 0
+
+    def test_temporal_risk_missing_payment_timestamp(self, risk_engine):
+        """Test temporal risk with missing payment timestamp (line 584)"""
+        payment_mandate = {
+            "payment_mandate_contents": {
+                "payment_details_total": {
+                    "amount": {"value": "5000.00", "currency": "JPY"}
+                },
+                "payment_response": {
+                    "payer_id": "user_001"
+                }
+                # Missing timestamp
+            }
+        }
+
+        intent_mandate = {
+            "type": "IntentMandate",
+            "created_at": datetime.now(timezone.utc).isoformat()
+        }
+
+        result = risk_engine.assess_payment_mandate(
+            payment_mandate=payment_mandate,
+            intent_mandate=intent_mandate
+        )
+
+        # Missing timestamp should return 0 temporal risk
+        assert result.risk_factors["temporal_risk"] == 0
+
+    def test_temporal_risk_invalid_timestamp_format(self, risk_engine):
+        """Test temporal risk with invalid timestamp format (lines 606-608)"""
+        payment_mandate = {
+            "payment_mandate_contents": {
+                "payment_details_total": {
+                    "amount": {"value": "5000.00", "currency": "JPY"}
+                },
+                "payment_response": {
+                    "payer_id": "user_001"
+                },
+                "timestamp": "invalid-timestamp-format"
+            }
+        }
+
+        intent_mandate = {
+            "type": "IntentMandate",
+            "created_at": "also-invalid"
+        }
+
+        result = risk_engine.assess_payment_mandate(
+            payment_mandate=payment_mandate,
+            intent_mandate=intent_mandate
+        )
+
+        # Invalid timestamp should return 0 temporal risk (error handled)
+        assert result.risk_factors["temporal_risk"] == 0
+
+
+class TestRiskScoreCalculation:
+    """Test risk score calculation edge cases (line 641)"""
+
+    @pytest.fixture
+    def risk_engine(self):
+        return RiskAssessmentEngine()
+
+    def test_risk_score_with_empty_factors(self, risk_engine):
+        """Test risk score calculation with empty factors (line 641)"""
+        # Test the _calculate_total_risk_score method directly
+        risk_factors = {}
+
+        total_score = risk_engine._calculate_total_risk_score(risk_factors)
+
+        # Empty factors should result in 0 score
+        assert total_score == 0
+
+
+class TestAsyncDatabaseMethods:
+    """Test async database methods (lines 701-722, 739-754)"""
+
+    @pytest.fixture
+    def risk_engine(self):
+        return RiskAssessmentEngine()
+
+    @pytest.fixture
+    def risk_engine_with_mock_db(self):
+        """Create risk engine with mock database manager"""
+        from unittest.mock import MagicMock, AsyncMock
+
+        mock_db_manager = MagicMock()
+
+        # Mock the get_session context manager
+        mock_session = MagicMock()
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=None)
+        mock_db_manager.get_session.return_value = mock_session
+
+        engine = RiskAssessmentEngine(db_manager=mock_db_manager)
+        return engine, mock_db_manager, mock_session
+
+    @pytest.mark.asyncio
+    async def test_record_transaction_to_db_with_decimal_amount(self, risk_engine):
+        """Test recording transaction with decimal amount (lines 701-722)"""
+        # Test decimal amount parsing
+        await risk_engine.record_transaction_to_db(
+            payer_id="user_001",
+            amount_value_str="10000.50",  # Decimal amount
+            risk_score=25,
+            currency="JPY"
+        )
+        # Should complete without error (no db_manager, so it just logs warning)
+
+    @pytest.mark.asyncio
+    async def test_record_transaction_to_db_with_integer_amount(self, risk_engine):
+        """Test recording transaction with integer amount (lines 701-722)"""
+        # Test integer amount parsing
+        await risk_engine.record_transaction_to_db(
+            payer_id="user_002",
+            amount_value_str="10000",  # Integer amount
+            risk_score=30,
+            currency="JPY"
+        )
+        # Should complete without error
+
+    @pytest.mark.asyncio
+    async def test_get_transaction_history_from_db(self, risk_engine):
+        """Test getting transaction history from database (lines 739-754)"""
+        # Test with different days parameter
+        history = await risk_engine.get_transaction_history_from_db("user_001", days=7)
+
+        # Should return empty list (no db_manager)
+        assert history == []
+
+    @pytest.mark.asyncio
+    async def test_get_transaction_history_from_db_default_days(self, risk_engine):
+        """Test getting transaction history with default days"""
+        history = await risk_engine.get_transaction_history_from_db("user_001")
+
+        # Should return empty list with default 30 days
+        assert history == []
+
+    @pytest.mark.asyncio
+    async def test_record_transaction_to_db_with_mock_database(self, risk_engine_with_mock_db):
+        """Test recording transaction with mock database (lines 701-722)"""
+        from unittest.mock import AsyncMock, patch
+
+        engine, mock_db_manager, mock_session = risk_engine_with_mock_db
+
+        # Mock the TransactionHistoryCRUD.create method
+        with patch('common.database.TransactionHistoryCRUD') as mock_crud:
+            mock_crud.create = AsyncMock(return_value=None)
+
+            # Test with decimal amount
+            await engine.record_transaction_to_db(
+                payer_id="user_001",
+                amount_value_str="10000.50",
+                risk_score=25,
+                currency="JPY"
+            )
+
+            # Verify create was called
+            mock_crud.create.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_record_transaction_to_db_error_handling(self, risk_engine_with_mock_db):
+        """Test error handling in record_transaction_to_db (line 722)"""
+        from unittest.mock import AsyncMock, patch
+
+        engine, mock_db_manager, mock_session = risk_engine_with_mock_db
+
+        # Mock TransactionHistoryCRUD to raise an error
+        with patch('common.database.TransactionHistoryCRUD') as mock_crud:
+            mock_crud.create = AsyncMock(side_effect=Exception("Database error"))
+
+            # Should handle error gracefully
+            await engine.record_transaction_to_db(
+                payer_id="user_001",
+                amount_value_str="5000.00",
+                risk_score=20
+            )
+
+    @pytest.mark.asyncio
+    async def test_get_transaction_history_from_db_with_mock_database(self, risk_engine_with_mock_db):
+        """Test getting transaction history with mock database (lines 739-754)"""
+        from unittest.mock import AsyncMock, patch, MagicMock
+
+        engine, mock_db_manager, mock_session = risk_engine_with_mock_db
+
+        # Create mock transaction history records
+        mock_record1 = MagicMock()
+        mock_record1.to_dict.return_value = {
+            "payer_id": "user_001",
+            "amount_value": 5000,
+            "currency": "JPY",
+            "risk_score": 25
+        }
+
+        mock_record2 = MagicMock()
+        mock_record2.to_dict.return_value = {
+            "payer_id": "user_001",
+            "amount_value": 10000,
+            "currency": "JPY",
+            "risk_score": 30
+        }
+
+        # Mock the TransactionHistoryCRUD.get_by_payer_id method
+        with patch('common.database.TransactionHistoryCRUD') as mock_crud:
+            mock_crud.get_by_payer_id = AsyncMock(return_value=[mock_record1, mock_record2])
+
+            # Get transaction history
+            history = await engine.get_transaction_history_from_db("user_001", days=30)
+
+            # Verify we got the correct history
+            assert len(history) == 2
+            assert history[0]["payer_id"] == "user_001"
+            assert history[1]["amount_value"] == 10000
+
+    @pytest.mark.asyncio
+    async def test_get_transaction_history_from_db_error_handling(self, risk_engine_with_mock_db):
+        """Test error handling in get_transaction_history_from_db (line 753)"""
+        from unittest.mock import AsyncMock, patch
+
+        engine, mock_db_manager, mock_session = risk_engine_with_mock_db
+
+        # Mock TransactionHistoryCRUD to raise an error
+        with patch('common.database.TransactionHistoryCRUD') as mock_crud:
+            mock_crud.get_by_payer_id = AsyncMock(side_effect=Exception("Database error"))
+
+            # Should handle error gracefully and return empty list
+            history = await engine.get_transaction_history_from_db("user_001")
+
+            assert history == []

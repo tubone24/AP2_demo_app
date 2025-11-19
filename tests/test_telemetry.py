@@ -506,6 +506,69 @@ class TestSetupTelemetry:
             call_kwargs = mock_exporter_class.call_args.kwargs
             assert call_kwargs['insecure'] is False
 
+    def test_setup_telemetry_existing_provider_no_resource(self, monkeypatch):
+        """Test setup_telemetry with existing provider without resource attribute"""
+        from common.telemetry import setup_telemetry
+        from opentelemetry.sdk.trace import TracerProvider
+
+        monkeypatch.setenv('OTEL_ENABLED', 'true')
+
+        with patch('common.telemetry.trace.get_tracer_provider') as mock_get_provider, \
+             patch('common.telemetry.OTLPSpanExporter') as mock_exporter_class, \
+             patch('common.telemetry.BatchSpanProcessor') as mock_processor_class:
+
+            # Mock existing provider without resource attribute
+            mock_existing = MagicMock()
+            mock_existing.__class__ = TracerProvider
+            # Remove resource attribute
+            if hasattr(mock_existing, 'resource'):
+                delattr(mock_existing, 'resource')
+            mock_get_provider.return_value = mock_existing
+
+            # Mock exporter and processor
+            mock_exporter = MagicMock()
+            mock_exporter_class.return_value = mock_exporter
+            mock_processor = MagicMock()
+            mock_processor_class.return_value = mock_processor
+
+            provider = setup_telemetry()
+
+            # Should return existing provider and add OTLP exporter
+            assert provider == mock_existing
+            mock_existing.add_span_processor.assert_called_once_with(mock_processor)
+
+    def test_setup_telemetry_existing_provider_exporter_fails(self, monkeypatch):
+        """Test setup_telemetry when adding OTLP exporter to existing provider fails"""
+        from common.telemetry import setup_telemetry
+        from opentelemetry.sdk.trace import TracerProvider
+
+        monkeypatch.setenv('OTEL_ENABLED', 'true')
+
+        with patch('common.telemetry.trace.get_tracer_provider') as mock_get_provider, \
+             patch('common.telemetry.OTLPSpanExporter') as mock_exporter_class, \
+             patch('common.telemetry.BatchSpanProcessor') as mock_processor_class:
+
+            # Mock existing provider with resource
+            mock_existing = MagicMock()
+            mock_existing.__class__ = TracerProvider
+            mock_existing.resource = MagicMock()
+            mock_existing.resource.attributes = {'service.name': 'existing_service'}
+
+            # Make add_span_processor raise an exception
+            mock_existing.add_span_processor.side_effect = Exception("Failed to add processor")
+            mock_get_provider.return_value = mock_existing
+
+            # Mock exporter and processor
+            mock_exporter = MagicMock()
+            mock_exporter_class.return_value = mock_exporter
+            mock_processor = MagicMock()
+            mock_processor_class.return_value = mock_processor
+
+            provider = setup_telemetry()
+
+            # Should still return existing provider despite error
+            assert provider == mock_existing
+
 
 class TestInstrumentFastAPIApp:
     """Test instrument_fastapi_app function"""
@@ -572,6 +635,20 @@ class TestInstrumentFastAPIApp:
         mock_app = MagicMock()
 
         with patch('common.telemetry.FastAPIInstrumentor.instrument_app', side_effect=Exception("Test error")):
+            # Should not raise exception
+            instrument_fastapi_app(mock_app)
+
+    def test_instrument_fastapi_middleware_exception(self, monkeypatch):
+        """Test instrument_fastapi_app handles middleware addition exceptions"""
+        from common.telemetry import instrument_fastapi_app
+
+        monkeypatch.setenv('OTEL_ENABLED', 'true')
+
+        mock_app = MagicMock()
+        # Make add_middleware raise an exception
+        mock_app.add_middleware.side_effect = Exception("Middleware error")
+
+        with patch('common.telemetry.FastAPIInstrumentor.instrument_app'):
             # Should not raise exception
             instrument_fastapi_app(mock_app)
 
@@ -767,3 +844,145 @@ class TestAddRequestResponseToSpan:
             # Verify exception was recorded
             mock_span.record_exception.assert_called_once_with(test_exception)
             assert exc_info.value == test_exception
+
+    @pytest.mark.asyncio
+    async def test_middleware_request_body_parse_error(self):
+        """Test middleware handles request body parse errors"""
+        from common.telemetry import _add_request_response_to_span
+
+        mock_request = MagicMock()
+        mock_request.method = "POST"
+        mock_request.headers = {"content-type": "application/json"}
+        # Invalid JSON
+        mock_request.body = AsyncMock(return_value=b"{invalid json")
+
+        mock_response = MagicMock()
+
+        async def mock_call_next(request):
+            return mock_response
+
+        with patch('common.telemetry.trace.get_current_span') as mock_get_span:
+            mock_span = MagicMock()
+            mock_span.is_recording.return_value = True
+            mock_get_span.return_value = mock_span
+
+            response = await _add_request_response_to_span(mock_request, mock_call_next)
+
+            # Should still return response despite parse error
+            assert response == mock_response
+
+            # Verify error was recorded in span
+            error_calls = [call for call in mock_span.set_attribute.call_args_list
+                          if call[0][0] == "http.request.body.error"]
+            assert len(error_calls) > 0
+
+    @pytest.mark.asyncio
+    async def test_middleware_json_response_body(self):
+        """Test middleware with JSON response body"""
+        from common.telemetry import _add_request_response_to_span
+
+        mock_request = MagicMock()
+        mock_request.method = "GET"
+        mock_request.headers = {}
+
+        response_body = {"status": "success", "password": "secret123"}
+        mock_response = MagicMock()
+        mock_response.headers = {"content-type": "application/json"}
+        mock_response.body = json.dumps(response_body).encode('utf-8')
+
+        async def mock_call_next(request):
+            return mock_response
+
+        with patch('common.telemetry.trace.get_current_span') as mock_get_span:
+            mock_span = MagicMock()
+            mock_span.is_recording.return_value = True
+            mock_get_span.return_value = mock_span
+
+            response = await _add_request_response_to_span(mock_request, mock_call_next)
+
+            # Verify response body was masked and added to span
+            response_body_calls = [call for call in mock_span.set_attribute.call_args_list
+                                  if call[0][0] == "http.response.body"]
+            assert len(response_body_calls) > 0
+
+            # Find the call with http.response.body
+            for call in mock_span.set_attribute.call_args_list:
+                if call[0][0] == "http.response.body":
+                    body_value = json.loads(call[0][1])
+                    # Password should be masked
+                    assert body_value['password'] == '[REDACTED]'
+                    assert body_value['status'] == 'success'
+
+    @pytest.mark.asyncio
+    async def test_middleware_response_body_parse_error(self):
+        """Test middleware handles response body parse errors"""
+        from common.telemetry import _add_request_response_to_span
+
+        mock_request = MagicMock()
+        mock_request.method = "GET"
+        mock_request.headers = {}
+
+        mock_response = MagicMock()
+        mock_response.headers = {"content-type": "application/json"}
+        # Invalid JSON
+        mock_response.body = b"{invalid json"
+
+        async def mock_call_next(request):
+            return mock_response
+
+        with patch('common.telemetry.trace.get_current_span') as mock_get_span:
+            mock_span = MagicMock()
+            mock_span.is_recording.return_value = True
+            mock_get_span.return_value = mock_span
+
+            response = await _add_request_response_to_span(mock_request, mock_call_next)
+
+            # Should still return response despite parse error
+            assert response == mock_response
+
+            # Verify error was recorded in span
+            error_calls = [call for call in mock_span.set_attribute.call_args_list
+                          if call[0][0] == "http.response.body.error"]
+            assert len(error_calls) > 0
+
+    @pytest.mark.asyncio
+    async def test_middleware_request_body_can_be_reread(self):
+        """Test middleware allows request body to be re-read"""
+        from common.telemetry import _add_request_response_to_span
+
+        mock_request = MagicMock()
+        mock_request.method = "POST"
+        mock_request.headers = {"content-type": "application/json"}
+
+        request_body = {"username": "test_user", "data": "test_data"}
+        body_bytes = json.dumps(request_body).encode('utf-8')
+        mock_request.body = AsyncMock(return_value=body_bytes)
+
+        mock_response = MagicMock()
+
+        # Track if _receive was set
+        receive_was_set = False
+
+        async def mock_call_next(request):
+            nonlocal receive_was_set
+            # Check if _receive attribute was set and can be called
+            if hasattr(request, '_receive'):
+                receive_was_set = True
+                # Call the receive function to test line 241
+                result = await request._receive()
+                # Verify the receive function returns the expected format
+                assert result["type"] == "http.request"
+                assert result["body"] == body_bytes
+            return mock_response
+
+        with patch('common.telemetry.trace.get_current_span') as mock_get_span:
+            mock_span = MagicMock()
+            mock_span.is_recording.return_value = True
+            mock_get_span.return_value = mock_span
+
+            response = await _add_request_response_to_span(mock_request, mock_call_next)
+
+            # Verify response was returned
+            assert response == mock_response
+            # Verify _receive was set and tested
+            assert receive_was_set

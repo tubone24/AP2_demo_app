@@ -436,8 +436,9 @@ class UserAuthorizationSDJWT:
             algorithm=algorithm
         )
 
+        # Signature.value is base64-encoded, need to decode and re-encode as base64url
         issuer_signature_b64 = base64.urlsafe_b64encode(
-            bytes.fromhex(issuer_signature.signature)
+            base64.b64decode(issuer_signature.value)
         ).decode('utf-8').rstrip('=')
 
         issuer_jwt = f"{issuer_header_b64}.{issuer_payload_b64}.{issuer_signature_b64}"
@@ -481,8 +482,9 @@ class UserAuthorizationSDJWT:
             algorithm=algorithm
         )
 
+        # Signature.value is base64-encoded, need to decode and re-encode as base64url
         kb_signature_b64 = base64.urlsafe_b64encode(
-            bytes.fromhex(kb_signature.signature)
+            base64.b64decode(kb_signature.value)
         ).decode('utf-8').rstrip('=')
 
         kb_jwt = f"{kb_header_b64}.{kb_payload_b64}.{kb_signature_b64}"
