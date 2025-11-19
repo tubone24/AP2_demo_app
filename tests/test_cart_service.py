@@ -41,13 +41,13 @@ class TestCreateCartMandate:
 
         mock_db_manager = AsyncMock()
         async def mock_get_session():
-        class MockContext:
-            async def __aenter__(self):
-                return mock_session
-            async def __aexit__(self, *args):
-                pass
-        return MockContext()
-    mock_db_manager.get_session = mock_get_session
+            class MockContext:
+                async def __aenter__(self):
+                    return mock_session
+                async def __aexit__(self, *args):
+                    pass
+            return MockContext()
+        mock_db_manager.get_session = mock_get_session
         mock_agent.db_manager = mock_db_manager
 
         # Mock ProductCRUD
@@ -95,13 +95,13 @@ class TestCreateCartMandate:
         mock_session = AsyncMock()
         mock_db_manager = AsyncMock()
         async def mock_get_session():
-        class MockContext:
-            async def __aenter__(self):
-                return mock_session
-            async def __aexit__(self, *args):
-                pass
-        return MockContext()
-    mock_db_manager.get_session = mock_get_session
+            class MockContext:
+                async def __aenter__(self):
+                    return mock_session
+                async def __aexit__(self, *args):
+                    pass
+            return MockContext()
+        mock_db_manager.get_session = mock_get_session
         mock_agent.db_manager = mock_db_manager
 
         # Mock ProductCRUD to return None
@@ -175,13 +175,13 @@ class TestCreateMultipleCartCandidates:
 
         mock_db_manager = AsyncMock()
         async def mock_get_session():
-        class MockContext:
-            async def __aenter__(self):
-                return mock_session
-            async def __aexit__(self, *args):
-                pass
-        return MockContext()
-    mock_db_manager.get_session = mock_get_session
+            class MockContext:
+                async def __aenter__(self):
+                    return mock_session
+                async def __aexit__(self, *args):
+                    pass
+            return MockContext()
+        mock_db_manager.get_session = mock_get_session
         mock_agent.db_manager = mock_db_manager
 
         with patch('services.merchant_agent.services.cart_service.ProductCRUD') as mock_crud:
@@ -214,13 +214,13 @@ class TestCreateMultipleCartCandidates:
         mock_session = AsyncMock()
         mock_db_manager = AsyncMock()
         async def mock_get_session():
-        class MockContext:
-            async def __aenter__(self):
-                return mock_session
-            async def __aexit__(self, *args):
-                pass
-        return MockContext()
-    mock_db_manager.get_session = mock_get_session
+            class MockContext:
+                async def __aenter__(self):
+                    return mock_session
+                async def __aexit__(self, *args):
+                    pass
+            return MockContext()
+        mock_db_manager.get_session = mock_get_session
         mock_agent.db_manager = mock_db_manager
 
         with patch('services.merchant_agent.services.cart_service.ProductCRUD') as mock_crud:
@@ -513,13 +513,13 @@ class TestCartCostCalculations:
 
         mock_db_manager = AsyncMock()
         async def mock_get_session():
-        class MockContext:
-            async def __aenter__(self):
-                return mock_session
-            async def __aexit__(self, *args):
-                pass
-        return MockContext()
-    mock_db_manager.get_session = mock_get_session
+            class MockContext:
+                async def __aenter__(self):
+                    return mock_session
+                async def __aexit__(self, *args):
+                    pass
+            return MockContext()
+        mock_db_manager.get_session = mock_get_session
         mock_agent.db_manager = mock_db_manager
 
         with patch('services.merchant_agent.services.cart_service.ProductCRUD') as mock_crud:
@@ -565,13 +565,13 @@ class TestCartCostCalculations:
 
         mock_db_manager = AsyncMock()
         async def mock_get_session():
-        class MockContext:
-            async def __aenter__(self):
-                return mock_session
-            async def __aexit__(self, *args):
-                pass
-        return MockContext()
-    mock_db_manager.get_session = mock_get_session
+            class MockContext:
+                async def __aenter__(self):
+                    return mock_session
+                async def __aexit__(self, *args):
+                    pass
+            return MockContext()
+        mock_db_manager.get_session = mock_get_session
         mock_agent.db_manager = mock_db_manager
 
         with patch('services.merchant_agent.services.cart_service.ProductCRUD') as mock_crud:

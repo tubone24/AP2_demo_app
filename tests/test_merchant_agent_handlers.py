@@ -508,13 +508,13 @@ class TestProductHandler:
 
         mock_db_manager = AsyncMock()
         async def mock_get_session():
-        class MockContext:
-            async def __aenter__(self):
-                return mock_session
-            async def __aexit__(self, *args):
-                pass
-        return MockContext()
-    mock_db_manager.get_session = mock_get_session
+            class MockContext:
+                async def __aenter__(self):
+                    return mock_session
+                async def __aexit__(self, *args):
+                    pass
+            return MockContext()
+        mock_db_manager.get_session = mock_get_session
         mock_agent.db_manager = mock_db_manager
 
         with patch('services.merchant_agent.handlers.product_handler.ProductCRUD') as mock_crud:
@@ -619,13 +619,13 @@ class TestProductHandler:
 
         mock_db_manager = AsyncMock()
         async def mock_get_session():
-        class MockContext:
-            async def __aenter__(self):
-                return mock_session
-            async def __aexit__(self, *args):
-                pass
-        return MockContext()
-    mock_db_manager.get_session = mock_get_session
+            class MockContext:
+                async def __aenter__(self):
+                    return mock_session
+                async def __aexit__(self, *args):
+                    pass
+            return MockContext()
+        mock_db_manager.get_session = mock_get_session
         mock_agent.db_manager = mock_db_manager
 
         with patch('services.merchant_agent.handlers.product_handler.ProductCRUD') as mock_crud:
