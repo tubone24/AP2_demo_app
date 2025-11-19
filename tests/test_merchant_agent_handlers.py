@@ -49,7 +49,8 @@ class TestCartHandler:
                 message_id="msg_001",
                 sender="did:ap2:agent:shopping_agent",
                 recipient="did:ap2:agent:merchant_agent",
-                timestamp=datetime.now(timezone.utc).isoformat()
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                nonce="test_nonce_001"
             ),
             dataPart=A2ADataPart(
                 type="ap2.requests.CartSelection",
@@ -81,7 +82,8 @@ class TestCartHandler:
                 message_id="msg_001",
                 sender="did:ap2:agent:shopping_agent",
                 recipient="did:ap2:agent:merchant_agent",
-                timestamp=datetime.now(timezone.utc).isoformat()
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                nonce="test_nonce_001"
             ),
             dataPart=A2ADataPart(
                 type="ap2.requests.CartSelection",
@@ -133,7 +135,8 @@ class TestCartHandler:
                 message_id="msg_001",
                 sender="did:ap2:agent:shopping_agent",
                 recipient="did:ap2:agent:merchant_agent",
-                timestamp=datetime.now(timezone.utc).isoformat()
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                nonce="test_nonce_001"
             ),
             dataPart=A2ADataPart(
                 type="ap2.requests.CartRequest",
@@ -185,7 +188,8 @@ class TestIntentHandler:
                 message_id="msg_001",
                 sender="did:ap2:agent:shopping_agent",
                 recipient="did:ap2:agent:merchant_agent",
-                timestamp=datetime.now(timezone.utc).isoformat()
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                nonce="test_nonce_001"
             ),
             dataPart=A2ADataPart(
                 type="ap2.mandates.IntentMandate",
@@ -221,7 +225,8 @@ class TestIntentHandler:
                 message_id="msg_001",
                 sender="did:ap2:agent:shopping_agent",
                 recipient="did:ap2:agent:merchant_agent",
-                timestamp=datetime.now(timezone.utc).isoformat()
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                nonce="test_nonce_001"
             ),
             dataPart=A2ADataPart(
                 type="ap2.mandates.IntentMandate",
@@ -247,7 +252,8 @@ class TestIntentHandler:
                 message_id="msg_001",
                 sender="did:ap2:agent:shopping_agent",
                 recipient="did:ap2:agent:merchant_agent",
-                timestamp=datetime.now(timezone.utc).isoformat()
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                nonce="test_nonce_001"
             ),
             dataPart=A2ADataPart(
                 type="ap2.mandates.IntentMandate",
@@ -294,7 +300,8 @@ class TestIntentHandler:
                 message_id="msg_001",
                 sender="did:ap2:agent:shopping_agent",
                 recipient="did:ap2:agent:merchant_agent",
-                timestamp=datetime.now(timezone.utc).isoformat()
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                nonce="test_nonce_001"
             ),
             dataPart=A2ADataPart(
                 type="ap2.mandates.IntentMandate",
@@ -366,7 +373,8 @@ class TestPaymentHandler:
                 message_id="msg_001",
                 sender="did:ap2:agent:shopping_agent",
                 recipient="did:ap2:agent:merchant_agent",
-                timestamp=datetime.now(timezone.utc).isoformat()
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                nonce="test_nonce_001"
             ),
             dataPart=A2ADataPart(
                 type="ap2.requests.PaymentRequest",
@@ -399,7 +407,8 @@ class TestPaymentHandler:
                 message_id="msg_001",
                 sender="did:ap2:agent:shopping_agent",
                 recipient="did:ap2:agent:merchant_agent",
-                timestamp=datetime.now(timezone.utc).isoformat()
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                nonce="test_nonce_001"
             ),
             dataPart=A2ADataPart(
                 type="ap2.requests.PaymentRequest",
@@ -451,7 +460,8 @@ class TestPaymentHandler:
                 message_id="msg_001",
                 sender="did:ap2:agent:shopping_agent",
                 recipient="did:ap2:agent:merchant_agent",
-                timestamp=datetime.now(timezone.utc).isoformat()
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                nonce="test_nonce_001"
             ),
             dataPart=A2ADataPart(
                 type="ap2.requests.PaymentRequest",
@@ -496,8 +506,10 @@ class TestProductHandler:
             "price": 1000
         }
 
-        mock_db_manager = Mock()
-        mock_db_manager.get_session.return_value.__aenter__.return_value = mock_session
+        mock_db_manager = AsyncMock()
+        mock_context = AsyncMock()
+        mock_context.__aenter__.return_value = mock_session
+        mock_db_manager.get_session.return_value = mock_context
         mock_agent.db_manager = mock_db_manager
 
         with patch('services.merchant_agent.handlers.product_handler.ProductCRUD') as mock_crud:
@@ -552,7 +564,8 @@ class TestProductHandler:
                 message_id="msg_001",
                 sender="did:ap2:agent:shopping_agent",
                 recipient="did:ap2:agent:merchant_agent",
-                timestamp=datetime.now(timezone.utc).isoformat()
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                nonce="test_nonce_001"
             ),
             dataPart=A2ADataPart(
                 type="ap2.requests.ProductSearch",
@@ -598,8 +611,10 @@ class TestProductHandler:
             "name": "Test Product"
         }
 
-        mock_db_manager = Mock()
-        mock_db_manager.get_session.return_value.__aenter__.return_value = mock_session
+        mock_db_manager = AsyncMock()
+        mock_context = AsyncMock()
+        mock_context.__aenter__.return_value = mock_session
+        mock_db_manager.get_session.return_value = mock_context
         mock_agent.db_manager = mock_db_manager
 
         with patch('services.merchant_agent.handlers.product_handler.ProductCRUD') as mock_crud:

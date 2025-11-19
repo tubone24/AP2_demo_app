@@ -39,8 +39,10 @@ class TestCreateCartMandate:
         mock_product.image_url = "https://example.com/image.jpg"
         mock_product.product_metadata = '{"category": "test", "brand": "TestBrand"}'
 
-        mock_db_manager = Mock()
-        mock_db_manager.get_session.return_value.__aenter__.return_value = mock_session
+        mock_db_manager = AsyncMock()
+        mock_context = AsyncMock()
+        mock_context.__aenter__.return_value = mock_session
+        mock_db_manager.get_session.return_value = mock_context
         mock_agent.db_manager = mock_db_manager
 
         # Mock ProductCRUD
@@ -86,8 +88,10 @@ class TestCreateCartMandate:
         # Mock agent
         mock_agent = Mock()
         mock_session = AsyncMock()
-        mock_db_manager = Mock()
-        mock_db_manager.get_session.return_value.__aenter__.return_value = mock_session
+        mock_db_manager = AsyncMock()
+        mock_context = AsyncMock()
+        mock_context.__aenter__.return_value = mock_session
+        mock_db_manager.get_session.return_value = mock_context
         mock_agent.db_manager = mock_db_manager
 
         # Mock ProductCRUD to return None
@@ -159,8 +163,10 @@ class TestCreateMultipleCartCandidates:
         mock_product.name = "Test Product"
         mock_product.price = 5000
 
-        mock_db_manager = Mock()
-        mock_db_manager.get_session.return_value.__aenter__.return_value = mock_session
+        mock_db_manager = AsyncMock()
+        mock_context = AsyncMock()
+        mock_context.__aenter__.return_value = mock_session
+        mock_db_manager.get_session.return_value = mock_context
         mock_agent.db_manager = mock_db_manager
 
         with patch('services.merchant_agent.services.cart_service.ProductCRUD') as mock_crud:
@@ -191,8 +197,10 @@ class TestCreateMultipleCartCandidates:
         # Mock agent
         mock_agent = Mock()
         mock_session = AsyncMock()
-        mock_db_manager = Mock()
-        mock_db_manager.get_session.return_value.__aenter__.return_value = mock_session
+        mock_db_manager = AsyncMock()
+        mock_context = AsyncMock()
+        mock_context.__aenter__.return_value = mock_session
+        mock_db_manager.get_session.return_value = mock_context
         mock_agent.db_manager = mock_db_manager
 
         with patch('services.merchant_agent.services.cart_service.ProductCRUD') as mock_crud:
@@ -484,8 +492,10 @@ class TestCartCostCalculations:
         mock_product.image_url = ""
         mock_product.product_metadata = '{}'
 
-        mock_db_manager = Mock()
-        mock_db_manager.get_session.return_value.__aenter__.return_value = mock_session
+        mock_db_manager = AsyncMock()
+        mock_context = AsyncMock()
+        mock_context.__aenter__.return_value = mock_session
+        mock_db_manager.get_session.return_value = mock_context
         mock_agent.db_manager = mock_db_manager
 
         with patch('services.merchant_agent.services.cart_service.ProductCRUD') as mock_crud:
@@ -529,8 +539,10 @@ class TestCartCostCalculations:
         mock_product.image_url = ""
         mock_product.product_metadata = '{}'
 
-        mock_db_manager = Mock()
-        mock_db_manager.get_session.return_value.__aenter__.return_value = mock_session
+        mock_db_manager = AsyncMock()
+        mock_context = AsyncMock()
+        mock_context.__aenter__.return_value = mock_session
+        mock_db_manager.get_session.return_value = mock_context
         mock_agent.db_manager = mock_db_manager
 
         with patch('services.merchant_agent.services.cart_service.ProductCRUD') as mock_crud:

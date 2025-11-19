@@ -129,9 +129,11 @@ class TestPaymentProcessorConfiguration:
 
         assert db_url == test_db_url
 
-    def test_default_database_url(self):
+    def test_default_database_url(self, monkeypatch):
         """Test default database URL"""
         import os
+        # Remove DATABASE_URL to test default
+        monkeypatch.delenv("DATABASE_URL", raising=False)
         db_url = os.getenv("DATABASE_URL", "sqlite+aiosqlite:////app/v2/data/payment_processor.db")
 
         assert "payment_processor.db" in db_url

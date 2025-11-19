@@ -28,6 +28,7 @@ class TestPaymentProcessorServiceInit:
     @patch('services.payment_processor.processor.LoggingAsyncClient')
     @patch('services.payment_processor.processor.JWTHelpers')
     @patch('services.payment_processor.processor.MandateHelpers')
+    @patch('common.base_agent.KeyManager')
     def test_service_initialization(self, mock_mandate_helpers, mock_jwt_helpers,
                                     mock_http_client, mock_db_manager):
         """Test service initializes with correct configuration"""
@@ -50,7 +51,8 @@ class TestPaymentProcessorServiceInit:
         from services.payment_processor.processor import PaymentProcessorService
 
         with patch('services.payment_processor.processor.DatabaseManager'), \
-             patch('services.payment_processor.processor.LoggingAsyncClient'):
+             patch('services.payment_processor.processor.LoggingAsyncClient'), \
+             patch('common.base_agent.KeyManager'):
             service = PaymentProcessorService()
             roles = service.get_ap2_roles()
 
@@ -62,7 +64,8 @@ class TestPaymentProcessorServiceInit:
         from services.payment_processor.processor import PaymentProcessorService
 
         with patch('services.payment_processor.processor.DatabaseManager'), \
-             patch('services.payment_processor.processor.LoggingAsyncClient'):
+             patch('services.payment_processor.processor.LoggingAsyncClient'), \
+             patch('common.base_agent.KeyManager'):
             service = PaymentProcessorService()
             description = service.get_agent_description()
 
@@ -79,7 +82,8 @@ class TestPaymentMandateValidation:
         from services.payment_processor.processor import PaymentProcessorService
 
         with patch('services.payment_processor.processor.DatabaseManager'), \
-             patch('services.payment_processor.processor.LoggingAsyncClient'):
+             patch('services.payment_processor.processor.LoggingAsyncClient'), \
+             patch('common.base_agent.KeyManager'):
             service = PaymentProcessorService()
 
             payment_mandate = {
@@ -105,7 +109,8 @@ class TestPaymentMandateValidation:
         from services.payment_processor.processor import PaymentProcessorService
 
         with patch('services.payment_processor.processor.DatabaseManager'), \
-             patch('services.payment_processor.processor.LoggingAsyncClient'):
+             patch('services.payment_processor.processor.LoggingAsyncClient'), \
+             patch('common.base_agent.KeyManager'):
             service = PaymentProcessorService()
 
             # Missing amount
@@ -127,7 +132,8 @@ class TestMandateChainValidation:
         from services.payment_processor.processor import PaymentProcessorService
 
         with patch('services.payment_processor.processor.DatabaseManager'), \
-             patch('services.payment_processor.processor.LoggingAsyncClient'):
+             patch('services.payment_processor.processor.LoggingAsyncClient'), \
+             patch('common.base_agent.KeyManager'):
             service = PaymentProcessorService()
 
             cart_mandate = {
@@ -153,7 +159,8 @@ class TestMandateChainValidation:
         from services.payment_processor.processor import PaymentProcessorService
 
         with patch('services.payment_processor.processor.DatabaseManager'), \
-             patch('services.payment_processor.processor.LoggingAsyncClient'):
+             patch('services.payment_processor.processor.LoggingAsyncClient'), \
+             patch('common.base_agent.KeyManager'):
             service = PaymentProcessorService()
 
             payment_mandate = {
@@ -170,7 +177,8 @@ class TestMandateChainValidation:
         from services.payment_processor.processor import PaymentProcessorService
 
         with patch('services.payment_processor.processor.DatabaseManager'), \
-             patch('services.payment_processor.processor.LoggingAsyncClient'):
+             patch('services.payment_processor.processor.LoggingAsyncClient'), \
+             patch('common.base_agent.KeyManager'):
             service = PaymentProcessorService()
 
             cart_mandate = {
@@ -257,7 +265,8 @@ class TestPaymentProcessing:
         from services.payment_processor.processor import PaymentProcessorService
 
         with patch('services.payment_processor.processor.DatabaseManager'), \
-             patch('services.payment_processor.processor.LoggingAsyncClient'):
+             patch('services.payment_processor.processor.LoggingAsyncClient'), \
+             patch('common.base_agent.KeyManager'):
             service = PaymentProcessorService()
 
             payment_mandate = {
@@ -288,7 +297,8 @@ class TestPaymentProcessing:
         from services.payment_processor.processor import PaymentProcessorService
 
         with patch('services.payment_processor.processor.DatabaseManager'), \
-             patch('services.payment_processor.processor.LoggingAsyncClient'):
+             patch('services.payment_processor.processor.LoggingAsyncClient'), \
+             patch('common.base_agent.KeyManager'):
             service = PaymentProcessorService()
 
             payment_mandate = {
@@ -319,7 +329,8 @@ class TestCredentialVerification:
         from services.payment_processor.processor import PaymentProcessorService
 
         with patch('services.payment_processor.processor.DatabaseManager'), \
-             patch('services.payment_processor.processor.LoggingAsyncClient'):
+             patch('services.payment_processor.processor.LoggingAsyncClient'), \
+             patch('common.base_agent.KeyManager'):
             service = PaymentProcessorService()
 
             # Mock HTTP client
@@ -351,7 +362,8 @@ class TestCredentialVerification:
         from services.payment_processor.processor import PaymentProcessorService
 
         with patch('services.payment_processor.processor.DatabaseManager'), \
-             patch('services.payment_processor.processor.LoggingAsyncClient'):
+             patch('services.payment_processor.processor.LoggingAsyncClient'), \
+             patch('common.base_agent.KeyManager'):
             service = PaymentProcessorService()
 
             # Mock HTTP client
@@ -403,7 +415,7 @@ class TestTransactionManagement:
                 "transaction_id": "txn_001"
             }
 
-            with patch('services.payment_processor.processor.TransactionCRUD.create') as mock_create:
+            with patch('common.database.TransactionCRUD.create') as mock_create:
                 await service._save_transaction(
                     transaction_id="txn_001",
                     payment_mandate=payment_mandate,
@@ -427,7 +439,7 @@ class TestReceiptGeneration:
 
         with patch('services.payment_processor.processor.DatabaseManager') as mock_db, \
              patch('services.payment_processor.processor.LoggingAsyncClient'), \
-             patch('services.payment_processor.processor.generate_receipt_pdf') as mock_gen_pdf, \
+             patch('common.receipt_generator.generate_receipt_pdf') as mock_gen_pdf, \
              patch('builtins.open', create=True) as mock_open:
 
             # Mock database
@@ -456,9 +468,9 @@ class TestReceiptGeneration:
             mock_pdf_buffer.getvalue.return_value = b"PDF content"
             mock_gen_pdf.return_value = mock_pdf_buffer
 
-            with patch('services.payment_processor.processor.TransactionCRUD.get_by_id',
+            with patch('common.database.TransactionCRUD.get_by_id',
                       return_value=mock_transaction), \
-                 patch('services.payment_processor.processor.ReceiptCRUD.create'):
+                 patch('common.database.ReceiptCRUD.create'):
 
                 service = PaymentProcessorService()
 
@@ -513,7 +525,7 @@ class TestReceiptGeneration:
                 }]
             }
 
-            with patch('services.payment_processor.processor.TransactionCRUD.get_by_id',
+            with patch('common.database.TransactionCRUD.get_by_id',
                       return_value=mock_transaction):
 
                 service = PaymentProcessorService()
@@ -594,7 +606,8 @@ class TestHTTPEndpoints:
         from services.payment_processor.processor import PaymentProcessorService
 
         with patch('services.payment_processor.processor.DatabaseManager'), \
-             patch('services.payment_processor.processor.LoggingAsyncClient'):
+             patch('services.payment_processor.processor.LoggingAsyncClient'), \
+             patch('common.base_agent.KeyManager'):
             service = PaymentProcessorService()
 
             # Check app has routes
@@ -611,7 +624,8 @@ class TestHTTPEndpoints:
         from services.payment_processor.processor import PaymentProcessorService
 
         with patch('services.payment_processor.processor.DatabaseManager'), \
-             patch('services.payment_processor.processor.LoggingAsyncClient'):
+             patch('services.payment_processor.processor.LoggingAsyncClient'), \
+             patch('common.base_agent.KeyManager'):
             service = PaymentProcessorService()
 
             routes = [route.path for route in service.app.routes]
@@ -626,7 +640,8 @@ class TestJWTHelpers:
         from services.payment_processor.processor import PaymentProcessorService
 
         with patch('services.payment_processor.processor.DatabaseManager'), \
-             patch('services.payment_processor.processor.LoggingAsyncClient'):
+             patch('services.payment_processor.processor.LoggingAsyncClient'), \
+             patch('common.base_agent.KeyManager'):
             service = PaymentProcessorService()
 
             assert service.jwt_helpers is not None
