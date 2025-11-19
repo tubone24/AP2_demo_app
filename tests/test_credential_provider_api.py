@@ -586,11 +586,10 @@ class TestCredentialProviderEndpointImplementation:
         async with db_manager.get_session() as session:
             await ReceiptCRUD.create(session, {
                 "transaction_id": "txn_get_test_001",
-                "payer_id": "user_test_007",
+                "user_id": "user_test_007",  # Fixed: use user_id instead of payer_id
                 "receipt_url": "http://example.com/receipt/get001",
-                "amount": 50000,
-                "currency": "JPY",
-                "timestamp": datetime.now(timezone.utc).isoformat()
+                "amount": {"value": "50000", "currency": "JPY"},  # Fixed: use dict format
+                "payment_timestamp": datetime.now(timezone.utc).isoformat()  # Fixed: use payment_timestamp
             })
 
         response = credential_provider_client.get("/receipts/user_test_007")

@@ -324,14 +324,15 @@ def credential_provider_client(db_manager):
                 raise HTTPException(status_code=400, detail="Missing required fields")
 
             async with db_manager.get_session() as session:
-                await ReceiptCRUD.create(session, {
+                # Map fields to what ReceiptCRUD.create expects
+                create_data = {
+                    "user_id": receipt_data["payer_id"],  # Map payer_id to user_id
                     "transaction_id": receipt_data["transaction_id"],
-                    "payer_id": receipt_data["payer_id"],
                     "receipt_url": receipt_data["receipt_url"],
-                    "amount": int(receipt_data.get("amount", {}).get("value", 0)),
-                    "currency": receipt_data.get("amount", {}).get("currency", "JPY"),
-                    "timestamp": receipt_data.get("timestamp")
-                })
+                    "amount": receipt_data.get("amount", {}),
+                    "payment_timestamp": receipt_data.get("timestamp")  # Map timestamp to payment_timestamp
+                }
+                await ReceiptCRUD.create(session, create_data)
 
             return {
                 "status": "received",
@@ -350,7 +351,7 @@ def credential_provider_client(db_manager):
                         {
                             "transaction_id": r.transaction_id,
                             "receipt_url": r.receipt_url,
-                            "amount": r.amount,
+                            "amount": r.amount_value,  # Fixed: use amount_value
                             "currency": r.currency
                         } for r in receipts
                     ],
