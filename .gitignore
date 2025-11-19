@@ -88,3 +88,4 @@ frontend/coverage/
 
 # Coverage
 coverage.json
+coverage_report.txt

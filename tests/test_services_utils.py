@@ -811,6 +811,96 @@ class TestCartHelpers:
         with pytest.raises(ValueError, match="does not contain contents"):
             helpers.verify_merchant_cart_signature(signed_cart_mandate)
 
+    @pytest.mark.asyncio
+    async def test_extract_cart_mandate_pending_response(self):
+        """Test extracting CartMandate from pending response"""
+        from services.shopping_agent.utils.cart_helpers import CartHelpers
+
+        result = {
+            "dataPart": {
+                "type": "ap2.responses.CartMandatePending",
+                "payload": {
+                    "cart_mandate_id": "cart_pending_123",
+                    "status": "pending_approval"
+                }
+            }
+        }
+
+        cart_mandate = await CartHelpers.extract_cart_mandate_from_a2a_response(result)
+
+        # Pending response should return None
+        assert cart_mandate is None
+
+    @pytest.mark.asyncio
+    async def test_extract_cart_mandate_unexpected_response_type(self):
+        """Test error handling for unexpected response type"""
+        from services.shopping_agent.utils.cart_helpers import CartHelpers
+
+        result = {
+            "dataPart": {
+                "type": "ap2.unknown.UnknownType",
+                "payload": {}
+            }
+        }
+
+        with pytest.raises(ValueError, match="Unexpected response type"):
+            await CartHelpers.extract_cart_mandate_from_a2a_response(result)
+
+    def test_verify_merchant_cart_signature_success(self):
+        """Test successful merchant cart signature verification"""
+        from services.shopping_agent.utils.cart_helpers import CartHelpers
+
+        # Mock signature manager and key manager
+        mock_signature_manager = MagicMock()
+        mock_key_manager = MagicMock()
+
+        helpers = CartHelpers(mock_signature_manager)
+        helpers.key_manager = mock_key_manager  # Add key_manager attribute
+
+        signed_cart_mandate = {
+            "merchant_authorization": "valid_jwt_token",
+            "contents": {
+                "id": "cart_123",
+                "items": []
+            }
+        }
+
+        # Mock JWT verifier
+        mock_jwt_verifier = MagicMock()
+        mock_jwt_verifier.verify.return_value = {
+            "iss": "did:ap2:merchant:test",
+            "cart_hash": "a" * 64
+        }
+
+        with patch('common.jwt_utils.MerchantAuthorizationJWT', return_value=mock_jwt_verifier):
+            # Should not raise
+            helpers.verify_merchant_cart_signature(signed_cart_mandate)
+
+    def test_verify_merchant_cart_signature_verification_failure(self):
+        """Test merchant cart signature verification failure"""
+        from services.shopping_agent.utils.cart_helpers import CartHelpers
+
+        mock_signature_manager = MagicMock()
+        mock_key_manager = MagicMock()
+
+        helpers = CartHelpers(mock_signature_manager)
+        helpers.key_manager = mock_key_manager
+
+        signed_cart_mandate = {
+            "merchant_authorization": "invalid_jwt_token",
+            "contents": {
+                "id": "cart_123"
+            }
+        }
+
+        # Mock JWT verifier to raise exception
+        mock_jwt_verifier = MagicMock()
+        mock_jwt_verifier.verify.side_effect = Exception("Invalid signature")
+
+        with patch('common.jwt_utils.MerchantAuthorizationJWT', return_value=mock_jwt_verifier):
+            with pytest.raises(ValueError, match="JWT verification failed"):
+                helpers.verify_merchant_cart_signature(signed_cart_mandate)
+
 
 class TestPaymentHelpers:
     """Test shopping agent payment helpers"""
@@ -1010,6 +1100,69 @@ class TestPaymentHelpers:
         # Should return default medium risk
         assert risk_score == 50
         assert "risk_assessment_failed" in fraud_indicators
+
+    def test_generate_user_authorization_for_payment_success(self):
+        """Test successful user authorization generation"""
+        from services.shopping_agent.utils.payment_helpers import PaymentHelpers
+
+        session = {
+            "cart_webauthn_assertion": {
+                "id": "assertion_123",
+                "response": {"clientDataJSON": "test"}
+            },
+            "user_id": "user_001"
+        }
+
+        cart_mandate = {"id": "cart_123"}
+        payment_mandate_contents = {"payment_mandate_id": "pm_123"}
+        public_key_cose = "cose_key_data"
+
+        with patch('services.shopping_agent.utils.payment_helpers.create_user_authorization_vp') as mock_create_vp:
+            mock_create_vp.return_value = "user_authorization_vp_token"
+
+            result = PaymentHelpers.generate_user_authorization_for_payment(
+                session, cart_mandate, payment_mandate_contents, public_key_cose
+            )
+
+            assert result == "user_authorization_vp_token"
+            mock_create_vp.assert_called_once()
+
+    def test_generate_user_authorization_for_payment_exception(self):
+        """Test user authorization generation handles exceptions"""
+        from services.shopping_agent.utils.payment_helpers import PaymentHelpers
+
+        session = {
+            "cart_webauthn_assertion": {
+                "id": "assertion_123"
+            },
+            "user_id": "user_001"
+        }
+
+        cart_mandate = {"id": "cart_123"}
+        payment_mandate_contents = {"payment_mandate_id": "pm_123"}
+        public_key_cose = "cose_key_data"
+
+        with patch('services.shopping_agent.utils.payment_helpers.create_user_authorization_vp') as mock_create_vp:
+            mock_create_vp.side_effect = Exception("VP generation failed")
+
+            result = PaymentHelpers.generate_user_authorization_for_payment(
+                session, cart_mandate, payment_mandate_contents, public_key_cose
+            )
+
+            # Should return None on exception
+            assert result is None
+
+    def test_validate_cart_and_payment_method_empty_token(self):
+        """Test validation fails when token is empty"""
+        from services.shopping_agent.utils.payment_helpers import PaymentHelpers
+
+        session = {
+            "cart_mandate": {"id": "cart_123"},
+            "tokenized_payment_method": {}  # No token
+        }
+
+        with pytest.raises(ValueError, match="No tokenized payment method available"):
+            PaymentHelpers.validate_cart_and_payment_method(session)
 
 
 # ============================================================================
