@@ -224,6 +224,7 @@ class TestPaymentProcessing:
                     "agent_token": "agent_tok_test_123"
                 }
             })
+            credential_response.raise_for_status = Mock()
 
             # Mock payment network charge response
             charge_response = Mock()
@@ -233,6 +234,7 @@ class TestPaymentProcessing:
                 "network_transaction_id": "net_txn_123",
                 "authorization_code": "AUTH123"
             })
+            charge_response.raise_for_status = Mock()
 
             mock_http_client.post.side_effect = [
                 credential_response,
@@ -473,7 +475,8 @@ class TestReceiptGeneration:
              patch('services.payment_processor.processor.LoggingAsyncClient'), \
              patch('common.base_agent.KeyManager'), \
              patch('common.receipt_generator.generate_receipt_pdf') as mock_gen_pdf, \
-             patch('builtins.open', create=True) as mock_open:
+             patch('builtins.open', create=True) as mock_open, \
+             patch('services.payment_processor.processor.Path') as mock_path:
 
             # Mock database
             mock_session = AsyncMock()
@@ -509,6 +512,12 @@ class TestReceiptGeneration:
             mock_pdf_buffer = Mock()
             mock_pdf_buffer.getvalue.return_value = b"PDF content"
             mock_gen_pdf.return_value = mock_pdf_buffer
+
+            # Mock Path to avoid filesystem operations
+            mock_receipts_dir = Mock()
+            mock_receipts_dir.mkdir = Mock()
+            mock_receipts_dir.__truediv__ = Mock(return_value=Mock())  # For / operator
+            mock_path.return_value = mock_receipts_dir
 
             with patch('common.database.TransactionCRUD.get_by_id',
                       return_value=mock_transaction), \
@@ -646,7 +655,8 @@ class TestA2AMessageHandlers:
                                 "id": "pm_001",
                                 "payer_id": "user_001",
                                 "amount": {"value": "1000.00", "currency": "JPY"},
-                                "payment_method": {"token": "tok_123"}
+                                "payment_method": {"token": "tok_123"},
+                                "user_authorization": "mock_jwt_token"
                             },
                             "cart_mandate": {
                                 "contents": {"id": "cart_001"}
