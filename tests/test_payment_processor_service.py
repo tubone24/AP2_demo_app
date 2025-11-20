@@ -215,24 +215,24 @@ class TestPaymentProcessing:
             service.http_client = mock_http_client
 
             # Mock credential verification response
-            credential_response = AsyncMock()
+            credential_response = Mock()
             credential_response.status_code = 200
-            credential_response.json.return_value = {
+            credential_response.json = Mock(return_value={
                 "verified": True,
                 "credential_info": {
                     "payment_method_id": "pm_123",
                     "agent_token": "agent_tok_test_123"
                 }
-            }
+            })
 
             # Mock payment network charge response
-            charge_response = AsyncMock()
+            charge_response = Mock()
             charge_response.status_code = 200
-            charge_response.json.return_value = {
+            charge_response.json = Mock(return_value={
                 "status": "captured",
                 "network_transaction_id": "net_txn_123",
                 "authorization_code": "AUTH123"
-            }
+            })
 
             mock_http_client.post.side_effect = [
                 credential_response,
@@ -422,7 +422,16 @@ class TestTransactionManagement:
             # Mock database session
             mock_session = AsyncMock()
             mock_db_instance = AsyncMock()
-            mock_db_instance.get_session.return_value.__aenter__.return_value = mock_session
+
+            def mock_get_session():
+                class MockContext:
+                    async def __aenter__(self):
+                        return mock_session
+                    async def __aexit__(self, *args):
+                        pass
+                return MockContext()
+
+            mock_db_instance.get_session = mock_get_session
             mock_db.return_value = mock_db_instance
 
             service = PaymentProcessorService()
@@ -469,7 +478,16 @@ class TestReceiptGeneration:
             # Mock database
             mock_session = AsyncMock()
             mock_db_instance = AsyncMock()
-            mock_db_instance.get_session.return_value.__aenter__.return_value = mock_session
+
+            def mock_get_session():
+                class MockContext:
+                    async def __aenter__(self):
+                        return mock_session
+                    async def __aexit__(self, *args):
+                        pass
+                return MockContext()
+
+            mock_db_instance.get_session = mock_get_session
             mock_db.return_value = mock_db_instance
 
             # Mock transaction
@@ -537,7 +555,16 @@ class TestReceiptGeneration:
             # Mock database
             mock_session = AsyncMock()
             mock_db_instance = AsyncMock()
-            mock_db_instance.get_session.return_value.__aenter__.return_value = mock_session
+
+            def mock_get_session():
+                class MockContext:
+                    async def __aenter__(self):
+                        return mock_session
+                    async def __aexit__(self, *args):
+                        pass
+                return MockContext()
+
+            mock_db_instance.get_session = mock_get_session
             mock_db.return_value = mock_db_instance
 
             # Mock transaction
@@ -581,7 +608,16 @@ class TestA2AMessageHandlers:
             # Mock database
             mock_session = AsyncMock()
             mock_db_instance = AsyncMock()
-            mock_db_instance.get_session.return_value.__aenter__.return_value = mock_session
+
+            def mock_get_session():
+                class MockContext:
+                    async def __aenter__(self):
+                        return mock_session
+                    async def __aexit__(self, *args):
+                        pass
+                return MockContext()
+
+            mock_db_instance.get_session = mock_get_session
             mock_db.return_value = mock_db_instance
 
             service = PaymentProcessorService()
@@ -599,7 +635,8 @@ class TestA2AMessageHandlers:
                         message_id="msg_001",
                         sender="did:ap2:agent:shopping_agent",
                         recipient="did:ap2:agent:payment_processor",
-                        timestamp=datetime.now(timezone.utc).isoformat()
+                        timestamp=datetime.now(timezone.utc).isoformat(),
+                        nonce="test_nonce_001"
                     ),
                     dataPart=A2ADataPart(
                         type="ap2.mandates.PaymentMandate",

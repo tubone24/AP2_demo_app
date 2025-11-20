@@ -350,13 +350,13 @@ class TestCreateCartFromProducts:
         mock_http_client = AsyncMock()
 
         # First call returns pending
-        pending_response = AsyncMock()
+        pending_response = Mock()
         pending_response.status_code = 200
-        pending_response.json = AsyncMock(return_value={
+        pending_response.json = Mock(return_value={
             "status": "pending_merchant_signature",
             "cart_mandate_id": "cart_pending_001"
         })
-        pending_response.raise_for_status = AsyncMock()
+        pending_response.raise_for_status = Mock()
 
         mock_http_client.post = AsyncMock(return_value=pending_response)
         mock_agent.http_client = mock_http_client
@@ -401,14 +401,14 @@ class TestWaitForMerchantSignature:
         mock_http_client = AsyncMock()
         mock_response = Mock()
         mock_response.status_code = 200
-        mock_response.json = AsyncMock(return_value={
+        mock_response.json = Mock(return_value={
             "status": "signed",
             "payload": {
                 "contents": {"id": "cart_001"},
                 "merchant_authorization": "jwt_signature"
             }
         })
-        mock_response.raise_for_status = AsyncMock()
+        mock_response.raise_for_status = Mock()
 
         mock_http_client.get = AsyncMock(return_value=mock_response)
         mock_agent.http_client = mock_http_client

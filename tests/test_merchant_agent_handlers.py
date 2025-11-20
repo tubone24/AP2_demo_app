@@ -476,7 +476,7 @@ class TestPaymentHandler:
         result = await payment_handler.handle_payment_request(mock_agent, message)
 
         assert result["type"] == "ap2.errors.Error"
-        assert result["payload"]["error_code"] == "payment_request_failed"
+        assert result["payload"]["error_code"] == "payment_failed"
 
 
 # ============================================
