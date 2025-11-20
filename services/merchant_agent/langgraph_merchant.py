@@ -186,6 +186,7 @@ class MerchantLangGraphAgent:
             http_client=http_client
         )
         self.mcp_initialized = False
+        self.mcp_tools = []  # LangChain Tools（Langfuse observation type用）
 
         # グラフ構築
         self.graph = self._build_graph()
@@ -243,6 +244,52 @@ class MerchantLangGraphAgent:
         """ランキングノード"""
         return await rank_and_select(state)
 
+    async def _ensure_mcp_initialized(self):
+        """MCPクライアントを初期化し、LangChain Toolsを作成
+
+        Langfuse CallbackHandlerが自動的にMCPツール呼び出しを「tool」observation typeとして記録できるようにする。
+        """
+        if not self.mcp_initialized:
+            # MCP初期化
+            await self.mcp_client.initialize()
+
+            # LangChain Toolsを作成（Langfuse observation type用）
+            self.mcp_tools = self.mcp_client.create_langchain_tools()
+            logger.info(f"[MerchantLangGraphAgent] Created {len(self.mcp_tools)} LangChain tools from MCP")
+
+            self.mcp_initialized = True
+
+    async def call_mcp_tool_as_langchain(self, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """MCPツールをLangChain Tool経由で呼び出し
+
+        Langfuse CallbackHandlerが「tool」observation typeとして記録するために、
+        LangChain Toolインターフェースを使用する。
+
+        Args:
+            tool_name: ツール名
+            arguments: ツール引数
+
+        Returns:
+            ツール実行結果
+        """
+        await self._ensure_mcp_initialized()
+
+        # 対応するLangChain Toolを検索
+        tool = next((t for t in self.mcp_tools if t.name == tool_name), None)
+
+        if not tool:
+            # ツールが見つからない場合は従来のcall_toolを使用
+            logger.warning(f"[MerchantLangGraphAgent] LangChain tool not found: {tool_name}, using direct MCP call")
+            return await self.mcp_client.call_tool(tool_name, arguments)
+
+        # LangChain Tool経由で呼び出し（Langfuse CallbackHandlerが自動的に記録）
+        try:
+            # StructuredToolの場合、ainvoke()を使用して引数を渡す
+            result = await tool.ainvoke(arguments)
+            return result
+        except Exception as e:
+            logger.error(f"[MerchantLangGraphAgent] Error calling LangChain tool {tool_name}: {e}", exc_info=True)
+            raise
 
     async def create_cart_candidates(
         self,
@@ -281,32 +328,38 @@ class MerchantLangGraphAgent:
 
         # グラフ実行（未署名のCartMandate候補を生成）
         # Langfuseトレースをセッションごとに統合（shopping_agentと同じトレースに含まれる）
-        config = {}
-        if LANGFUSE_ENABLED and CallbackHandler:
-            # セッションごとにCallbackHandlerインスタンスを取得または作成
-            # shopping_agentと同じsession_idを使用することで、同じトレースグループに統合される
-            if session_id not in self._langfuse_handlers:
-                # 新しいハンドラーを作成（AP2完全準拠: オブザーバビリティ）
-                langfuse_handler = CallbackHandler()
-                self._langfuse_handlers[session_id] = langfuse_handler
-                logger.info(f"[Langfuse] Created new handler for session: {session_id}")
-            else:
-                langfuse_handler = self._langfuse_handlers[session_id]
-                logger.debug(f"[Langfuse] Reusing existing handler for session: {session_id}")
+        # Langfuseトレーシング: v3ではCallbackHandlerが自動的にトレースを作成
 
-            # Langfuseハンドラーを設定
-            config["callbacks"] = [langfuse_handler]
-            # session_idをrun_idとして設定（重要：これにより同じトレースIDになる）
-            config["run_id"] = session_id
-            # metadataでsession_idとuser_idを指定
-            config["metadata"] = {
-                "langfuse_session_id": session_id,
-                "langfuse_user_id": user_id,
-                "agent_type": "merchant_agent"
-            }
-            config["tags"] = ["merchant_agent", "ap2_protocol"]
+        try:
+            config = {}
+            if LANGFUSE_ENABLED and CallbackHandler:
+                # セッションごとにCallbackHandlerインスタンスを取得または作成
+                # shopping_agentと同じsession_idを使用することで、同じトレースグループに統合される
+                if session_id not in self._langfuse_handlers:
+                    # 新しいハンドラーを作成（AP2完全準拠: オブザーバビリティ）
+                    langfuse_handler = CallbackHandler()
+                    self._langfuse_handlers[session_id] = langfuse_handler
+                    logger.info(f"[Langfuse] Created new handler for session: {session_id}")
+                else:
+                    langfuse_handler = self._langfuse_handlers[session_id]
+                    logger.debug(f"[Langfuse] Reusing existing handler for session: {session_id}")
 
-        result = await self.graph.ainvoke(initial_state, config=config)
+                # Langfuseハンドラーを設定
+                config["callbacks"] = [langfuse_handler]
+                # session_idをrun_idとして設定（重要：これにより同じトレースIDになる）
+                config["run_id"] = session_id
+                # metadataでsession_idとuser_idを指定
+                config["metadata"] = {
+                    "langfuse_session_id": session_id,
+                    "langfuse_user_id": user_id,
+                    "agent_type": "merchant_agent"
+                }
+                config["tags"] = ["merchant_agent", "ap2_protocol"]
+
+            result = await self.graph.ainvoke(initial_state, config=config)
+        except Exception as e:
+            raise
+
         cart_candidates = result["cart_candidates"]
 
         # MCP統合後：_build_cart_mandatesで既にArtifact形式にラップ済み、Merchant署名済み

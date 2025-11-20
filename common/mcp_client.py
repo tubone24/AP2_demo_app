@@ -144,6 +144,102 @@ class MCPClient:
 
         return response
 
+    def create_langchain_tools(self, tool_configs: Optional[Dict[str, Dict[str, Any]]] = None):
+        """MCPツールをLangChain Toolとしてラップ
+
+        Langfuse CallbackHandlerが自動的に「tool」observation typeとして記録できるようにする。
+
+        Args:
+            tool_configs: ツール設定の辞書 {tool_name: {"description": "...", "input_schema": {...}}}
+                         Noneの場合、server_infoから自動的に取得
+
+        Returns:
+            LangChain Toolのリスト
+
+        Example:
+            tools = mcp_client.create_langchain_tools()
+            llm_with_tools = llm.bind_tools(tools)
+        """
+        from langchain_core.tools import StructuredTool
+        from pydantic import BaseModel, create_model
+
+        # ツール設定を取得
+        if tool_configs is None:
+            # server_infoから自動取得
+            if not self.server_info:
+                raise ValueError("MCPClient not initialized. Call initialize() first.")
+
+            capabilities = self.server_info.get("capabilities", {})
+            tool_configs = capabilities.get("tools", {})
+
+        tools = []
+
+        for tool_name, config in tool_configs.items():
+            # ツールの説明
+            description = config.get("description", f"MCP tool: {tool_name}")
+
+            # 入力スキーマからPydantic Modelを作成
+            input_schema = config.get("inputSchema", {})
+            properties = input_schema.get("properties", {})
+            required = input_schema.get("required", [])
+
+            # Pydantic Modelのフィールドを動的に作成
+            fields = {}
+            for prop_name, prop_info in properties.items():
+                prop_type = self._json_schema_type_to_python(prop_info.get("type", "string"))
+                prop_description = prop_info.get("description", "")
+
+                # requiredフィールドか確認
+                if prop_name in required:
+                    fields[prop_name] = (prop_type, ...)  # ... は必須フィールド
+                else:
+                    fields[prop_name] = (Optional[prop_type], None)
+
+            # 動的にPydantic Modelを作成
+            InputModel = create_model(
+                f"{tool_name.title().replace('_', '')}Input",
+                **fields
+            )
+
+            # 非同期ツール関数（MCPクライアントのcall_toolを呼び出し）
+            # クロージャーの問題を避けるため、デフォルト引数でtool_nameをキャプチャ
+            async def tool_func(_tool_name=tool_name, **kwargs):
+                """MCP tool wrapper function"""
+                return await self.call_tool(_tool_name, kwargs)
+
+            # StructuredToolとして作成
+            # coroutineをサポートするためにcoroutineを指定
+            tool = StructuredTool(
+                name=tool_name,
+                description=description,
+                args_schema=InputModel,
+                coroutine=tool_func  # 非同期関数を指定
+            )
+
+            tools.append(tool)
+            logger.info(f"[MCPClient] Created LangChain tool: {tool_name}")
+
+        return tools
+
+    def _json_schema_type_to_python(self, json_type: str):
+        """JSON Schema型をPython型に変換
+
+        Args:
+            json_type: JSON Schema型（string, integer, array, object等）
+
+        Returns:
+            対応するPython型
+        """
+        type_mapping = {
+            "string": str,
+            "integer": int,
+            "number": float,
+            "boolean": bool,
+            "array": list,
+            "object": dict
+        }
+        return type_mapping.get(json_type, str)
+
     async def _send_jsonrpc(
         self,
         method: str,

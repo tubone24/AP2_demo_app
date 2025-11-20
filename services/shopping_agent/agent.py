@@ -1362,7 +1362,7 @@ class ShoppingAgent(BaseAgent):
             StreamEvent: ストリーミングイベント
         """
         # Langfuseトレース設定（AP2完全準拠: オブザーバビリティ機能）
-        from services.shopping_agent.langgraph_shopping_flow import LANGFUSE_ENABLED, CallbackHandler
+        from services.shopping_agent.langgraph_shopping_flow import LANGFUSE_ENABLED, CallbackHandler, langfuse_client
 
         # 入力状態（Checkpointerと連携して状態を継続）
         # Checkpointerが既存の状態を読み込み、この入力とマージする
@@ -1374,6 +1374,11 @@ class ShoppingAgent(BaseAgent):
             "next_step": None,
             "error": None
         }
+
+        # Langfuseトレーシング: エージェント全体をagent typeでトレース
+        # v3では@observeデコレーターまたはstart_as_current_observationを使用
+        # ここではCallbackHandlerとの共存を考慮し、手動トレーシングは使用しない
+        # （LangGraph CallbackHandlerが自動的にトレースを作成）
 
         try:
             # グラフ実行（AP2完全準拠: IntentMandate → CartMandate → PaymentMandateフロー）
