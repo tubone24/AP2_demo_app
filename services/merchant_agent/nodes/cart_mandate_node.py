@@ -52,8 +52,7 @@ async def build_cart_mandates(agent: 'MerchantLangGraphAgent', state: 'MerchantA
     shipping_address = state.get("shipping_address")  # AP2準拠: 配送先住所を取得
     intent_mandate_id = state.get("intent_mandate", {}).get("id")  # AP2準拠: IntentMandate IDを取得
 
-    # Langfuseトレーシング（MCPツール呼び出し）
-    trace_id = state.get("session_id", "unknown")
+    # Langfuseトレーシング: v3ではCallbackHandlerが自動的にトレースを作成
 
     cart_candidates = []
     pending_approval_count = 0  # 承認待ちカウント
@@ -68,18 +67,9 @@ async def build_cart_mandates(agent: 'MerchantLangGraphAgent', state: 'MerchantA
     logger.info(f"[build_cart_mandates] Creating {len(cart_plans)} unsigned CartMandates...")
 
     for plan in cart_plans:
-        langfuse_span = None
         try:
-            # Langfuseスパン開始（可観測性向上）
-            if LANGFUSE_ENABLED and langfuse_client:
-                langfuse_span = langfuse_client.start_span(
-                    name="mcp_build_cart_mandates",
-                    input={"cart_plan": plan, "products_count": len(products)},
-                    metadata={"tool": "build_cart_mandates", "mcp_server": "merchant_agent_mcp", "plan_name": plan.get("name"), "session_id": trace_id}
-                )
-
-            # MCP経由でCartMandate構築（未署名）
-            result = await agent.mcp_client.call_tool("build_cart_mandates", {
+            # LangChain Tool経由でCartMandate構築（未署名）（Langfuse observation type用）
+            result = await agent.call_mcp_tool_as_langchain("build_cart_mandates", {
                 "cart_plan": plan,
                 "products": products,
                 "shipping_address": shipping_address,  # AP2準拠: 配送先住所を渡す
@@ -91,8 +81,7 @@ async def build_cart_mandates(agent: 'MerchantLangGraphAgent', state: 'MerchantA
             if cart_mandate:
                 unsigned_cart_mandates.append({
                     "plan": plan,
-                    "cart_mandate": cart_mandate,
-                    "langfuse_span": langfuse_span
+                    "cart_mandate": cart_mandate
                 })
                 logger.info(
                     f"[build_cart_mandates] Created unsigned CartMandate: "
@@ -100,21 +89,9 @@ async def build_cart_mandates(agent: 'MerchantLangGraphAgent', state: 'MerchantA
                 )
             else:
                 logger.warning(f"[build_cart_mandates] Failed to create CartMandate for plan: {plan.get('name')}")
-                if langfuse_span:
-                    langfuse_span.update(
-                        output={"status": "error", "reason": "MCP returned no cart_mandate"},
-                        metadata={"plan": plan}
-                    )
-                    langfuse_span.end()
 
         except Exception as e:
             logger.error(f"[build_cart_mandates] Error creating CartMandate for plan {plan.get('name')}: {e}")
-            if langfuse_span:
-                langfuse_span.update(
-                    output={"status": "error", "reason": str(e)},
-                    metadata={"plan": plan}
-                )
-                langfuse_span.end()
 
     logger.info(
         f"[build_cart_mandates] Created {len(unsigned_cart_mandates)} unsigned CartMandates, "
@@ -136,7 +113,6 @@ async def build_cart_mandates(agent: 'MerchantLangGraphAgent', state: 'MerchantA
         """
         plan = item["plan"]
         cart_mandate = item["cart_mandate"]
-        langfuse_span = item["langfuse_span"]
 
         status_dict = {"pending": False, "timeout": False, "rejected": False}
 
@@ -257,12 +233,6 @@ async def build_cart_mandates(agent: 'MerchantLangGraphAgent', state: 'MerchantA
                         f"{cart_mandate_id}, plan={plan.get('name')}"
                     )
                     # タイムアウトの場合はスキップ
-                    if langfuse_span:
-                        langfuse_span.update(
-                            output={"status": "timeout", "cart_mandate_id": cart_mandate_id},
-                            metadata={"elapsed_time": elapsed_time, "reason": "Manual approval timeout", "max_wait_time": MAX_CART_APPROVAL_WAIT_TIME}
-                        )
-                        langfuse_span.end()
                     return (None, status_dict)
 
                 # 承認完了、signed_cart_mandateが設定されている
@@ -275,12 +245,6 @@ async def build_cart_mandates(agent: 'MerchantLangGraphAgent', state: 'MerchantA
                     f"status={status}, has_signed_cart={bool(signed_cart_mandate)}"
                 )
                 # このCartMandateはスキップ
-                if langfuse_span:
-                    langfuse_span.update(
-                        output={"status": "error", "reason": "Unexpected Merchant response"},
-                        metadata={"response": signed_cart_response}
-                    )
-                    langfuse_span.end()
                 return (None, status_dict)
 
             # AP2完全準拠: 署名済みCartMandateを処理
@@ -308,11 +272,6 @@ async def build_cart_mandates(agent: 'MerchantLangGraphAgent', state: 'MerchantA
 
             logger.info(f"[build_cart_mandates] Built signed CartMandate for plan: {plan.get('name')}")
 
-            # Langfuseスパン終了（成功時）
-            if langfuse_span:
-                langfuse_span.update(output={"artifact_id": artifact["artifactId"], "plan_name": plan.get("name")})
-                langfuse_span.end()
-
             return (artifact, status_dict)
 
         except Exception as e:
@@ -320,11 +279,6 @@ async def build_cart_mandates(agent: 'MerchantLangGraphAgent', state: 'MerchantA
                 f"[build_cart_mandates] Failed to process CartMandate for plan {plan.get('name')}: {e}",
                 exc_info=True
             )
-
-            # Langfuseスパン終了（エラー時）
-            if langfuse_span:
-                langfuse_span.update(level="ERROR", status_message=str(e))
-                langfuse_span.end()
 
             return (None, status_dict)
 

@@ -27,14 +27,8 @@ async def analyze_intent(agent: 'MerchantLangGraphAgent', state: 'MerchantAgentS
     - skus: 特定のSKUリスト（オプション）
     - requires_refundability: 返金可能性要件（オプション）
     """
-    # MCP初期化（初回のみ、データアクセスツール用）
-    if not agent.mcp_initialized:
-        try:
-            await agent.mcp_client.initialize()
-            agent.mcp_initialized = True
-            logger.info("[analyze_intent] MCP client initialized")
-        except Exception as e:
-            logger.error(f"[analyze_intent] MCP initialization failed: {e}")
+    # MCP初期化（初回のみ、LangChain Tools作成も含む）
+    await agent._ensure_mcp_initialized()
 
     intent_mandate = state["intent_mandate"]
     natural_language_description = intent_mandate.get("natural_language_description", intent_mandate.get("intent", ""))

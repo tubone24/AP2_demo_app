@@ -45,21 +45,11 @@ async def search_products(agent: 'MerchantLangGraphAgent', state: 'MerchantAgent
     # キーワード抽出（AP2準拠）
     search_keywords = preferences.get("search_keywords", [])
 
-    # Langfuseトレーシング（MCPツール呼び出し）
-    trace_id = state.get("session_id", "unknown")
-    span = None  # スパン初期化
-
+    # Langfuseトレーシング: LangChain Tool経由で呼び出すことで、
+    # CallbackHandlerが自動的に「tool」observation typeとして記録
     try:
-        # Langfuseスパン開始（可観測性向上）
-        if LANGFUSE_ENABLED and langfuse_client:
-            span = langfuse_client.start_span(
-                name="mcp_search_products",
-                input={"keywords": search_keywords, "limit": 20},
-                metadata={"tool": "search_products", "mcp_server": "merchant_agent_mcp", "session_id": trace_id}
-            )
-
-        # MCP経由で商品検索
-        result = await agent.mcp_client.call_tool("search_products", {
+        # LangChain Tool経由で商品検索（Langfuse observation type用）
+        result = await agent.call_mcp_tool_as_langchain("search_products", {
             "keywords": search_keywords,
             "limit": 20
         })
@@ -68,18 +58,8 @@ async def search_products(agent: 'MerchantLangGraphAgent', state: 'MerchantAgent
         state["available_products"] = products
         logger.info(f"[search_products] MCP returned {len(products)} products")
 
-        # Langfuseスパン終了（成功時）
-        if span:
-            span.update(output={"products_count": len(products), "products": products[:5]})  # 最初の5件のみ記録
-            span.end()
-
     except Exception as e:
         logger.error(f"[search_products] MCP error: {e}")
         state["available_products"] = []
-
-        # Langfuseスパン終了（エラー時）
-        if span:
-            span.update(level="ERROR", status_message=str(e))
-            span.end()
 
     return state
