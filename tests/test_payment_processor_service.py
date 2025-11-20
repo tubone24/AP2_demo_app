@@ -214,19 +214,8 @@ class TestPaymentProcessing:
             mock_http_client = AsyncMock()
             service.http_client = mock_http_client
 
-            # Mock credential verification response
-            credential_response = Mock()
-            credential_response.status_code = 200
-            credential_response.json = Mock(return_value={
-                "verified": True,
-                "credential_info": {
-                    "payment_method_id": "pm_123",
-                    "agent_token": "agent_tok_test_123"
-                }
-            })
-            credential_response.raise_for_status = Mock()
-
-            # Mock payment network charge response
+            # Mock payment network charge response only
+            # (credential verification is mocked directly below)
             charge_response = Mock()
             charge_response.status_code = 200
             charge_response.json = Mock(return_value={
@@ -236,10 +225,7 @@ class TestPaymentProcessing:
             })
             charge_response.raise_for_status = Mock()
 
-            mock_http_client.post.side_effect = [
-                credential_response,
-                charge_response
-            ]
+            mock_http_client.post.return_value = charge_response
 
             payment_mandate = {
                 "id": "pm_001",
@@ -256,8 +242,8 @@ class TestPaymentProcessing:
                 "user_authorization": "mock_jwt"
             }
 
-            # Need to mock _verify_credential_with_cp to return awaitable
-            async def mock_verify():
+            # Mock _verify_credential_with_cp to return credential info
+            async def mock_verify(token, payer_id, amount):
                 return {
                     "payment_method_id": "pm_123",
                     "agent_token": "agent_tok_test_123"
@@ -654,6 +640,7 @@ class TestA2AMessageHandlers:
                             "payment_mandate": {
                                 "id": "pm_001",
                                 "payer_id": "user_001",
+                                "payee_id": "merchant_001",
                                 "amount": {"value": "1000.00", "currency": "JPY"},
                                 "payment_method": {"token": "tok_123"},
                                 "user_authorization": "mock_jwt_token"
