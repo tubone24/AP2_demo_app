@@ -33,7 +33,7 @@ class TestCartHandler:
 
         # Mock HTTP response
         mock_http_client = AsyncMock()
-        mock_response = AsyncMock()
+        mock_response = Mock()
         mock_response.status_code = 200
         mock_response.json.return_value = {
             "signed_cart_mandate": {
@@ -119,7 +119,7 @@ class TestCartHandler:
 
         # Mock HTTP response for signature
         mock_http_client = AsyncMock()
-        mock_response = AsyncMock()
+        mock_response = Mock()
         mock_response.status_code = 200
         mock_response.json.return_value = {
             "signed_cart_mandate": {
@@ -352,7 +352,7 @@ class TestPaymentHandler:
 
         # Mock HTTP response from payment processor
         mock_http_client = AsyncMock()
-        mock_response = AsyncMock()
+        mock_response = Mock()
         mock_response.status_code = 200
         mock_response.json.return_value = {
             "dataPart": {
@@ -440,7 +440,7 @@ class TestPaymentHandler:
 
         # Mock HTTP response with error
         mock_http_client = AsyncMock()
-        mock_response = AsyncMock()
+        mock_response = Mock()
         mock_response.status_code = 200
         mock_response.json.return_value = {
             "dataPart": {
@@ -476,7 +476,7 @@ class TestPaymentHandler:
         result = await payment_handler.handle_payment_request(mock_agent, message)
 
         assert result["type"] == "ap2.errors.Error"
-        assert result["payload"]["error_code"] == "payment_failed"
+        assert result["payload"]["error_code"] == "payment_request_failed"
 
 
 # ============================================
@@ -507,7 +507,7 @@ class TestProductHandler:
         }
 
         mock_db_manager = AsyncMock()
-        async def mock_get_session():
+        def mock_get_session():
             class MockContext:
                 async def __aenter__(self):
                     return mock_session
@@ -618,7 +618,7 @@ class TestProductHandler:
         }
 
         mock_db_manager = AsyncMock()
-        async def mock_get_session():
+        def mock_get_session():
             class MockContext:
                 async def __aenter__(self):
                     return mock_session

@@ -206,7 +206,8 @@ class TestPaymentProcessing:
         from services.payment_processor.processor import PaymentProcessorService
 
         with patch('services.payment_processor.processor.DatabaseManager'), \
-             patch('services.payment_processor.processor.LoggingAsyncClient') as mock_client:
+             patch('services.payment_processor.processor.LoggingAsyncClient') as mock_client, \
+             patch('common.base_agent.KeyManager'):
             service = PaymentProcessorService()
 
             # Mock HTTP responses
@@ -351,16 +352,16 @@ class TestCredentialVerification:
             service = PaymentProcessorService()
 
             # Mock HTTP client properly as awaitable
-            mock_response = AsyncMock()
+            mock_response = Mock()
             mock_response.status_code = 200
-            mock_response.json = AsyncMock(return_value={
+            mock_response.json = Mock(return_value={
                 "verified": True,
                 "credential_info": {
                     "payment_method_id": "pm_123",
                     "agent_token": "agent_tok_test"
                 }
             })
-            mock_response.raise_for_status = AsyncMock()
+            mock_response.raise_for_status = Mock()
 
             mock_http_client = AsyncMock()
             mock_http_client.post = AsyncMock(return_value=mock_response)
@@ -386,13 +387,13 @@ class TestCredentialVerification:
             service = PaymentProcessorService()
 
             # Mock HTTP client properly as awaitable
-            mock_response = AsyncMock()
+            mock_response = Mock()
             mock_response.status_code = 200
-            mock_response.json = AsyncMock(return_value={
+            mock_response.json = Mock(return_value={
                 "verified": False,
                 "error": "Invalid token"
             })
-            mock_response.raise_for_status = AsyncMock()
+            mock_response.raise_for_status = Mock()
 
             mock_http_client = AsyncMock()
             mock_http_client.post = AsyncMock(return_value=mock_response)
@@ -415,7 +416,8 @@ class TestTransactionManagement:
         from services.payment_processor.processor import PaymentProcessorService
 
         with patch('services.payment_processor.processor.DatabaseManager') as mock_db, \
-             patch('services.payment_processor.processor.LoggingAsyncClient'):
+             patch('services.payment_processor.processor.LoggingAsyncClient'), \
+             patch('common.base_agent.KeyManager'):
 
             # Mock database session
             mock_session = AsyncMock()
@@ -460,6 +462,7 @@ class TestReceiptGeneration:
 
         with patch('services.payment_processor.processor.DatabaseManager') as mock_db, \
              patch('services.payment_processor.processor.LoggingAsyncClient'), \
+             patch('common.base_agent.KeyManager'), \
              patch('common.receipt_generator.generate_receipt_pdf') as mock_gen_pdf, \
              patch('builtins.open', create=True) as mock_open:
 
@@ -528,7 +531,8 @@ class TestReceiptGeneration:
         from services.payment_processor.processor import PaymentProcessorService
 
         with patch('services.payment_processor.processor.DatabaseManager') as mock_db, \
-             patch('services.payment_processor.processor.LoggingAsyncClient'):
+             patch('services.payment_processor.processor.LoggingAsyncClient'), \
+             patch('common.base_agent.KeyManager'):
 
             # Mock database
             mock_session = AsyncMock()
@@ -571,7 +575,8 @@ class TestA2AMessageHandlers:
         from common.models import A2AMessage, A2AMessageHeader, A2ADataPart
 
         with patch('services.payment_processor.processor.DatabaseManager') as mock_db, \
-             patch('services.payment_processor.processor.LoggingAsyncClient'):
+             patch('services.payment_processor.processor.LoggingAsyncClient'), \
+             patch('common.base_agent.KeyManager'):
 
             # Mock database
             mock_session = AsyncMock()

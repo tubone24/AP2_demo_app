@@ -40,7 +40,7 @@ class TestCreateCartMandate:
         mock_product.product_metadata = '{"category": "test", "brand": "TestBrand"}'
 
         mock_db_manager = AsyncMock()
-        async def mock_get_session():
+        def mock_get_session():
             class MockContext:
                 async def __aenter__(self):
                     return mock_session
@@ -94,7 +94,7 @@ class TestCreateCartMandate:
         mock_agent = Mock()
         mock_session = AsyncMock()
         mock_db_manager = AsyncMock()
-        async def mock_get_session():
+        def mock_get_session():
             class MockContext:
                 async def __aenter__(self):
                     return mock_session
@@ -155,7 +155,7 @@ class TestCreateMultipleCartCandidates:
 
         # Mock HTTP client
         mock_http_client = AsyncMock()
-        mock_response = AsyncMock()
+        mock_response = Mock()
         mock_response.status_code = 200
         mock_response.json.return_value = {
             "signed_cart_mandate": {
@@ -174,7 +174,7 @@ class TestCreateMultipleCartCandidates:
         mock_product.price = 5000
 
         mock_db_manager = AsyncMock()
-        async def mock_get_session():
+        def mock_get_session():
             class MockContext:
                 async def __aenter__(self):
                     return mock_session
@@ -213,7 +213,7 @@ class TestCreateMultipleCartCandidates:
         mock_agent = Mock()
         mock_session = AsyncMock()
         mock_db_manager = AsyncMock()
-        async def mock_get_session():
+        def mock_get_session():
             class MockContext:
                 async def __aenter__(self):
                     return mock_session
@@ -269,7 +269,7 @@ class TestCreateCartFromProducts:
 
         # Mock HTTP client for merchant signature
         mock_http_client = AsyncMock()
-        mock_response = AsyncMock()
+        mock_response = Mock()
         mock_response.status_code = 200
         mock_response.json.return_value = {
             "signed_cart_mandate": {
@@ -399,7 +399,7 @@ class TestWaitForMerchantSignature:
 
         # Mock HTTP client
         mock_http_client = AsyncMock()
-        mock_response = AsyncMock()
+        mock_response = Mock()
         mock_response.status_code = 200
         mock_response.json = AsyncMock(return_value={
             "status": "signed",
@@ -435,7 +435,7 @@ class TestWaitForMerchantSignature:
 
         # Mock HTTP client
         mock_http_client = AsyncMock()
-        mock_response = AsyncMock()
+        mock_response = Mock()
         mock_response.status_code = 200
         mock_response.json = AsyncMock(return_value={
             "status": "rejected",
@@ -466,7 +466,7 @@ class TestWaitForMerchantSignature:
 
         # Mock HTTP client - always return pending
         mock_http_client = AsyncMock()
-        mock_response = AsyncMock()
+        mock_response = Mock()
         mock_response.status_code = 200
         mock_response.json = AsyncMock(return_value={
             "status": "pending_merchant_signature"
@@ -512,7 +512,7 @@ class TestCartCostCalculations:
         mock_product.product_metadata = '{}'
 
         mock_db_manager = AsyncMock()
-        async def mock_get_session():
+        def mock_get_session():
             class MockContext:
                 async def __aenter__(self):
                     return mock_session
@@ -564,7 +564,7 @@ class TestCartCostCalculations:
         mock_product.product_metadata = '{}'
 
         mock_db_manager = AsyncMock()
-        async def mock_get_session():
+        def mock_get_session():
             class MockContext:
                 async def __aenter__(self):
                     return mock_session
