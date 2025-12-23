@@ -73,6 +73,7 @@ from services.shopping_agent.utils import (
 )
 from services.shopping_agent.utils.signature_handlers import SignatureHandlers
 from services.shopping_agent.utils.merchant_integration import MerchantIntegrationHelpers
+from services.shopping_agent.utils.a2ui_parser import process_user_input, is_a2ui_message
 
 # NOTE: 古いLangGraph実装（langgraph_agent, langgraph_conversation, langgraph_shopping）は廃止
 # 新しいStateGraph版（langgraph_shopping_flow.py）を使用
@@ -1364,15 +1365,29 @@ class ShoppingAgent(BaseAgent):
         # Langfuseトレース設定（AP2完全準拠: オブザーバビリティ機能）
         from services.shopping_agent.langgraph_shopping_flow import LANGFUSE_ENABLED, CallbackHandler, langfuse_client
 
+        # A2UI v0.9: userActionメッセージをパース
+        # フロントエンドから送信されたuserActionを解析し、レガシー形式に変換
+        processed_input, a2ui_action = process_user_input(user_input)
+        if a2ui_action:
+            logger.info(f"[A2UI v0.9] Received userAction: {a2ui_action.name}")
+            logger.debug(f"[A2UI v0.9] Action details: surface={a2ui_action.surface_id}, context={a2ui_action.context}")
+
         # 入力状態（Checkpointerと連携して状態を継続）
         # Checkpointerが既存の状態を読み込み、この入力とマージする
         input_state = {
-            "user_input": user_input,
+            "user_input": processed_input,  # A2UI: パース済み入力を使用
             "session_id": session_id,
             "session": session,
             "events": [],
             "next_step": None,
-            "error": None
+            "error": None,
+            # A2UI v0.9: アクション情報を追加（ノードで利用可能）
+            "a2ui_action": {
+                "name": a2ui_action.name,
+                "surface_id": a2ui_action.surface_id,
+                "source_component_id": a2ui_action.source_component_id,
+                "context": a2ui_action.context,
+            } if a2ui_action else None
         }
 
         # Langfuseトレーシング: エージェント全体をagent typeでトレース

@@ -53,6 +53,7 @@ export default function ChatPage() {
     webauthnRequest,
     sessionId,
     sendMessage,
+    sendUserAction,  // A2UI v0.9: userActionメッセージ送信
     addMessage,
     clearSignatureRequest,
     clearWebauthnRequest,
@@ -557,7 +558,13 @@ export default function ChatPage() {
                         <Card
                           key={provider.id}
                           className="cursor-pointer hover:bg-accent transition-colors"
-                          onClick={() => sendMessage(String(index + 1))}
+                          onClick={() => sendUserAction(
+                            "select_credential_provider",
+                            "credential-provider-selection",
+                            `cp-card-${index}`,
+                            { index: index + 1, providerId: provider.id },
+                            `${provider.name}を選択`
+                          )}
                         >
                           <CardContent className="p-4">
                             <div className="flex items-center gap-3">
@@ -585,8 +592,14 @@ export default function ChatPage() {
                 <ShippingAddressForm
                   fields={shippingFormRequest.fields}
                   onSubmit={(shippingData) => {
-                    // フォーム入力値をJSON文字列に変換してShopping Agentに送信
-                    sendMessage(JSON.stringify(shippingData));
+                    // A2UI v0.9: userActionメッセージで送信
+                    sendUserAction(
+                      "submit_shipping",
+                      "shipping-form",
+                      "submit-button",
+                      { shipping: shippingData },
+                      "配送先を確定しました"
+                    );
                   }}
                 />
               )}
@@ -605,7 +618,13 @@ export default function ChatPage() {
                         <Card
                           key={method.id}
                           className="cursor-pointer hover:bg-accent transition-colors"
-                          onClick={() => sendMessage(String(index + 1))}
+                          onClick={() => sendUserAction(
+                            "select_payment_method",
+                            "payment-method-selection",
+                            `pm-card-${index}`,
+                            { index: index + 1, paymentMethodId: method.id },
+                            `${method.brand?.toUpperCase()} **** ${method.last4}を選択`
+                          )}
                         >
                           <CardContent className="p-4">
                             <div className="flex items-center gap-3">

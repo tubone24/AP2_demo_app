@@ -15,6 +15,7 @@ import { ChatMessage, ChatSSEEvent, SignatureRequestEvent, Product } from "@/lib
 import { getAuthHeaders } from "@/lib/passkey";
 import type { A2UIComponent } from "@/lib/types/a2ui";
 import { applyDataModelOperation } from "@/lib/a2ui/jsonPointer";
+import { buildUserAction, serializeUserAction } from "@/lib/a2ui/userAction";
 
 /**
  * A2UI v0.9 Surface State
@@ -584,6 +585,46 @@ export function useSSEChat() {
     console.log("[useSSEChat] Session ID updated:", newSessionId);
   }, []);
 
+  /**
+   * A2UI v0.9: Send a userAction message
+   *
+   * This sends a properly formatted A2UI v0.9 userAction message to the backend.
+   * The message includes action name, surface ID, component ID, timestamp, and context.
+   *
+   * @param actionName - The action name (e.g., "submit_shipping", "select_payment_method")
+   * @param surfaceId - The surface ID where the action originated
+   * @param sourceComponentId - The component ID that triggered the action
+   * @param context - Optional context data with resolved data bindings
+   * @param displayMessage - Optional message to display in chat UI (if not provided, action is silent)
+   */
+  const sendUserAction = useCallback(async (
+    actionName: string,
+    surfaceId: string,
+    sourceComponentId: string,
+    context?: Record<string, any>,
+    displayMessage?: string
+  ) => {
+    // Build A2UI v0.9 compliant userAction message
+    const userAction = buildUserAction(actionName, surfaceId, sourceComponentId, context);
+    const serializedAction = serializeUserAction(userAction);
+
+    console.log("[A2UI v0.9] Sending userAction:", userAction);
+
+    // Send pure A2UI userAction JSON (no prefix needed)
+    await sendMessage(serializedAction);
+
+    // If a display message is provided, add it to the chat UI
+    if (displayMessage) {
+      const userMessage: ChatMessage = {
+        id: `user-${Date.now()}`,
+        role: "user",
+        content: displayMessage,
+        timestamp: new Date(),
+      };
+      setMessages((prev) => [...prev, userMessage]);
+    }
+  }, [sendMessage]);
+
   // A2UI v0.9: サーフェスをクリアする関数
   const clearA2UISurfaces = useCallback(() => {
     setA2UISurfaces(new Map());
@@ -614,6 +655,7 @@ export function useSSEChat() {
     clearA2UISurfaces,  // 全サーフェスをクリア
     // 関数群
     sendMessage,
+    sendUserAction,  // A2UI v0.9: userActionメッセージ送信
     addMessage,
     clearSignatureRequest,
     clearWebauthnRequest,

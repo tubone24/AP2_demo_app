@@ -88,6 +88,8 @@ class ShoppingFlowState(TypedDict):
     events: List[Dict[str, Any]]  # reducerなし：各ノードが新しいイベントのみを返す
     next_step: Optional[str]
     error: Optional[str]
+    # A2UI v0.9: userActionメッセージの解析結果
+    a2ui_action: Optional[Dict[str, Any]]
 
 
 # ============================================================================
