@@ -15,7 +15,7 @@ import { ChatMessage, ChatSSEEvent, SignatureRequestEvent, Product } from "@/lib
 import { getAuthHeaders } from "@/lib/passkey";
 import type { A2UIComponent } from "@/lib/types/a2ui";
 import { applyDataModelOperation } from "@/lib/a2ui/jsonPointer";
-import { buildUserAction, serializeUserAction } from "@/lib/a2ui/userAction";
+import { buildClientMessage, serializeClientMessage } from "@/lib/a2ui/userAction";
 
 /**
  * A2UI v0.9 Surface State
@@ -586,32 +586,43 @@ export function useSSEChat() {
   }, []);
 
   /**
-   * A2UI v0.9: Send a userAction message
+   * A2UI v0.9: Send a userAction message with DataModel
    *
-   * This sends a properly formatted A2UI v0.9 userAction message to the backend.
-   * The message includes action name, surface ID, component ID, timestamp, and context.
+   * Pure A2UI approach:
+   * - userAction.context contains PATH REFERENCES only
+   * - dataModel contains the actual data
+   * - Backend resolves paths against dataModel
    *
    * @param actionName - The action name (e.g., "submit_shipping", "select_payment_method")
    * @param surfaceId - The surface ID where the action originated
    * @param sourceComponentId - The component ID that triggered the action
-   * @param context - Optional context data with resolved data bindings
-   * @param displayMessage - Optional message to display in chat UI (if not provided, action is silent)
+   * @param contextPaths - Path references (e.g., { shipping: "/shipping" })
+   * @param dataModel - Current DataModel state with actual values
+   * @param displayMessage - Optional message to display in chat UI
    */
   const sendUserAction = useCallback(async (
     actionName: string,
     surfaceId: string,
     sourceComponentId: string,
-    context?: Record<string, any>,
+    contextPaths: Record<string, string>,
+    dataModel: Record<string, any>,
     displayMessage?: string
   ) => {
-    // Build A2UI v0.9 compliant userAction message
-    const userAction = buildUserAction(actionName, surfaceId, sourceComponentId, context);
-    const serializedAction = serializeUserAction(userAction);
+    // Build A2UI v0.9 compliant message (userAction + dataModel)
+    const clientMessage = buildClientMessage(
+      actionName,
+      surfaceId,
+      sourceComponentId,
+      contextPaths,
+      dataModel
+    );
+    const serialized = serializeClientMessage(clientMessage);
 
-    console.log("[A2UI v0.9] Sending userAction:", userAction);
+    console.log("[A2UI v0.9] Sending userAction:", clientMessage.userAction);
+    console.log("[A2UI v0.9] With dataModel:", clientMessage.dataModel);
 
-    // Send pure A2UI userAction JSON (no prefix needed)
-    await sendMessage(serializedAction);
+    // Send pure A2UI message
+    await sendMessage(serialized);
 
     // If a display message is provided, add it to the chat UI
     if (displayMessage) {

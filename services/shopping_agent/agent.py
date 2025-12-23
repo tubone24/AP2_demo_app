@@ -1366,11 +1366,11 @@ class ShoppingAgent(BaseAgent):
         from services.shopping_agent.langgraph_shopping_flow import LANGFUSE_ENABLED, CallbackHandler, langfuse_client
 
         # A2UI v0.9: userActionメッセージをパース
-        # フロントエンドから送信されたuserActionを解析し、レガシー形式に変換
+        # Pure A2UI: context has path refs only, data resolved from dataModel
         processed_input, a2ui_action = process_user_input(user_input)
         if a2ui_action:
             logger.info(f"[A2UI v0.9] Received userAction: {a2ui_action.name}")
-            logger.debug(f"[A2UI v0.9] Action details: surface={a2ui_action.surface_id}, context={a2ui_action.context}")
+            logger.debug(f"[A2UI v0.9] Resolved data: {a2ui_action.resolved_data}")
 
         # 入力状態（Checkpointerと連携して状態を継続）
         # Checkpointerが既存の状態を読み込み、この入力とマージする
@@ -1386,7 +1386,8 @@ class ShoppingAgent(BaseAgent):
                 "name": a2ui_action.name,
                 "surface_id": a2ui_action.surface_id,
                 "source_component_id": a2ui_action.source_component_id,
-                "context": a2ui_action.context,
+                "context_paths": a2ui_action.context_paths,
+                "resolved_data": a2ui_action.resolved_data,
             } if a2ui_action else None
         }
 

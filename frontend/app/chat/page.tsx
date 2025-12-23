@@ -562,7 +562,8 @@ export default function ChatPage() {
                             "select_credential_provider",
                             "credential-provider-selection",
                             `cp-card-${index}`,
-                            { index: index + 1, providerId: provider.id },
+                            { selection: "/selection" },  // path reference only
+                            { selection: { index: index + 1, providerId: provider.id } },  // actual data
                             `${provider.name}を選択`
                           )}
                         >
@@ -592,12 +593,13 @@ export default function ChatPage() {
                 <ShippingAddressForm
                   fields={shippingFormRequest.fields}
                   onSubmit={(shippingData) => {
-                    // A2UI v0.9: userActionメッセージで送信
+                    // A2UI v0.9: pure userAction (path refs only) + dataModel
                     sendUserAction(
                       "submit_shipping",
                       "shipping-form",
                       "submit-button",
-                      { shipping: shippingData },
+                      { shipping: "/shipping" },  // path reference only
+                      { shipping: shippingData },  // actual data in dataModel
                       "配送先を確定しました"
                     );
                   }}
@@ -622,7 +624,8 @@ export default function ChatPage() {
                             "select_payment_method",
                             "payment-method-selection",
                             `pm-card-${index}`,
-                            { index: index + 1, paymentMethodId: method.id },
+                            { selection: "/selection" },  // path reference only
+                            { selection: { index: index + 1, paymentMethodId: method.id } },  // actual data
                             `${method.brand?.toUpperCase()} **** ${method.last4}を選択`
                           )}
                         >
