@@ -562,6 +562,12 @@ class StreamEvent(BaseModel):
     { "type": "credential_provider_selection", "providers": [...] }
     { "type": "webauthn_request", "challenge": "...", "rp_id": "...", "timeout": 60000 }
     { "type": "step_up_redirect", "step_up_url": "...", "session_id": "...", "content": "追加認証が必要です" }
+
+    A2UI v0.9 Protocol Messages (https://a2ui.org/specification/v0.9-a2ui/):
+    { "type": "a2ui_create_surface", "surface_id": "...", "catalog_id": "..." }
+    { "type": "a2ui_update_components", "surface_id": "...", "components": [...] }
+    { "type": "a2ui_update_data_model", "surface_id": "...", "path": "/...", "op": "replace", "value": {...} }
+    { "type": "a2ui_delete_surface", "surface_id": "..." }
     """
     type: Literal[
         "agent_text",
@@ -578,6 +584,11 @@ class StreamEvent(BaseModel):
         "stepup_authentication_request",  # AP2完全準拠: 3D Secure 2.0認証リクエスト
         "step_up_redirect",
         "payment_completed",  # AP2完全準拠: 決済完了通知
+        # A2UI v0.9 Protocol Messages
+        "a2ui_create_surface",
+        "a2ui_update_components",
+        "a2ui_update_data_model",
+        "a2ui_delete_surface",
         "error",
         "done"
     ]
@@ -590,6 +601,14 @@ class StreamEvent(BaseModel):
     form_schema: Optional[Dict[str, Any]] = None  # 配送先フォームスキーマ
     payment_methods: Optional[List[Dict[str, Any]]] = None  # 支払い方法リスト
     providers: Optional[List[Dict[str, Any]]] = None  # Credential Providerリスト
+
+    # A2UI v0.9 Protocol Fields
+    surface_id: Optional[str] = None  # サーフェスID（全A2UIメッセージで使用）
+    catalog_id: Optional[str] = None  # カタログID（createSurface用）
+    components: Optional[List[Dict[str, Any]]] = None  # コンポーネント配列（updateComponents用）
+    path: Optional[str] = None  # JSONポインター（updateDataModel用）
+    op: Optional[Literal["add", "replace", "remove"]] = None  # 操作タイプ（updateDataModel用）
+    value: Optional[Dict[str, Any]] = None  # 更新値（updateDataModel用）
 
     # WebAuthn用フィールド
     challenge: Optional[str] = None

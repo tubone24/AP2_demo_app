@@ -13,6 +13,19 @@
 import { useState, useCallback, useRef } from "react";
 import { ChatMessage, ChatSSEEvent, SignatureRequestEvent, Product } from "@/lib/types/chat";
 import { getAuthHeaders } from "@/lib/passkey";
+import type { A2UIComponent } from "@/lib/types/a2ui";
+import { applyDataModelOperation } from "@/lib/a2ui/jsonPointer";
+
+/**
+ * A2UI v0.9 Surface State
+ * Represents a managed UI surface with components and data model
+ */
+export interface A2UISurfaceState {
+  surfaceId: string;
+  catalogId?: string;
+  components: A2UIComponent[];
+  dataModel: Record<string, any>;
+}
 
 export function useSSEChat() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -29,6 +42,9 @@ export function useSSEChat() {
   const [paymentMethods, setPaymentMethods] = useState<any[]>([]);
   const [webauthnRequest, setWebauthnRequest] = useState<any | null>(null);
   const [paymentCompletedInfo, setPaymentCompletedInfo] = useState<any | null>(null);
+
+  // A2UI v0.9: サーフェス管理用のstate
+  const [a2uiSurfaces, setA2UISurfaces] = useState<Map<string, A2UISurfaceState>>(new Map());
 
   const abortControllerRef = useRef<AbortController | null>(null);
 
@@ -381,6 +397,87 @@ export function useSSEChat() {
                   }
                   break;
 
+                // A2UI v0.9 Protocol Messages
+                case "a2ui_create_surface":
+                  // createSurface: 新しいサーフェスを初期化
+                  const createEvent = event as any;
+                  console.log("[A2UI v0.9] createSurface", {
+                    surfaceId: createEvent.surface_id,
+                    catalogId: createEvent.catalog_id
+                  });
+                  setA2UISurfaces(prev => {
+                    const next = new Map(prev);
+                    next.set(createEvent.surface_id, {
+                      surfaceId: createEvent.surface_id,
+                      catalogId: createEvent.catalog_id,
+                      components: [],
+                      dataModel: {}
+                    });
+                    return next;
+                  });
+                  break;
+
+                case "a2ui_update_components":
+                  // updateComponents: コンポーネント定義を更新
+                  const componentsEvent = event as any;
+                  console.log("[A2UI v0.9] updateComponents", {
+                    surfaceId: componentsEvent.surface_id,
+                    componentCount: componentsEvent.components?.length || 0
+                  });
+                  setA2UISurfaces(prev => {
+                    const next = new Map(prev);
+                    const surface = next.get(componentsEvent.surface_id);
+                    if (surface) {
+                      next.set(componentsEvent.surface_id, {
+                        ...surface,
+                        components: componentsEvent.components || []
+                      });
+                    }
+                    return next;
+                  });
+                  break;
+
+                case "a2ui_update_data_model":
+                  // updateDataModel: データモデルを更新
+                  const dataModelEvent = event as any;
+                  console.log("[A2UI v0.9] updateDataModel", {
+                    surfaceId: dataModelEvent.surface_id,
+                    path: dataModelEvent.path,
+                    op: dataModelEvent.op
+                  });
+                  setA2UISurfaces(prev => {
+                    const next = new Map(prev);
+                    const surface = next.get(dataModelEvent.surface_id);
+                    if (surface) {
+                      // Apply JSON Pointer operation (RFC 6901 compliant)
+                      const updatedDataModel = applyDataModelOperation(
+                        surface.dataModel,
+                        dataModelEvent.op,
+                        dataModelEvent.path,
+                        dataModelEvent.value
+                      );
+                      next.set(dataModelEvent.surface_id, {
+                        ...surface,
+                        dataModel: updatedDataModel
+                      });
+                    }
+                    return next;
+                  });
+                  break;
+
+                case "a2ui_delete_surface":
+                  // deleteSurface: サーフェスを削除
+                  const deleteEvent = event as any;
+                  console.log("[A2UI v0.9] deleteSurface", {
+                    surfaceId: deleteEvent.surface_id
+                  });
+                  setA2UISurfaces(prev => {
+                    const next = new Map(prev);
+                    next.delete(deleteEvent.surface_id);
+                    return next;
+                  });
+                  break;
+
                 case "done":
                   // エージェントメッセージを確定
                   console.log("[SSE Done Event] agentMessageContent:", agentMessageContent);
@@ -487,6 +584,16 @@ export function useSSEChat() {
     console.log("[useSSEChat] Session ID updated:", newSessionId);
   }, []);
 
+  // A2UI v0.9: サーフェスをクリアする関数
+  const clearA2UISurfaces = useCallback(() => {
+    setA2UISurfaces(new Map());
+  }, []);
+
+  // A2UI v0.9: 特定のサーフェスを取得する関数
+  const getA2UISurface = useCallback((surfaceId: string): A2UISurfaceState | undefined => {
+    return a2uiSurfaces.get(surfaceId);
+  }, [a2uiSurfaces]);
+
   return {
     messages,
     isStreaming,
@@ -501,6 +608,11 @@ export function useSSEChat() {
     webauthnRequest,
     paymentCompletedInfo,  // 決済完了情報
     sessionId: sessionIdRef.current,
+    // A2UI v0.9: サーフェス管理
+    a2uiSurfaces,  // Map<surfaceId, A2UISurfaceState>
+    getA2UISurface,  // 特定のサーフェスを取得
+    clearA2UISurfaces,  // 全サーフェスをクリア
+    // 関数群
     sendMessage,
     addMessage,
     clearSignatureRequest,

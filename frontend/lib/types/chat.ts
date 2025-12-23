@@ -20,6 +20,12 @@ export type SSEEventType =
   | "stepup_authentication_request"  // AP2完全準拠: 3D Secure 2.0認証リクエスト
   | "step_up_redirect"
   | "payment_completed"  // AP2完全準拠: 決済完了通知
+  | "a2ui_surface"  // A2UI Surface (Agent-to-User Interface) - レガシー
+  // A2UI v0.9 Protocol Events
+  | "a2ui_create_surface"
+  | "a2ui_update_components"
+  | "a2ui_update_data_model"
+  | "a2ui_delete_surface"
   | "done"
   | "error";
 
@@ -144,6 +150,46 @@ export interface PaymentCompletedEvent extends SSEEvent {
   status: string;
 }
 
+// A2UI Surface イベント（Agent-to-User Interface）- レガシー形式
+/** @deprecated Use A2UI v0.9 events instead */
+export interface A2UISurfaceEvent extends SSEEvent {
+  type: "a2ui_surface";
+  surface: {
+    surfaceId: string;
+    surfaceType: string;
+    components: any[];
+    dataModel: Record<string, any>;
+  };
+}
+
+// A2UI v0.9 Protocol Events
+// Reference: https://a2ui.org/specification/v0.9-a2ui/
+
+export interface A2UICreateSurfaceEvent extends SSEEvent {
+  type: "a2ui_create_surface";
+  surface_id: string;
+  catalog_id?: string;
+}
+
+export interface A2UIUpdateComponentsEvent extends SSEEvent {
+  type: "a2ui_update_components";
+  surface_id: string;
+  components: any[];
+}
+
+export interface A2UIUpdateDataModelEvent extends SSEEvent {
+  type: "a2ui_update_data_model";
+  surface_id: string;
+  path: string;
+  op: "add" | "replace" | "remove";
+  value?: Record<string, any>;
+}
+
+export interface A2UIDeleteSurfaceEvent extends SSEEvent {
+  type: "a2ui_delete_surface";
+  surface_id: string;
+}
+
 // すべてのSSEイベント型
 export type ChatSSEEvent =
   | AgentTextEvent
@@ -161,6 +207,12 @@ export type ChatSSEEvent =
   | StepupAuthenticationRequestEvent
   | StepUpRedirectEvent
   | PaymentCompletedEvent
+  | A2UISurfaceEvent
+  // A2UI v0.9 Protocol Events
+  | A2UICreateSurfaceEvent
+  | A2UIUpdateComponentsEvent
+  | A2UIUpdateDataModelEvent
+  | A2UIDeleteSurfaceEvent
   | DoneEvent
   | ErrorEvent;
 

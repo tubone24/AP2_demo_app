@@ -32,6 +32,22 @@ from langchain_openai import ChatOpenAI
 # AP2型定義（完全準拠）
 import sys
 from common.models import Signature
+
+# A2UI builders for generating A2UI-compliant surfaces (v0.9 protocol)
+from services.shopping_agent.utils.a2ui_builders import (
+    build_shipping_form_a2ui,
+    build_cp_selection_a2ui,
+    build_payment_method_selection_a2ui,
+    build_product_carousel_a2ui,
+    build_cart_details_a2ui,
+    # A2UI v0.9 protocol message generators
+    generate_shipping_form_a2ui_messages,
+    generate_cp_selection_a2ui_messages,
+    generate_payment_method_selection_a2ui_messages,
+    generate_product_carousel_a2ui_messages,
+    generate_cart_details_a2ui_messages,
+)
+
 logger = logging.getLogger(__name__)
 
 # Langfuseトレーシング設定
@@ -376,22 +392,29 @@ JSON形式で返答してください:
         })
 
         # 配送先フォーム表示（AP2準拠: ContactAddress形式）
+        shipping_fields = [
+            {"name": "recipient", "label": "受取人名", "type": "text", "required": True},
+            {"name": "postal_code", "label": "郵便番号", "type": "text", "required": True},
+            {"name": "city", "label": "市区町村", "type": "text", "required": True},
+            {"name": "region", "label": "都道府県", "type": "text", "required": True},
+            {"name": "address_line1", "label": "住所1（番地等）", "type": "text", "required": True},
+            {"name": "address_line2", "label": "住所2（建物名等）", "type": "text", "required": False},
+            {"name": "country", "label": "国", "type": "text", "required": True, "default": "JP"},
+            {"name": "phone_number", "label": "電話番号", "type": "text", "required": False},
+        ]
+
         events.append({
             "type": "shipping_form_request",
             "form_schema": {
                 "type": "contact_address",
-                "fields": [
-                    {"name": "recipient", "label": "受取人名", "type": "text", "required": True},
-                    {"name": "postal_code", "label": "郵便番号", "type": "text", "required": True},
-                    {"name": "city", "label": "市区町村", "type": "text", "required": True},
-                    {"name": "region", "label": "都道府県", "type": "text", "required": True},
-                    {"name": "address_line1", "label": "住所1（番地等）", "type": "text", "required": True},
-                    {"name": "address_line2", "label": "住所2（建物名等）", "type": "text", "required": False},
-                    {"name": "country", "label": "国", "type": "text", "required": True, "default": "JP"},
-                    {"name": "phone_number", "label": "電話番号", "type": "text", "required": False},
-                ]
+                "fields": shipping_fields
             }
         })
+
+        # A2UI v0.9: 配送先フォームサーフェスをプロトコル準拠形式で送信
+        # createSurface → updateComponents → updateDataModel の順でメッセージを送信
+        a2ui_messages = generate_shipping_form_a2ui_messages(shipping_fields)
+        events.extend(a2ui_messages)
 
         return {
             **state,
@@ -614,6 +637,11 @@ async def select_cp_node(state: ShoppingFlowState, agent_instance: Any) -> Shopp
                 "type": "credential_provider_selection",
                 "providers": available_cps
             })
+
+            # A2UI v0.9: CP選択サーフェスをプロトコル準拠形式で送信
+            # createSurface → updateComponents → updateDataModel の順でメッセージを送信
+            a2ui_messages = generate_cp_selection_a2ui_messages(available_cps)
+            events.extend(a2ui_messages)
 
             session["step"] = "select_cp"
 
@@ -880,6 +908,12 @@ async def fetch_carts_node(state: ShoppingFlowState, agent_instance: Any) -> Sho
             "type": "cart_options",
             "items": frontend_cart_candidates
         })
+
+        # A2UI v0.9: 各カート候補のA2UIサーフェスをプロトコル準拠形式で送信
+        # createSurface → updateComponents → updateDataModel の順でメッセージを送信
+        for cart_candidate in frontend_cart_candidates:
+            a2ui_messages = generate_cart_details_a2ui_messages(cart_candidate)
+            events.extend(a2ui_messages)
 
         events.append({
             "type": "agent_text",
@@ -1148,6 +1182,11 @@ async def select_payment_method_node(state: ShoppingFlowState, agent_instance: A
                 "type": "payment_method_selection",
                 "payment_methods": available_payment_methods
             })
+
+            # A2UI v0.9: 支払い方法選択サーフェスをプロトコル準拠形式で送信
+            # createSurface → updateComponents → updateDataModel の順でメッセージを送信
+            a2ui_messages = generate_payment_method_selection_a2ui_messages(available_payment_methods)
+            events.extend(a2ui_messages)
 
             logger.info(
                 f"[select_payment_method_node] AP2 Step 13-14: Presenting payment methods to user\n"
