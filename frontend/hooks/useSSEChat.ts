@@ -193,43 +193,19 @@ export function useSSEChat() {
 
                   console.log("[agent_text_complete]", {
                     eventContent: completeMessage,
-                    length: completeMessage.length,
-                    hasProducts: streamProducts.length > 0,
-                    hasCartCandidates: streamCartCandidates.length > 0
+                    length: completeMessage.length
                   });
 
+                  // agent_text_completeではメッセージを追加しない
+                  // doneイベントで一括してメッセージとメタデータを追加する
+                  // ただし、agentMessageContentにコンテンツを設定
                   if (completeMessage.trim()) {
-                    // メタデータを構築（doneと同様）
-                    const completeMetadata: any = {};
-                    if (streamProducts.length > 0) {
-                      completeMetadata.products = streamProducts;
-                    }
-                    if (streamCartCandidates.length > 0) {
-                      completeMetadata.cart_candidates = streamCartCandidates;
-                    }
-                    if (paymentCompletedData) {
-                      completeMetadata.payment_result = paymentCompletedData;
-                    }
-
-                    const agentMessage: ChatMessage = {
-                      id: `agent-${Date.now()}`,
-                      role: "agent",
-                      content: completeMessage,
-                      timestamp: new Date(),
-                      metadata: Object.keys(completeMetadata).length > 0 ? completeMetadata : undefined,
-                    };
-                    setMessages((prev) => [...prev, agentMessage]);
-                    console.log("[agent_text_complete] Message added with metadata:", completeMetadata);
+                    agentMessageContent = completeMessage;
                   }
 
-                  // currentAgentMessageをクリア（次のメッセージは新しい吹き出しに）
-                  agentMessageContent = "";
+                  // currentAgentMessageをクリア（ストリーミング表示を終了）
                   setCurrentAgentMessage("");
                   isTyping = false;
-                  // メタデータもクリア（次のメッセージ用）
-                  streamProducts = [];
-                  streamCartCandidates = [];
-                  setCurrentCartCandidates([]);
                   break;
 
                 case "agent_text":
@@ -291,17 +267,19 @@ export function useSSEChat() {
                   break;
 
                 case "credential_provider_selection":
-                  // Credential Provider選択リクエスト
-                  const cpEvent = event as any;
-                  setCredentialProviders(cpEvent.providers || []);
+                  // Credential Provider選択リクエスト（A2UIに移行済み - stateは更新しない）
+                  // const cpEvent = event as any;
+                  // setCredentialProviders(cpEvent.providers || []);
+                  console.log("[SSE] credential_provider_selection event received (ignored, using A2UI)");
                   break;
 
                 // Note: shipping_form_request is deprecated, use A2UI surfaces instead
 
                 case "payment_method_selection":
-                  // 支払い方法選択リクエスト
-                  const paymentEvent = event as any;
-                  setPaymentMethods(paymentEvent.payment_methods || []);
+                  // 支払い方法選択リクエスト（A2UIに移行済み - stateは更新しない）
+                  // const paymentEvent = event as any;
+                  // setPaymentMethods(paymentEvent.payment_methods || []);
+                  console.log("[SSE] payment_method_selection event received (ignored, using A2UI)");
                   break;
 
                 case "payment_completed":

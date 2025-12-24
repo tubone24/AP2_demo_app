@@ -32,6 +32,11 @@ export function ChatMessage({ message, onAddToCart, onSelectCart, onViewCartDeta
     displayContent = displayContent.replace(receiptMatch[0], "").replace(/\n\n+/g, "\n\n").trim();
   }
 
+  // 表示するコンテンツがない場合は何も表示しない（空のメッセージバブルを防止）
+  const hasTextContent = displayContent.trim().length > 0;
+  if (!hasTextContent && !hasProducts && !hasCartCandidates) {
+    return null;
+  }
 
   return (
     <div
