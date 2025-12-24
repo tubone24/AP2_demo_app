@@ -229,10 +229,22 @@ def build_shipping_form_a2ui(
         }
     ] + field_components
 
-    # Build initial data model
+    # Build initial data model with validation metadata
+    required_fields = [field["name"] for field in fields if field.get("required", False)]
+    initial_values = {field["name"]: field.get("default", "") for field in fields}
+
+    # Check if initial values satisfy required fields
+    form_invalid = any(
+        not initial_values.get(field_name)
+        for field_name in required_fields
+    )
+
     data_model = {
-        "shipping": {field["name"]: field.get("default", "") for field in fields},
-        "formInvalid": True
+        "shipping": initial_values,
+        "formInvalid": form_invalid,
+        "_validation": {
+            "requiredFields": required_fields
+        }
     }
 
     return {
@@ -1313,7 +1325,7 @@ def build_cart_details_a2ui(
             "shipping": shipping_item.get("amount", {}).get("value", 0) if shipping_item else 0,
             "total": total.get("amount", {}).get("value", 0)
         },
-        "modalOpen": True
+        "modalOpen": False  # デフォルトは閉じた状態。ユーザーが「詳細」をクリックしたときに開く
     }
 
     if shipping_address:

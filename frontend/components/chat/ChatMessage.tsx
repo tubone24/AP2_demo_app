@@ -3,17 +3,21 @@
 import { ChatMessage as ChatMessageType } from "@/lib/types/chat";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { ProductCarousel } from "@/components/product/ProductCarousel";
+import { CartCarousel } from "@/components/cart/CartCarousel";
 import { cn } from "@/lib/utils";
 import { Bot, User } from "lucide-react";
 
 interface ChatMessageProps {
   message: ChatMessageType;
   onAddToCart?: (product: any) => void;
+  onSelectCart?: (cartCandidate: any) => void;
+  onViewCartDetails?: (cartCandidate: any) => void;
 }
 
-export function ChatMessage({ message, onAddToCart }: ChatMessageProps) {
+export function ChatMessage({ message, onAddToCart, onSelectCart, onViewCartDetails }: ChatMessageProps) {
   const isUser = message.role === "user";
   const hasProducts = message.metadata?.products && message.metadata.products.length > 0;
+  const hasCartCandidates = message.metadata?.cart_candidates && message.metadata.cart_candidates.length > 0;
 
   // AP2完全準拠: 領収書ボタンは緑のカード（page.tsx）に統合されるため、
   // ChatMessageでは表示しない。メッセージテキストのみ表示。
@@ -48,16 +52,19 @@ export function ChatMessage({ message, onAddToCart }: ChatMessageProps) {
           isUser ? "items-end max-w-[80%]" : "items-start max-w-full"
         )}
       >
-        <div
-          className={cn(
-            "rounded-lg px-4 py-2 text-sm",
-            isUser
-              ? "bg-blue-500 text-white"
-              : "bg-muted text-foreground"
-          )}
-        >
-          <p className="whitespace-pre-wrap">{displayContent}</p>
-        </div>
+        {/* テキスト内容がある場合のみ表示（空のバブルを防止） */}
+        {displayContent.trim() && (
+          <div
+            className={cn(
+              "rounded-lg px-4 py-2 text-sm",
+              isUser
+                ? "bg-blue-500 text-white"
+                : "bg-muted text-foreground"
+            )}
+          >
+            <p className="whitespace-pre-wrap">{displayContent}</p>
+          </div>
+        )}
 
         {/* 商品カルーセル */}
         {hasProducts && (
@@ -65,6 +72,17 @@ export function ChatMessage({ message, onAddToCart }: ChatMessageProps) {
             <ProductCarousel
               products={message.metadata!.products!}
               onAddToCart={onAddToCart}
+            />
+          </div>
+        )}
+
+        {/* カート候補カルーセル（AP2/A2A仕様準拠） */}
+        {hasCartCandidates && (
+          <div className="mt-3 w-full max-w-[680px]">
+            <CartCarousel
+              cartCandidates={message.metadata!.cart_candidates!}
+              onSelectCart={onSelectCart}
+              onViewDetails={onViewCartDetails}
             />
           </div>
         )}

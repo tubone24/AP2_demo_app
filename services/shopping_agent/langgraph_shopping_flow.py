@@ -405,14 +405,6 @@ JSON形式で返答してください:
             {"name": "phone_number", "label": "電話番号", "type": "text", "required": False},
         ]
 
-        events.append({
-            "type": "shipping_form_request",
-            "form_schema": {
-                "type": "contact_address",
-                "fields": shipping_fields
-            }
-        })
-
         # A2UI v0.9: 配送先フォームサーフェスをプロトコル準拠形式で送信
         # createSurface → updateComponents → updateDataModel の順でメッセージを送信
         a2ui_messages = generate_shipping_form_a2ui_messages(shipping_fields)
@@ -906,6 +898,9 @@ async def fetch_carts_node(state: ShoppingFlowState, agent_instance: Any) -> Sho
         session["step"] = "cart_selection"
 
         # フロントエンドにCartCandidate形式で送信
+        logger.info(f"[fetch_carts_node] Sending cart_options event with {len(frontend_cart_candidates)} cart candidates")
+        if frontend_cart_candidates:
+            logger.debug(f"[fetch_carts_node] First cart candidate: {frontend_cart_candidates[0].get('artifact_id')}")
         events.append({
             "type": "cart_options",
             "items": frontend_cart_candidates

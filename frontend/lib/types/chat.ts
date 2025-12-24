@@ -14,7 +14,7 @@ export type SSEEventType =
   | "cart_options"
   | "product_list"
   | "credential_provider_selection"
-  | "shipping_form_request"
+  | "shipping_form_request"  // @deprecated: Use A2UI surfaces instead
   | "payment_method_selection"
   | "webauthn_request"
   | "stepup_authentication_request"  // AP2完全準拠: 3D Secure 2.0認証リクエスト
@@ -89,7 +89,9 @@ export interface CredentialProviderSelectionEvent extends SSEEvent {
   providers: CredentialProvider[];
 }
 
-// 配送先フォームリクエストイベント
+/**
+ * @deprecated Use A2UI surfaces instead (a2ui_create_surface, a2ui_update_components, etc.)
+ */
 export interface ShippingFormRequestEvent extends SSEEvent {
   type: "shipping_form_request";
   form_schema: FormSchema;
@@ -216,6 +218,14 @@ export type ChatSSEEvent =
   | DoneEvent
   | ErrorEvent;
 
+// カート候補（AP2/A2A仕様準拠）
+export interface CartCandidate {
+  artifact_id: string;
+  artifact_name: string;
+  cart_mandate: any;  // AP2 CartMandate structure
+  product_images?: string[];
+}
+
 // チャットメッセージ
 export interface ChatMessage {
   id: string;
@@ -224,6 +234,7 @@ export interface ChatMessage {
   timestamp: Date;
   metadata?: {
     products?: Product[];
+    cart_candidates?: CartCandidate[];  // カート候補（CartCarousel用）
     mandate?: any;
     mandate_type?: string;
     payment_result?: {

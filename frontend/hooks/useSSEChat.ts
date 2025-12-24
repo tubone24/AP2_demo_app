@@ -15,7 +15,7 @@ import { ChatMessage, ChatSSEEvent, SignatureRequestEvent, Product } from "@/lib
 import { getAuthHeaders } from "@/lib/passkey";
 import type { A2UIComponent } from "@/lib/types/a2ui";
 import { applyDataModelOperation } from "@/lib/a2ui/jsonPointer";
-import { buildClientMessage, serializeClientMessage } from "@/lib/a2ui/userAction";
+import { buildUserAction, serializeUserAction } from "@/lib/a2ui/userAction";
 
 /**
  * A2UI v0.9 Surface State
@@ -39,7 +39,6 @@ export function useSSEChat() {
 
   // 新しいリッチコンテンツ用のstate
   const [credentialProviders, setCredentialProviders] = useState<any[]>([]);
-  const [shippingFormRequest, setShippingFormRequest] = useState<any | null>(null);
   const [paymentMethods, setPaymentMethods] = useState<any[]>([]);
   const [webauthnRequest, setWebauthnRequest] = useState<any | null>(null);
   const [paymentCompletedInfo, setPaymentCompletedInfo] = useState<any | null>(null);
@@ -72,10 +71,12 @@ export function useSSEChat() {
 
     // リッチコンテンツは即座にクリア（次の応答で上書きされる想定）
     setCredentialProviders([]);
-    setShippingFormRequest(null);
     setPaymentMethods([]);
     setWebauthnRequest(null);
     setPaymentCompletedInfo(null);
+
+    // A2UIサーフェスもクリア（新しいメッセージ送信時に前のUIを消す）
+    setA2UISurfaces(new Map());
 
     // AbortController作成
     const abortController = new AbortController();
@@ -192,24 +193,43 @@ export function useSSEChat() {
 
                   console.log("[agent_text_complete]", {
                     eventContent: completeMessage,
-                    length: completeMessage.length
+                    length: completeMessage.length,
+                    hasProducts: streamProducts.length > 0,
+                    hasCartCandidates: streamCartCandidates.length > 0
                   });
 
                   if (completeMessage.trim()) {
+                    // メタデータを構築（doneと同様）
+                    const completeMetadata: any = {};
+                    if (streamProducts.length > 0) {
+                      completeMetadata.products = streamProducts;
+                    }
+                    if (streamCartCandidates.length > 0) {
+                      completeMetadata.cart_candidates = streamCartCandidates;
+                    }
+                    if (paymentCompletedData) {
+                      completeMetadata.payment_result = paymentCompletedData;
+                    }
+
                     const agentMessage: ChatMessage = {
                       id: `agent-${Date.now()}`,
                       role: "agent",
                       content: completeMessage,
                       timestamp: new Date(),
+                      metadata: Object.keys(completeMetadata).length > 0 ? completeMetadata : undefined,
                     };
                     setMessages((prev) => [...prev, agentMessage]);
-                    console.log("[agent_text_complete] Message added to messages array");
+                    console.log("[agent_text_complete] Message added with metadata:", completeMetadata);
                   }
 
                   // currentAgentMessageをクリア（次のメッセージは新しい吹き出しに）
                   agentMessageContent = "";
                   setCurrentAgentMessage("");
                   isTyping = false;
+                  // メタデータもクリア（次のメッセージ用）
+                  streamProducts = [];
+                  streamCartCandidates = [];
+                  setCurrentCartCandidates([]);
                   break;
 
                 case "agent_text":
@@ -255,12 +275,19 @@ export function useSSEChat() {
                   // AP2/A2A仕様準拠：カート候補を表示
                   const cartEvent = event as any;
                   streamCartCandidates = cartEvent.items || [];
+                  console.log("[SSE cart_options] Received cart candidates:", {
+                    itemCount: streamCartCandidates.length,
+                    items: streamCartCandidates,
+                    firstItem: streamCartCandidates[0]
+                  });
                   // 新しいカート候補で直接置き換え（空配列を経由しない）
                   setCurrentProducts([]);
+                  console.log("[SSE cart_options] Setting currentCartCandidates with:", streamCartCandidates.length, "items");
                   setCurrentCartCandidates(streamCartCandidates);
                   agentMessageContent = "";
                   setCurrentAgentMessage(agentMessageContent);
                   hasReceivedContentEvent = true; // リッチコンテンツイベントを受信
+                  console.log("[SSE cart_options] hasReceivedContentEvent set to true");
                   break;
 
                 case "credential_provider_selection":
@@ -269,11 +296,7 @@ export function useSSEChat() {
                   setCredentialProviders(cpEvent.providers || []);
                   break;
 
-                case "shipping_form_request":
-                  // 配送先フォームリクエスト
-                  const shippingEvent = event as any;
-                  setShippingFormRequest(shippingEvent.form_schema);
-                  break;
+                // Note: shipping_form_request is deprecated, use A2UI surfaces instead
 
                 case "payment_method_selection":
                   // 支払い方法選択リクエスト
@@ -484,6 +507,7 @@ export function useSSEChat() {
                   console.log("[SSE Done Event] agentMessageContent:", agentMessageContent);
                   console.log("[SSE Done Event] paymentCompletedData:", paymentCompletedData);
                   console.log("[SSE Done Event] streamProducts:", streamProducts);
+                  console.log("[SSE Done Event] streamCartCandidates:", streamCartCandidates);
 
                   // agent_text_completeで既に確定されていない場合のみ追加
                   if (agentMessageContent.trim()) {
@@ -493,6 +517,12 @@ export function useSSEChat() {
                     // 商品リストがある場合
                     if (streamProducts.length > 0) {
                       metadata.products = streamProducts;
+                    }
+
+                    // カート候補がある場合（メッセージに含めて表示）
+                    if (streamCartCandidates.length > 0) {
+                      metadata.cart_candidates = streamCartCandidates;
+                      console.log("[SSE Done Event] Adding cart_candidates to metadata:", metadata.cart_candidates.length, "items");
                     }
 
                     // 決済完了情報がある場合
@@ -515,6 +545,12 @@ export function useSSEChat() {
                     console.log("[SSE Done Event] Final message:", agentMessage);
                     setMessages((prev) => [...prev, agentMessage]);
                   }
+
+                  // ストリーミング終了後、カート候補をクリア（メッセージに含まれているため）
+                  if (streamCartCandidates.length > 0) {
+                    setCurrentCartCandidates([]);
+                  }
+
                   setCurrentAgentMessage("");
                   setIsStreaming(false);
                   break;
@@ -586,42 +622,38 @@ export function useSSEChat() {
   }, []);
 
   /**
-   * A2UI v0.9: Send a userAction message with DataModel
+   * A2UI v0.9: Send a userAction message
    *
-   * Pure A2UI approach:
-   * - userAction.context contains PATH REFERENCES only
-   * - dataModel contains the actual data
-   * - Backend resolves paths against dataModel
+   * A2UI v0.9 Specification:
+   * - userAction.context contains RESOLVED VALUES (not path references)
+   * - Client resolves all values before sending
+   * - Server receives ready-to-use values
    *
-   * @param actionName - The action name (e.g., "submit_shipping", "select_payment_method")
+   * @param actionName - The action name (e.g., "submit_shipping", "select_credential_provider")
    * @param surfaceId - The surface ID where the action originated
    * @param sourceComponentId - The component ID that triggered the action
-   * @param contextPaths - Path references (e.g., { shipping: "/shipping" })
-   * @param dataModel - Current DataModel state with actual values
+   * @param context - Resolved context values (already resolved from paths/literals)
    * @param displayMessage - Optional message to display in chat UI
    */
   const sendUserAction = useCallback(async (
     actionName: string,
     surfaceId: string,
     sourceComponentId: string,
-    contextPaths: Record<string, string>,
-    dataModel: Record<string, any>,
+    context: Record<string, any>,
     displayMessage?: string
   ) => {
-    // Build A2UI v0.9 compliant message (userAction + dataModel)
-    const clientMessage = buildClientMessage(
+    // Build A2UI v0.9 compliant userAction with resolved context
+    const userAction = buildUserAction(
       actionName,
       surfaceId,
       sourceComponentId,
-      contextPaths,
-      dataModel
+      context
     );
-    const serialized = serializeClientMessage(clientMessage);
+    const serialized = serializeUserAction(userAction);
 
-    console.log("[A2UI v0.9] Sending userAction:", clientMessage.userAction);
-    console.log("[A2UI v0.9] With dataModel:", clientMessage.dataModel);
+    console.log("[A2UI v0.9] Sending userAction:", userAction.userAction);
 
-    // Send pure A2UI message
+    // Send A2UI message
     await sendMessage(serialized);
 
     // If a display message is provided, add it to the chat UI
@@ -646,6 +678,28 @@ export function useSSEChat() {
     return a2uiSurfaces.get(surfaceId);
   }, [a2uiSurfaces]);
 
+  // A2UI v0.9: ローカルでdataModelを更新する関数（two-way binding用）
+  const updateSurfaceDataModel = useCallback((surfaceId: string, path: string, value: any) => {
+    setA2UISurfaces(prev => {
+      const next = new Map(prev);
+      const surface = next.get(surfaceId);
+      if (surface) {
+        // Apply the update using JSON Pointer
+        const updatedDataModel = applyDataModelOperation(
+          surface.dataModel,
+          "replace",
+          path,
+          value
+        );
+        next.set(surfaceId, {
+          ...surface,
+          dataModel: updatedDataModel
+        });
+      }
+      return next;
+    });
+  }, []);
+
   return {
     messages,
     isStreaming,
@@ -655,7 +709,6 @@ export function useSSEChat() {
     currentCartCandidates,
     signatureRequest,
     credentialProviders,
-    shippingFormRequest,
     paymentMethods,
     webauthnRequest,
     paymentCompletedInfo,  // 決済完了情報
@@ -664,6 +717,7 @@ export function useSSEChat() {
     a2uiSurfaces,  // Map<surfaceId, A2UISurfaceState>
     getA2UISurface,  // 特定のサーフェスを取得
     clearA2UISurfaces,  // 全サーフェスをクリア
+    updateSurfaceDataModel,  // ローカルdataModel更新（two-way binding用）
     // 関数群
     sendMessage,
     sendUserAction,  // A2UI v0.9: userActionメッセージ送信
