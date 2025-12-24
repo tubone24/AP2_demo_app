@@ -18,7 +18,6 @@ import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
 import {
   A2UIComponent,
-  A2UIComponentType,
   StringOrPath,
   BooleanOrPath,
   NumberOrPath,
@@ -71,31 +70,46 @@ function resolvePath(path: string, dataModel: Record<string, any>): any {
 
 /**
  * Resolve StringOrPath to actual string value
+ * v0.9: プレーン文字列とオブジェクト形式の両方をサポート
  */
 function resolveString(value: StringOrPath | undefined, dataModel: Record<string, any>): string {
   if (!value) return "";
-  if (value.literalString !== undefined) return value.literalString;
-  if (value.path) return String(resolvePath(value.path, dataModel) ?? "");
+  // v0.9: プレーン文字列の場合はそのまま返す
+  if (typeof value === "string") return value;
+  // オブジェクト形式の場合、pathで解決
+  if (typeof value === "object" && value.path) {
+    return String(resolvePath(value.path, dataModel) ?? "");
+  }
   return "";
 }
 
 /**
  * Resolve BooleanOrPath to actual boolean value
+ * v0.9: プレーンbooleanとオブジェクト形式の両方をサポート
  */
 function resolveBoolean(value: BooleanOrPath | undefined, dataModel: Record<string, any>): boolean {
-  if (!value) return false;
-  if (value.literalBoolean !== undefined) return value.literalBoolean;
-  if (value.path) return Boolean(resolvePath(value.path, dataModel));
+  if (value === undefined) return false;
+  // v0.9: プレーンbooleanの場合はそのまま返す
+  if (typeof value === "boolean") return value;
+  // オブジェクト形式の場合、pathで解決
+  if (typeof value === "object" && value.path) {
+    return Boolean(resolvePath(value.path, dataModel));
+  }
   return false;
 }
 
 /**
  * Resolve NumberOrPath to actual number value
+ * v0.9: プレーン数値とオブジェクト形式の両方をサポート
  */
 function resolveNumber(value: NumberOrPath | undefined, dataModel: Record<string, any>): number {
-  if (!value) return 0;
-  if (value.literalNumber !== undefined) return value.literalNumber;
-  if (value.path) return Number(resolvePath(value.path, dataModel) ?? 0);
+  if (value === undefined) return 0;
+  // v0.9: プレーン数値の場合はそのまま返す
+  if (typeof value === "number") return value;
+  // オブジェクト形式の場合、pathで解決
+  if (typeof value === "object" && value.path) {
+    return Number(resolvePath(value.path, dataModel) ?? 0);
+  }
   return 0;
 }
 
@@ -118,8 +132,6 @@ function ComponentRenderer({
   onDataModelChange,
   onAction,
 }: ComponentRendererProps): React.ReactElement | null {
-  const { id, component: comp } = component;
-
   // Helper to render child components by ID
   const renderChild = (childId: string) => {
     const child = componentsMap.get(childId);
@@ -137,8 +149,8 @@ function ComponentRenderer({
   };
 
   // Text Component
-  if ("Text" in comp) {
-    const { text, styleHint } = comp.Text;
+  if (component.component === "Text") {
+    const { text, styleHint } = component;
     const textValue = resolveString(text, dataModel);
 
     const styleMap: Record<string, string> = {
@@ -158,15 +170,15 @@ function ComponentRenderer({
   }
 
   // TextField Component
-  if ("TextField" in comp) {
-    const { label, text, placeholder, textFieldType, disabled } = comp.TextField;
+  if (component.component === "TextField") {
+    const { id, label, text, placeholder, textFieldType, disabled } = component;
     const labelValue = resolveString(label, dataModel);
     const textValue = resolveString(text, dataModel);
     const placeholderValue = resolveString(placeholder, dataModel);
     const isDisabled = resolveBoolean(disabled, dataModel);
 
     // Extract path for two-way binding
-    const dataPath = text.path;
+    const dataPath = typeof text === "object" && text.path ? text.path : undefined;
 
     // Map A2UI textFieldType to HTML input type
     const inputTypeMap: Record<string, string> = {
@@ -199,8 +211,8 @@ function ComponentRenderer({
   }
 
   // Button Component
-  if ("Button" in comp) {
-    const { child, primary, disabled, action } = comp.Button;
+  if (component.component === "Button") {
+    const { id, child, primary, disabled, action } = component;
     const isDisabled = resolveBoolean(disabled, dataModel);
 
     // Render button child (usually a Text component)
@@ -222,12 +234,12 @@ function ComponentRenderer({
   }
 
   // CheckBox Component (using Switch as fallback)
-  if ("CheckBox" in comp) {
-    const { label, checked, disabled } = comp.CheckBox;
+  if (component.component === "CheckBox") {
+    const { id, label, checked, disabled } = component;
     const labelValue = resolveString(label, dataModel);
     const isChecked = resolveBoolean(checked, dataModel);
     const isDisabled = resolveBoolean(disabled, dataModel);
-    const dataPath = checked.path;
+    const dataPath = typeof checked === "object" && checked.path ? checked.path : undefined;
 
     return (
       <div className="flex items-center space-x-2">
@@ -247,8 +259,8 @@ function ComponentRenderer({
   }
 
   // Row Component (horizontal layout)
-  if ("Row" in comp) {
-    const { children, alignment, distribution, gap } = comp.Row;
+  if (component.component === "Row") {
+    const { children, alignment, distribution, gap } = component;
 
     const alignmentMap: Record<string, string> = {
       start: "items-start",
@@ -277,8 +289,8 @@ function ComponentRenderer({
   }
 
   // Column Component (vertical layout)
-  if ("Column" in comp) {
-    const { children, alignment, distribution, gap } = comp.Column;
+  if (component.component === "Column") {
+    const { children, alignment, distribution, gap } = component;
 
     const alignmentMap: Record<string, string> = {
       start: "items-start",
@@ -307,8 +319,8 @@ function ComponentRenderer({
   }
 
   // Card Component
-  if ("Card" in comp) {
-    const { child, action } = comp.Card;
+  if (component.component === "Card") {
+    const { id, child, action } = component;
 
     return (
       <Card
@@ -327,13 +339,13 @@ function ComponentRenderer({
   }
 
   // Divider Component
-  if ("Divider" in comp) {
+  if (component.component === "Divider") {
     return <Separator className="my-4" />;
   }
 
   // Image Component
-  if ("Image" in comp) {
-    const { url, fit, altText } = comp.Image;
+  if (component.component === "Image") {
+    const { url, fit, altText } = component;
     const urlValue = resolveString(url, dataModel);
     const altValue = resolveString(altText, dataModel);
 
@@ -353,8 +365,63 @@ function ComponentRenderer({
     );
   }
 
+  // ChoicePicker Component (select/radio group)
+  if (component.component === "ChoicePicker") {
+    const { id, label, options, selectedId, multiSelect, disabled } = component as any;
+    const labelValue = resolveString(label, dataModel);
+    const selectedValue = resolveString(selectedId, dataModel);
+    const isDisabled = resolveBoolean(disabled, dataModel);
+    const dataPath = typeof selectedId === "object" && selectedId.path ? selectedId.path : undefined;
+
+    return (
+      <div className="space-y-2">
+        {labelValue && <Label>{labelValue}</Label>}
+        <div className="space-y-2">
+          {options?.map((option: any) => {
+            const optionLabel = resolveString(option.label, dataModel);
+            const optionDesc = option.description ? resolveString(option.description, dataModel) : "";
+            const isSelected = selectedValue === option.id;
+
+            return (
+              <div
+                key={option.id}
+                className={`
+                  p-3 rounded-md border cursor-pointer transition-colors
+                  ${isSelected ? "border-primary bg-primary/10" : "border-muted hover:border-primary/50"}
+                  ${isDisabled ? "opacity-50 cursor-not-allowed" : ""}
+                `}
+                onClick={() => {
+                  if (!isDisabled && dataPath) {
+                    onDataModelChange(dataPath, option.id);
+                  }
+                }}
+              >
+                <div className="flex items-center gap-2">
+                  <div className={`
+                    w-4 h-4 rounded-full border-2 flex items-center justify-center
+                    ${isSelected ? "border-primary" : "border-muted-foreground"}
+                  `}>
+                    {isSelected && (
+                      <div className="w-2 h-2 rounded-full bg-primary" />
+                    )}
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium">{optionLabel}</p>
+                    {optionDesc && (
+                      <p className="text-xs text-muted-foreground">{optionDesc}</p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
   // Unsupported component - log and skip
-  console.warn(`[A2UI] Unsupported component type:`, Object.keys(comp)[0]);
+  console.warn(`[A2UI] Unsupported component type:`, component.component);
   return null;
 }
 

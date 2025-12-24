@@ -51,30 +51,33 @@ def generate_a2ui_messages(
 
     Returns:
         List of SSE event dictionaries in order:
-        1. createSurface
-        2. updateComponents
-        3. updateDataModel
+        1. createSurface (v0.9 envelope format)
+        2. updateComponents (v0.9 envelope format)
+        3. updateDataModel (v0.9 envelope format)
     """
     return [
-        # 1. Create Surface
+        # 1. Create Surface (v0.9 envelope: {"createSurface": {...}})
         {
-            "type": "a2ui_create_surface",
-            "surface_id": surface_id,
-            "catalog_id": catalog_id
+            "createSurface": {
+                "surfaceId": surface_id,
+                "catalogId": catalog_id
+            }
         },
-        # 2. Update Components
+        # 2. Update Components (v0.9 envelope: {"updateComponents": {...}})
         {
-            "type": "a2ui_update_components",
-            "surface_id": surface_id,
-            "components": components
+            "updateComponents": {
+                "surfaceId": surface_id,
+                "components": components
+            }
         },
-        # 3. Update Data Model
+        # 3. Update Data Model (v0.9 envelope: {"updateDataModel": {...}})
         {
-            "type": "a2ui_update_data_model",
-            "surface_id": surface_id,
-            "path": "/",
-            "op": "replace",
-            "value": data_model
+            "updateDataModel": {
+                "surfaceId": surface_id,
+                "path": "/",
+                "op": "replace",
+                "value": data_model
+            }
         }
     ]
 
@@ -87,11 +90,12 @@ def generate_delete_surface_message(surface_id: str) -> Dict[str, Any]:
         surface_id: Surface ID to delete
 
     Returns:
-        SSE event dictionary for deleteSurface
+        SSE event dictionary for deleteSurface (v0.9 envelope format)
     """
     return {
-        "type": "a2ui_delete_surface",
-        "surface_id": surface_id
+        "deleteSurface": {
+            "surfaceId": surface_id
+        }
     }
 
 
@@ -128,49 +132,44 @@ def build_shipping_form_a2ui(
             options = [
                 {
                     "id": opt["value"],
-                    "label": {"literalString": opt["label"]}
+                    "label": opt["label"]  # v0.9: literal values are plain
                 }
                 for opt in field["options"]
             ]
             field_components.append({
                 "id": field_id,
-                "component": {
-                    "ChoicePicker": {
-                        "label": {"literalString": field["label"] + (" *" if field.get("required") else "")},
-                        "options": options,
-                        "selectedId": {"path": f"/shipping/{field['name']}"},
-                        "multiSelect": False
-                    }
-                }
+                "component": "ChoicePicker",  # v0.9: component type as string
+                "label": field["label"] + (" *" if field.get("required") else ""),  # v0.9: literal string
+                "options": options,
+                "selectedId": {"path": f"/shipping/{field['name']}"},  # v0.9: path reference as object
+                "multiSelect": False
             })
         else:
             # Use TextField for text inputs
-            text_field_type = "shortText"
+            usage_hint = "shortText"  # v0.9: textFieldType → usageHint
             if field.get("type") == "email":
-                text_field_type = "email"
+                usage_hint = "email"
             elif field.get("type") == "phone":
-                text_field_type = "phone"
+                usage_hint = "phone"
             elif field.get("type") == "number":
-                text_field_type = "number"
+                usage_hint = "number"
 
+            # v0.9: flattened component structure
             component_def = {
-                "TextField": {
-                    "label": {"literalString": field["label"] + (" *" if field.get("required") else "")},
-                    "text": {"path": f"/shipping/{field['name']}"},
-                    "textFieldType": text_field_type
-                }
+                "id": field_id,
+                "component": "TextField",  # v0.9: component type as string
+                "label": field["label"] + (" *" if field.get("required") else ""),  # v0.9: literal string
+                "text": {"path": f"/shipping/{field['name']}"},  # v0.9: path reference as object
+                "usageHint": usage_hint  # v0.9: textFieldType → usageHint
             }
 
             if field.get("placeholder"):
-                component_def["TextField"]["placeholder"] = {"literalString": field["placeholder"]}
+                component_def["placeholder"] = field["placeholder"]  # v0.9: literal string
 
             # Note: TextField.required is NOT in A2UI v0.9 standard schema
             # Required indicator is shown in label text instead (e.g., "Name *")
 
-            field_components.append({
-                "id": field_id,
-                "component": component_def
-            })
+            field_components.append(component_def)
 
     # Build submit button
     submit_button_text_id = _generate_id("submit-text")
@@ -181,49 +180,37 @@ def build_shipping_form_a2ui(
     # Root component must have id="root" for A2UI v0.9 auto-rendering
 
     components = [
-        # Card wrapper (root component)
+        # Card wrapper (root component) - v0.9 flattened format
         {
             "id": "root",
-            "component": {
-                "Card": {
-                    "child": column_id
-                }
-            }
+            "component": "Card",  # v0.9: component type as string
+            "child": column_id
         },
-        # Column layout
+        # Column layout - v0.9 flattened format
         {
             "id": column_id,
-            "component": {
-                "Column": {
-                    "children": field_ids + [submit_button_id],
-                    "distribution": "start",
-                    "gap": 12
-                }
-            }
+            "component": "Column",  # v0.9: component type as string
+            "children": field_ids + [submit_button_id],
+            "distribution": "start",
+            "gap": 12
         },
-        # Submit button text
+        # Submit button text - v0.9 flattened format
         {
             "id": submit_button_text_id,
-            "component": {
-                "Text": {
-                    "text": {"literalString": "配送先を確定"}
-                }
-            }
+            "component": "Text",  # v0.9: component type as string
+            "text": "配送先を確定"  # v0.9: literal string
         },
-        # Submit button
+        # Submit button - v0.9 flattened format
         {
             "id": submit_button_id,
-            "component": {
-                "Button": {
-                    "child": submit_button_text_id,
-                    "primary": True,
-                    "disabled": {"path": "/formInvalid"},
-                    "action": {
-                        "name": "submit_shipping",
-                        "context": {
-                            "shipping": {"path": "/shipping"}
-                        }
-                    }
+            "component": "Button",  # v0.9: component type as string
+            "child": submit_button_text_id,
+            "primary": True,
+            "disabled": {"path": "/formInvalid"},  # v0.9: path reference as object
+            "action": {
+                "name": "submit_shipping",
+                "context": {
+                    "shipping": {"path": "/shipping"}  # v0.9: path reference as object
                 }
             }
         }
@@ -313,83 +300,62 @@ def build_cp_selection_a2ui(
         card_ids.append(card_id)
 
         provider_components.extend([
-            # Card
+            # Card - v0.9 flattened format
             {
                 "id": card_id,
-                "component": {
-                    "Card": {
-                        "child": row_id,
-                        "action": {
-                            "name": "select_credential_provider",
-                            "context": {
-                                "index": {"literalNumber": index + 1},
-                                "providerId": {"literalString": provider["id"]}
-                            }
-                        }
+                "component": "Card",  # v0.9: component type as string
+                "child": row_id,
+                "action": {
+                    "name": "select_credential_provider",
+                    "context": {
+                        "index": index + 1,  # v0.9: literal number
+                        "providerId": provider["id"]  # v0.9: literal string
                     }
                 }
             },
-            # Row layout
+            # Row layout - v0.9 flattened format
             {
                 "id": row_id,
-                "component": {
-                    "Row": {
-                        "children": [index_id, info_col_id],
-                        "alignment": "center",
-                        "gap": 12
-                    }
-                }
+                "component": "Row",  # v0.9: component type as string
+                "children": [index_id, info_col_id],
+                "alignment": "center",
+                "gap": 12
             },
-            # Index number
+            # Index number - v0.9 flattened format
             {
                 "id": index_id,
-                "component": {
-                    "Text": {
-                        "text": {"literalString": str(index + 1)},
-                        "styleHint": "h2"
-                    }
-                }
+                "component": "Text",  # v0.9: component type as string
+                "text": str(index + 1),  # v0.9: literal string
+                "styleHint": "h2"
             },
-            # Info column
+            # Info column - v0.9 flattened format
             {
                 "id": info_col_id,
-                "component": {
-                    "Column": {
-                        "children": [name_id, desc_id, methods_id],
-                        "distribution": "start",
-                        "gap": 4
-                    }
-                }
+                "component": "Column",  # v0.9: component type as string
+                "children": [name_id, desc_id, methods_id],
+                "distribution": "start",
+                "gap": 4
             },
-            # Provider name
+            # Provider name - v0.9 flattened format
             {
                 "id": name_id,
-                "component": {
-                    "Text": {
-                        "text": {"literalString": provider["name"]},
-                        "styleHint": "h4"
-                    }
-                }
+                "component": "Text",  # v0.9: component type as string
+                "text": provider["name"],  # v0.9: literal string
+                "styleHint": "h4"
             },
-            # Description
+            # Description - v0.9 flattened format
             {
                 "id": desc_id,
-                "component": {
-                    "Text": {
-                        "text": {"literalString": provider.get("description", "")},
-                        "styleHint": "body"
-                    }
-                }
+                "component": "Text",  # v0.9: component type as string
+                "text": provider.get("description", ""),  # v0.9: literal string
+                "styleHint": "body"
             },
-            # Supported methods
+            # Supported methods - v0.9 flattened format
             {
                 "id": methods_id,
-                "component": {
-                    "Text": {
-                        "text": {"literalString": f"対応: {', '.join(provider.get('supported_methods', []))}"},
-                        "styleHint": "caption"
-                    }
-                }
+                "component": "Text",  # v0.9: component type as string
+                "text": f"対応: {', '.join(provider.get('supported_methods', []))}",  # v0.9: literal string
+                "styleHint": "caption"
             }
         ])
 
@@ -397,15 +363,13 @@ def build_cp_selection_a2ui(
     # Root component must have id="root" for A2UI v0.9 auto-rendering
 
     components = [
+        # Root Column - v0.9 flattened format
         {
             "id": "root",
-            "component": {
-                "Column": {
-                    "children": card_ids,
-                    "distribution": "start",
-                    "gap": 8
-                }
-            }
+            "component": "Column",  # v0.9: component type as string
+            "children": card_ids,
+            "distribution": "start",
+            "gap": 8
         }
     ] + provider_components
 
@@ -495,73 +459,55 @@ def build_payment_method_selection_a2ui(
         type_text = "クレジットカード" if method.get("type") == "card" else method.get("type", "")
 
         method_components.extend([
-            # Card
+            # Card - v0.9 flattened format
             {
                 "id": card_id,
-                "component": {
-                    "Card": {
-                        "child": row_id,
-                        "action": {
-                            "name": "select_payment_method",
-                            "context": {
-                                "index": {"literalNumber": index + 1},
-                                "paymentMethodId": {"literalString": method["id"]}
-                            }
-                        }
+                "component": "Card",  # v0.9: component type as string
+                "child": row_id,
+                "action": {
+                    "name": "select_payment_method",
+                    "context": {
+                        "index": index + 1,  # v0.9: literal number
+                        "paymentMethodId": method["id"]  # v0.9: literal string
                     }
                 }
             },
-            # Row layout
+            # Row layout - v0.9 flattened format
             {
                 "id": row_id,
-                "component": {
-                    "Row": {
-                        "children": [index_id, info_col_id],
-                        "alignment": "center",
-                        "gap": 12
-                    }
-                }
+                "component": "Row",  # v0.9: component type as string
+                "children": [index_id, info_col_id],
+                "alignment": "center",
+                "gap": 12
             },
-            # Index number
+            # Index number - v0.9 flattened format
             {
                 "id": index_id,
-                "component": {
-                    "Text": {
-                        "text": {"literalString": str(index + 1)},
-                        "styleHint": "h2"
-                    }
-                }
+                "component": "Text",  # v0.9: component type as string
+                "text": str(index + 1),  # v0.9: literal string
+                "styleHint": "h2"
             },
-            # Info column
+            # Info column - v0.9 flattened format
             {
                 "id": info_col_id,
-                "component": {
-                    "Column": {
-                        "children": [brand_id, type_id],
-                        "distribution": "start",
-                        "gap": 4
-                    }
-                }
+                "component": "Column",  # v0.9: component type as string
+                "children": [brand_id, type_id],
+                "distribution": "start",
+                "gap": 4
             },
-            # Brand and last4
+            # Brand and last4 - v0.9 flattened format
             {
                 "id": brand_id,
-                "component": {
-                    "Text": {
-                        "text": {"literalString": display_text},
-                        "styleHint": "h4"
-                    }
-                }
+                "component": "Text",  # v0.9: component type as string
+                "text": display_text,  # v0.9: literal string
+                "styleHint": "h4"
             },
-            # Type
+            # Type - v0.9 flattened format
             {
                 "id": type_id,
-                "component": {
-                    "Text": {
-                        "text": {"literalString": type_text},
-                        "styleHint": "caption"
-                    }
-                }
+                "component": "Text",  # v0.9: component type as string
+                "text": type_text,  # v0.9: literal string
+                "styleHint": "caption"
             }
         ])
 
@@ -569,15 +515,13 @@ def build_payment_method_selection_a2ui(
     # Root component must have id="root" for A2UI v0.9 auto-rendering
 
     components = [
+        # Root Column - v0.9 flattened format
         {
             "id": "root",
-            "component": {
-                "Column": {
-                    "children": card_ids,
-                    "distribution": "start",
-                    "gap": 8
-                }
-            }
+            "component": "Column",  # v0.9: component type as string
+            "children": card_ids,
+            "distribution": "start",
+            "gap": 8
         }
     ] + method_components
 
@@ -673,102 +617,75 @@ def build_product_carousel_a2ui(
         inventory_count = product.get("inventory_count", 0)
 
         product_components.extend([
-            # Card
+            # Card - v0.9 flattened format
             {
                 "id": card_id,
-                "component": {
-                    "Card": {
-                        "child": col_id
-                    }
-                }
+                "component": "Card",  # v0.9: component type as string
+                "child": col_id
             },
-            # Column layout
+            # Column layout - v0.9 flattened format
             {
                 "id": col_id,
-                "component": {
-                    "Column": {
-                        "children": [image_id, name_id, desc_id, price_id, inventory_id, button_id],
-                        "distribution": "start",
-                        "gap": 8
-                    }
-                }
+                "component": "Column",  # v0.9: component type as string
+                "children": [image_id, name_id, desc_id, price_id, inventory_id, button_id],
+                "distribution": "start",
+                "gap": 8
             },
-            # Product image
+            # Product image - v0.9 flattened format
             {
                 "id": image_id,
-                "component": {
-                    "Image": {
-                        "url": {"literalString": image_url},
-                        "fit": "contain",
-                        "usageHint": "thumbnail",
-                        "altText": {"literalString": product.get("name", "")}
-                    }
-                }
+                "component": "Image",  # v0.9: component type as string
+                "url": image_url,  # v0.9: literal string
+                "fit": "contain",
+                "usageHint": "thumbnail",
+                "altText": product.get("name", "")  # v0.9: literal string
             },
-            # Product name
+            # Product name - v0.9 flattened format
             {
                 "id": name_id,
-                "component": {
-                    "Text": {
-                        "text": {"literalString": product.get("name", "")},
-                        "styleHint": "h4"
-                    }
-                }
+                "component": "Text",  # v0.9: component type as string
+                "text": product.get("name", ""),  # v0.9: literal string
+                "styleHint": "h4"
             },
-            # Description
+            # Description - v0.9 flattened format
             {
                 "id": desc_id,
-                "component": {
-                    "Text": {
-                        "text": {"literalString": product.get("description", "")[:100]},
-                        "styleHint": "caption"
-                    }
-                }
+                "component": "Text",  # v0.9: component type as string
+                "text": product.get("description", "")[:100],  # v0.9: literal string
+                "styleHint": "caption"
             },
-            # Price
+            # Price - v0.9 flattened format
             {
                 "id": price_id,
-                "component": {
-                    "Text": {
-                        "text": {"literalString": price_text},
-                        "styleHint": "h3"
-                    }
-                }
+                "component": "Text",  # v0.9: component type as string
+                "text": price_text,  # v0.9: literal string
+                "styleHint": "h3"
             },
-            # Inventory
+            # Inventory - v0.9 flattened format
             {
                 "id": inventory_id,
-                "component": {
-                    "Text": {
-                        "text": {"literalString": f"在庫: {inventory_count}点"},
-                        "styleHint": "caption"
-                    }
-                }
+                "component": "Text",  # v0.9: component type as string
+                "text": f"在庫: {inventory_count}点",  # v0.9: literal string
+                "styleHint": "caption"
             },
-            # Button text
+            # Button text - v0.9 flattened format
             {
                 "id": button_text_id,
-                "component": {
-                    "Text": {
-                        "text": {"literalString": "カートに追加"}
-                    }
-                }
+                "component": "Text",  # v0.9: component type as string
+                "text": "カートに追加"  # v0.9: literal string
             },
-            # Add to cart button
+            # Add to cart button - v0.9 flattened format
             {
                 "id": button_id,
-                "component": {
-                    "Button": {
-                        "child": button_text_id,
-                        "primary": True,
-                        "disabled": {"literalBoolean": inventory_count == 0},
-                        "action": {
-                            "name": "add_to_cart",
-                            "context": {
-                                "productId": {"literalString": product.get("id", "")},
-                                "sku": {"literalString": product.get("sku", "")}
-                            }
-                        }
+                "component": "Button",  # v0.9: component type as string
+                "child": button_text_id,
+                "primary": True,
+                "disabled": inventory_count == 0,  # v0.9: literal boolean
+                "action": {
+                    "name": "add_to_cart",
+                    "context": {
+                        "productId": product.get("id", ""),  # v0.9: literal string
+                        "sku": product.get("sku", "")  # v0.9: literal string
                     }
                 }
             }
@@ -778,16 +695,14 @@ def build_product_carousel_a2ui(
     # Root component must have id="root" for A2UI v0.9 auto-rendering
 
     components = [
+        # Root List - v0.9 flattened format
         {
             "id": "root",
-            "component": {
-                "List": {
-                    "children": card_ids,
-                    "dataPath": "/products",
-                    "direction": "horizontal",
-                    "gap": 16
-                }
-            }
+            "component": "List",  # v0.9: component type as string
+            "children": card_ids,
+            "dataPath": "/products",
+            "direction": "horizontal",
+            "gap": 16
         }
     ] + product_components
 
@@ -893,44 +808,35 @@ def build_cart_details_a2ui(
     header_desc_id = _generate_id("cart-desc")
 
     components.extend([
+        # Header Row - v0.9 flattened format
         {
             "id": header_row_id,
-            "component": {
-                "Row": {
-                    "children": [header_icon_id, header_title_id],
-                    "alignment": "center",
-                    "gap": 8
-                }
-            }
+            "component": "Row",  # v0.9: component type as string
+            "children": [header_icon_id, header_title_id],
+            "alignment": "center",
+            "gap": 8
         },
+        # Header Icon - v0.9 flattened format
         {
             "id": header_icon_id,
-            "component": {
-                "Icon": {
-                    "name": "package"
-                }
-            }
+            "component": "Icon",  # v0.9: component type as string
+            "name": "package"
         },
+        # Header Title - v0.9 flattened format
         {
             "id": header_title_id,
-            "component": {
-                "Text": {
-                    "text": {"literalString": cart_name},
-                    "styleHint": "h2"
-                }
-            }
+            "component": "Text",  # v0.9: component type as string
+            "text": cart_name,  # v0.9: literal string
+            "styleHint": "h2"
         }
     ])
 
     if cart_description:
         components.append({
             "id": header_desc_id,
-            "component": {
-                "Text": {
-                    "text": {"literalString": cart_description},
-                    "styleHint": "body"
-                }
-            }
+            "component": "Text",  # v0.9: component type as string
+            "text": cart_description,  # v0.9: literal string
+            "styleHint": "body"
         })
 
     # Product list section
@@ -955,72 +861,58 @@ def build_cart_details_a2ui(
         quantity = raw_item.get("quantity", 1)
 
         components.extend([
+            # Item Card - v0.9 flattened format
             {
                 "id": item_card_id,
-                "component": {
-                    "Card": {
-                        "child": item_row_id
-                    }
-                }
+                "component": "Card",  # v0.9: component type as string
+                "child": item_row_id
             },
+            # Item Row - v0.9 flattened format
             {
                 "id": item_row_id,
-                "component": {
-                    "Row": {
-                        "children": [item_info_col_id, item_price_id],
-                        "alignment": "center",
-                        "distribution": "spaceBetween"
-                    }
-                }
+                "component": "Row",  # v0.9: component type as string
+                "children": [item_info_col_id, item_price_id],
+                "alignment": "center",
+                "distribution": "spaceBetween"
             },
+            # Item Info Column - v0.9 flattened format
             {
                 "id": item_info_col_id,
-                "component": {
-                    "Column": {
-                        "children": [item_name_id],
-                        "distribution": "start"
-                    }
-                }
+                "component": "Column",  # v0.9: component type as string
+                "children": [item_name_id],
+                "distribution": "start"
             },
+            # Item Name - v0.9 flattened format
             {
                 "id": item_name_id,
-                "component": {
-                    "Text": {
-                        "text": {"literalString": item.get("label", "")},
-                        "styleHint": "h4"
-                    }
-                }
+                "component": "Text",  # v0.9: component type as string
+                "text": item.get("label", ""),  # v0.9: literal string
+                "styleHint": "h4"
             },
+            # Item Price - v0.9 flattened format
             {
                 "id": item_price_id,
-                "component": {
-                    "Text": {
-                        "text": {"literalString": f"¥{item.get('amount', {}).get('value', 0):,}"},
-                        "styleHint": "h4"
-                    }
-                }
+                "component": "Text",  # v0.9: component type as string
+                "text": f"¥{item.get('amount', {}).get('value', 0):,}",  # v0.9: literal string
+                "styleHint": "h4"
             }
         ])
 
     components.extend([
+        # Products Header - v0.9 flattened format
         {
             "id": products_header_id,
-            "component": {
-                "Text": {
-                    "text": {"literalString": f"商品一覧（{len(product_items)}点）"},
-                    "styleHint": "h4"
-                }
-            }
+            "component": "Text",  # v0.9: component type as string
+            "text": f"商品一覧（{len(product_items)}点）",  # v0.9: literal string
+            "styleHint": "h4"
         },
+        # Products List - v0.9 flattened format
         {
             "id": products_list_id,
-            "component": {
-                "Column": {
-                    "children": product_card_ids,
-                    "distribution": "start",
-                    "gap": 8
-                }
-            }
+            "component": "Column",  # v0.9: component type as string
+            "children": product_card_ids,
+            "distribution": "start",
+            "gap": 8
         }
     ])
 
@@ -1028,11 +920,8 @@ def build_cart_details_a2ui(
     divider1_id = _generate_id("divider1")
     components.append({
         "id": divider1_id,
-        "component": {
-            "Divider": {
-                "orientation": "horizontal"
-            }
-        }
+        "component": "Divider",  # v0.9: component type as string
+        "orientation": "horizontal"
     })
 
     # Price breakdown
@@ -1047,32 +936,26 @@ def build_cart_details_a2ui(
     price_children = [subtotal_row_id]
 
     components.extend([
+        # Subtotal Row - v0.9 flattened format
         {
             "id": subtotal_row_id,
-            "component": {
-                "Row": {
-                    "children": [subtotal_label_id, subtotal_value_id],
-                    "distribution": "spaceBetween"
-                }
-            }
+            "component": "Row",  # v0.9: component type as string
+            "children": [subtotal_label_id, subtotal_value_id],
+            "distribution": "spaceBetween"
         },
+        # Subtotal Label - v0.9 flattened format
         {
             "id": subtotal_label_id,
-            "component": {
-                "Text": {
-                    "text": {"literalString": "小計"},
-                    "styleHint": "body"
-                }
-            }
+            "component": "Text",  # v0.9: component type as string
+            "text": "小計",  # v0.9: literal string
+            "styleHint": "body"
         },
+        # Subtotal Value - v0.9 flattened format
         {
             "id": subtotal_value_id,
-            "component": {
-                "Text": {
-                    "text": {"literalString": f"¥{subtotal:,}"},
-                    "styleHint": "body"
-                }
-            }
+            "component": "Text",  # v0.9: component type as string
+            "text": f"¥{subtotal:,}",  # v0.9: literal string
+            "styleHint": "body"
         }
     ])
 
@@ -1084,32 +967,26 @@ def build_cart_details_a2ui(
         price_children.append(tax_row_id)
 
         components.extend([
+            # Tax Row - v0.9 flattened format
             {
                 "id": tax_row_id,
-                "component": {
-                    "Row": {
-                        "children": [tax_label_id, tax_value_id],
-                        "distribution": "spaceBetween"
-                    }
-                }
+                "component": "Row",  # v0.9: component type as string
+                "children": [tax_label_id, tax_value_id],
+                "distribution": "spaceBetween"
             },
+            # Tax Label - v0.9 flattened format
             {
                 "id": tax_label_id,
-                "component": {
-                    "Text": {
-                        "text": {"literalString": tax_item.get("label", "税")},
-                        "styleHint": "body"
-                    }
-                }
+                "component": "Text",  # v0.9: component type as string
+                "text": tax_item.get("label", "税"),  # v0.9: literal string
+                "styleHint": "body"
             },
+            # Tax Value - v0.9 flattened format
             {
                 "id": tax_value_id,
-                "component": {
-                    "Text": {
-                        "text": {"literalString": f"¥{tax_item.get('amount', {}).get('value', 0):,}"},
-                        "styleHint": "body"
-                    }
-                }
+                "component": "Text",  # v0.9: component type as string
+                "text": f"¥{tax_item.get('amount', {}).get('value', 0):,}",  # v0.9: literal string
+                "styleHint": "body"
             }
         ])
 
@@ -1121,32 +998,26 @@ def build_cart_details_a2ui(
         price_children.append(shipping_row_id)
 
         components.extend([
+            # Shipping Row - v0.9 flattened format
             {
                 "id": shipping_row_id,
-                "component": {
-                    "Row": {
-                        "children": [shipping_label_id, shipping_value_id],
-                        "distribution": "spaceBetween"
-                    }
-                }
+                "component": "Row",  # v0.9: component type as string
+                "children": [shipping_label_id, shipping_value_id],
+                "distribution": "spaceBetween"
             },
+            # Shipping Label - v0.9 flattened format
             {
                 "id": shipping_label_id,
-                "component": {
-                    "Text": {
-                        "text": {"literalString": shipping_item.get("label", "送料")},
-                        "styleHint": "body"
-                    }
-                }
+                "component": "Text",  # v0.9: component type as string
+                "text": shipping_item.get("label", "送料"),  # v0.9: literal string
+                "styleHint": "body"
             },
+            # Shipping Value - v0.9 flattened format
             {
                 "id": shipping_value_id,
-                "component": {
-                    "Text": {
-                        "text": {"literalString": f"¥{shipping_item.get('amount', {}).get('value', 0):,}"},
-                        "styleHint": "body"
-                    }
-                }
+                "component": "Text",  # v0.9: component type as string
+                "text": f"¥{shipping_item.get('amount', {}).get('value', 0):,}",  # v0.9: literal string
+                "styleHint": "body"
             }
         ])
 
@@ -1155,52 +1026,41 @@ def build_cart_details_a2ui(
     price_children.extend([divider2_id, total_row_id])
 
     components.extend([
+        # Divider 2 - v0.9 flattened format
         {
             "id": divider2_id,
-            "component": {
-                "Divider": {
-                    "orientation": "horizontal"
-                }
-            }
+            "component": "Divider",  # v0.9: component type as string
+            "orientation": "horizontal"
         },
+        # Total Row - v0.9 flattened format
         {
             "id": total_row_id,
-            "component": {
-                "Row": {
-                    "children": [total_label_id, total_value_id],
-                    "distribution": "spaceBetween"
-                }
-            }
+            "component": "Row",  # v0.9: component type as string
+            "children": [total_label_id, total_value_id],
+            "distribution": "spaceBetween"
         },
+        # Total Label - v0.9 flattened format
         {
             "id": total_label_id,
-            "component": {
-                "Text": {
-                    "text": {"literalString": "合計"},
-                    "styleHint": "h3"
-                }
-            }
+            "component": "Text",  # v0.9: component type as string
+            "text": "合計",  # v0.9: literal string
+            "styleHint": "h3"
         },
+        # Total Value - v0.9 flattened format
         {
             "id": total_value_id,
-            "component": {
-                "Text": {
-                    "text": {"literalString": f"¥{total.get('amount', {}).get('value', 0):,}"},
-                    "styleHint": "h3"
-                }
-            }
+            "component": "Text",  # v0.9: component type as string
+            "text": f"¥{total.get('amount', {}).get('value', 0):,}",  # v0.9: literal string
+            "styleHint": "h3"
         }
     ])
 
     components.append({
         "id": price_section_id,
-        "component": {
-            "Column": {
-                "children": price_children,
-                "distribution": "start",
-                "gap": 8
-            }
-        }
+        "component": "Column",  # v0.9: component type as string
+        "children": price_children,
+        "distribution": "start",
+        "gap": 8
     })
 
     # Action buttons
@@ -1211,56 +1071,46 @@ def build_cart_details_a2ui(
     select_text_id = _generate_id("select-text")
 
     components.extend([
+        # Actions Row - v0.9 flattened format
         {
             "id": actions_row_id,
-            "component": {
-                "Row": {
-                    "children": [close_button_id, select_button_id],
-                    "distribution": "spaceBetween",
-                    "gap": 8
-                }
-            }
+            "component": "Row",  # v0.9: component type as string
+            "children": [close_button_id, select_button_id],
+            "distribution": "spaceBetween",
+            "gap": 8
         },
+        # Close Button Text - v0.9 flattened format
         {
             "id": close_text_id,
-            "component": {
-                "Text": {
-                    "text": {"literalString": "閉じる"}
-                }
-            }
+            "component": "Text",  # v0.9: component type as string
+            "text": "閉じる"  # v0.9: literal string
         },
+        # Close Button - v0.9 flattened format
         {
             "id": close_button_id,
-            "component": {
-                "Button": {
-                    "child": close_text_id,
-                    "primary": False,
-                    "action": {
-                        "name": "close_cart_modal"
-                    }
-                }
+            "component": "Button",  # v0.9: component type as string
+            "child": close_text_id,
+            "primary": False,
+            "action": {
+                "name": "close_cart_modal"
             }
         },
+        # Select Button Text - v0.9 flattened format
         {
             "id": select_text_id,
-            "component": {
-                "Text": {
-                    "text": {"literalString": "このカートを選択"}
-                }
-            }
+            "component": "Text",  # v0.9: component type as string
+            "text": "このカートを選択"  # v0.9: literal string
         },
+        # Select Button - v0.9 flattened format
         {
             "id": select_button_id,
-            "component": {
-                "Button": {
-                    "child": select_text_id,
-                    "primary": True,
-                    "action": {
-                        "name": "select_cart",
-                        "context": {
-                            "artifactId": {"literalString": cart_candidate.get("artifact_id", "")}
-                        }
-                    }
+            "component": "Button",  # v0.9: component type as string
+            "child": select_text_id,
+            "primary": True,
+            "action": {
+                "name": "select_cart",
+                "context": {
+                    "artifactId": cart_candidate.get("artifact_id", "")  # v0.9: literal string
                 }
             }
         }
@@ -1280,26 +1130,20 @@ def build_cart_details_a2ui(
 
     components.append({
         "id": content_col_id,
-        "component": {
-            "Column": {
-                "children": content_children,
-                "distribution": "start",
-                "gap": 16
-            }
-        }
+        "component": "Column",  # v0.9: component type as string
+        "children": content_children,
+        "distribution": "start",
+        "gap": 16
     })
 
-    # Modal wrapper
+    # Modal wrapper - v0.9 flattened format
     # Root component must have id="root" for A2UI v0.9 auto-rendering
     components.append({
         "id": "root",
-        "component": {
-            "Modal": {
-                "contentChild": content_col_id,
-                "open": {"path": "/modalOpen"},
-                "title": {"literalString": cart_name}
-            }
-        }
+        "component": "Modal",  # v0.9: component type as string
+        "contentChild": content_col_id,
+        "open": {"path": "/modalOpen"},  # v0.9: path reference as object
+        "title": cart_name  # v0.9: literal string
     })
 
     # Build data model

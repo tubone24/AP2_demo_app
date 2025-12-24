@@ -10,21 +10,13 @@
 
 /**
  * 値またはJSONポインターパス
+ * v0.9: プレーン値とオブジェクト形式の両方をサポート
  */
-export interface StringOrPath {
-  literalString?: string;
-  path?: string;
-}
+export type StringOrPath = string | { path: string };
 
-export interface NumberOrPath {
-  literalNumber?: number;
-  path?: string;
-}
+export type NumberOrPath = number | { path: string };
 
-export interface BooleanOrPath {
-  literalBoolean?: boolean;
-  path?: string;
-}
+export type BooleanOrPath = boolean | { path: string };
 
 // =============================================================================
 // Theme
@@ -45,76 +37,78 @@ export interface A2UIAction {
 }
 
 // =============================================================================
-// Component Types
+// Component Types (v0.9 flat structure with discriminator)
 // =============================================================================
+
+/**
+ * Base interface for all components
+ */
+interface BaseComponent {
+  id: string;
+  component: string;
+}
 
 /**
  * Text Component
  */
-export interface TextComponent {
-  Text: {
-    text: StringOrPath;
-    styleHint?: "h1" | "h2" | "h3" | "h4" | "h5" | "body" | "caption" | "label";
-  };
+export interface TextComponent extends BaseComponent {
+  component: "Text";
+  text: StringOrPath;
+  styleHint?: "h1" | "h2" | "h3" | "h4" | "h5" | "body" | "caption" | "label";
 }
 
 /**
  * Image Component
  */
-export interface ImageComponent {
-  Image: {
-    url: StringOrPath;
-    fit?: "contain" | "cover" | "fill";
-    usageHint?: "thumbnail" | "hero" | "icon";
-    altText?: StringOrPath;
-  };
+export interface ImageComponent extends BaseComponent {
+  component: "Image";
+  url: StringOrPath;
+  fit?: "contain" | "cover" | "fill";
+  usageHint?: "thumbnail" | "hero" | "icon";
+  altText?: StringOrPath;
 }
 
 /**
  * Icon Component
  */
-export interface IconComponent {
-  Icon: {
-    name?: string;  // Standard icon name
-    path?: string;  // Custom icon path
-  };
+export interface IconComponent extends BaseComponent {
+  component: "Icon";
+  name?: string;  // Standard icon name
+  path?: string;  // Custom icon path
 }
 
 /**
  * Button Component
  */
-export interface ButtonComponent {
-  Button: {
-    child: string;  // Reference to child component ID
-    primary?: boolean;
-    disabled?: BooleanOrPath;
-    action?: A2UIAction;
-  };
+export interface ButtonComponent extends BaseComponent {
+  component: "Button";
+  child: string;  // Reference to child component ID
+  primary?: boolean;
+  disabled?: BooleanOrPath;
+  action?: A2UIAction;
 }
 
 /**
  * TextField Component
  */
-export interface TextFieldComponent {
-  TextField: {
-    label?: StringOrPath;
-    text: StringOrPath;  // Bound to data path for two-way binding
-    placeholder?: StringOrPath;
-    textFieldType?: "shortText" | "longText" | "email" | "phone" | "number" | "password";
-    // Note: "required" is NOT in A2UI v0.9 standard schema
-    disabled?: BooleanOrPath;
-  };
+export interface TextFieldComponent extends BaseComponent {
+  component: "TextField";
+  label?: StringOrPath;
+  text: StringOrPath;  // Bound to data path for two-way binding
+  placeholder?: StringOrPath;
+  textFieldType?: "shortText" | "longText" | "email" | "phone" | "number" | "password";
+  // Note: "required" is NOT in A2UI v0.9 standard schema
+  disabled?: BooleanOrPath;
 }
 
 /**
  * CheckBox Component
  */
-export interface CheckBoxComponent {
-  CheckBox: {
-    label?: StringOrPath;
-    checked: BooleanOrPath;
-    disabled?: BooleanOrPath;
-  };
+export interface CheckBoxComponent extends BaseComponent {
+  component: "CheckBox";
+  label?: StringOrPath;
+  checked: BooleanOrPath;
+  disabled?: BooleanOrPath;
 }
 
 /**
@@ -126,86 +120,79 @@ export interface ChoiceOption {
   description?: StringOrPath;
 }
 
-export interface ChoicePickerComponent {
-  ChoicePicker: {
-    label?: StringOrPath;
-    options: ChoiceOption[];
-    selectedId: StringOrPath;
-    multiSelect?: boolean;
-    disabled?: BooleanOrPath;
-  };
+export interface ChoicePickerComponent extends BaseComponent {
+  component: "ChoicePicker";
+  label?: StringOrPath;
+  options: ChoiceOption[];
+  selectedId: StringOrPath;
+  multiSelect?: boolean;
+  disabled?: BooleanOrPath;
 }
 
 /**
  * DateTimeInput Component
  */
-export interface DateTimeInputComponent {
-  DateTimeInput: {
-    label?: StringOrPath;
-    value: StringOrPath;  // ISO 8601 format
-    mode?: "date" | "time" | "datetime";
-    disabled?: BooleanOrPath;
-  };
+export interface DateTimeInputComponent extends BaseComponent {
+  component: "DateTimeInput";
+  label?: StringOrPath;
+  value: StringOrPath;  // ISO 8601 format
+  mode?: "date" | "time" | "datetime";
+  disabled?: BooleanOrPath;
 }
 
 /**
  * Slider Component
  */
-export interface SliderComponent {
-  Slider: {
-    label?: StringOrPath;
-    value: NumberOrPath;
-    min?: number;
-    max?: number;
-    step?: number;
-    disabled?: BooleanOrPath;
-  };
+export interface SliderComponent extends BaseComponent {
+  component: "Slider";
+  label?: StringOrPath;
+  value: NumberOrPath;
+  min?: number;
+  max?: number;
+  step?: number;
+  disabled?: BooleanOrPath;
 }
 
 /**
  * Row Component (Horizontal layout)
  */
-export interface RowComponent {
-  Row: {
-    children: string[];  // Array of component IDs
-    alignment?: "start" | "center" | "end" | "stretch";
-    distribution?: "start" | "center" | "end" | "spaceBetween" | "spaceAround";
-    gap?: number;
-  };
+export interface RowComponent extends BaseComponent {
+  component: "Row";
+  children: string[];  // Array of component IDs
+  alignment?: "start" | "center" | "end" | "stretch";
+  distribution?: "start" | "center" | "end" | "spaceBetween" | "spaceAround";
+  gap?: number;
 }
 
 /**
  * Column Component (Vertical layout)
  */
-export interface ColumnComponent {
-  Column: {
-    children: string[];  // Array of component IDs
-    alignment?: "start" | "center" | "end" | "stretch";
-    distribution?: "start" | "center" | "end" | "spaceBetween" | "spaceAround";
-    gap?: number;
-  };
+export interface ColumnComponent extends BaseComponent {
+  component: "Column";
+  children: string[];  // Array of component IDs
+  alignment?: "start" | "center" | "end" | "stretch";
+  distribution?: "start" | "center" | "end" | "spaceBetween" | "spaceAround";
+  gap?: number;
 }
 
 /**
  * List Component
  */
-export interface ListComponent {
-  List: {
-    children: string[];  // Template component IDs
-    dataPath: string;  // JSON Pointer to array data
-    direction?: "vertical" | "horizontal";
-    gap?: number;
-  };
+export interface ListComponent extends BaseComponent {
+  component: "List";
+  children: string[];  // Template component IDs
+  dataPath: string;  // JSON Pointer to array data
+  direction?: "vertical" | "horizontal";
+  gap?: number;
 }
 
 /**
  * Card Component
  */
-export interface CardComponent {
-  Card: {
-    child: string;  // Reference to child component ID
-    action?: A2UIAction;  // Click action
-  };
+export interface CardComponent extends BaseComponent {
+  component: "Card";
+  child: string;  // Reference to child component ID
+  action?: A2UIAction;  // Click action
 }
 
 /**
@@ -217,39 +204,36 @@ export interface TabItem {
   child: string;  // Component ID for tab content
 }
 
-export interface TabsComponent {
-  Tabs: {
-    tabs: TabItem[];
-    selectedTabId: StringOrPath;
-  };
+export interface TabsComponent extends BaseComponent {
+  component: "Tabs";
+  tabs: TabItem[];
+  selectedTabId: StringOrPath;
 }
 
 /**
  * Divider Component
  */
-export interface DividerComponent {
-  Divider: {
-    orientation?: "horizontal" | "vertical";
-  };
+export interface DividerComponent extends BaseComponent {
+  component: "Divider";
+  orientation?: "horizontal" | "vertical";
 }
 
 /**
  * Modal Component
  */
-export interface ModalComponent {
-  Modal: {
-    entryPointChild?: string;  // Trigger component ID
-    contentChild: string;  // Modal content component ID
-    open?: BooleanOrPath;
-    title?: StringOrPath;
-  };
+export interface ModalComponent extends BaseComponent {
+  component: "Modal";
+  entryPointChild?: string;  // Trigger component ID
+  contentChild: string;  // Modal content component ID
+  open?: BooleanOrPath;
+  title?: StringOrPath;
 }
 
 // =============================================================================
 // Component Definition
 // =============================================================================
 
-export type A2UIComponentType =
+export type A2UIComponent =
   | TextComponent
   | ImageComponent
   | IconComponent
@@ -266,11 +250,6 @@ export type A2UIComponentType =
   | TabsComponent
   | DividerComponent
   | ModalComponent;
-
-export interface A2UIComponent {
-  id: string;
-  component: A2UIComponentType;
-}
 
 // =============================================================================
 // Surface & Messages

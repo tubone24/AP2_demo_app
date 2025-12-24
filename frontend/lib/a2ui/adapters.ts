@@ -24,11 +24,14 @@ import type { FormField, CredentialProvider, PaymentMethodOption, Product } from
 
 /**
  * Resolve a StringOrPath to a string value
+ * v0.9: プレーン文字列とオブジェクト形式の両方をサポート
  */
 function resolveString(value: StringOrPath | undefined, dataModel: Record<string, any>): string {
   if (!value) return "";
-  if (value.literalString !== undefined) return value.literalString;
-  if (value.path) {
+  // v0.9: プレーン文字列の場合はそのまま返す
+  if (typeof value === "string") return value;
+  // オブジェクト形式の場合、pathで解決
+  if (typeof value === "object" && value.path) {
     return getValueByPath(dataModel, value.path) ?? "";
   }
   return "";
@@ -36,11 +39,14 @@ function resolveString(value: StringOrPath | undefined, dataModel: Record<string
 
 /**
  * Resolve a NumberOrPath to a number value
+ * v0.9: プレーン数値とオブジェクト形式の両方をサポート
  */
 function resolveNumber(value: NumberOrPath | undefined, dataModel: Record<string, any>): number {
-  if (!value) return 0;
-  if (value.literalNumber !== undefined) return value.literalNumber;
-  if (value.path) {
+  if (value === undefined) return 0;
+  // v0.9: プレーン数値の場合はそのまま返す
+  if (typeof value === "number") return value;
+  // オブジェクト形式の場合、pathで解決
+  if (typeof value === "object" && value.path) {
     return getValueByPath(dataModel, value.path) ?? 0;
   }
   return 0;
@@ -48,11 +54,14 @@ function resolveNumber(value: NumberOrPath | undefined, dataModel: Record<string
 
 /**
  * Resolve a BooleanOrPath to a boolean value
+ * v0.9: プレーンbooleanとオブジェクト形式の両方をサポート
  */
 function resolveBoolean(value: BooleanOrPath | undefined, dataModel: Record<string, any>): boolean {
-  if (!value) return false;
-  if (value.literalBoolean !== undefined) return value.literalBoolean;
-  if (value.path) {
+  if (value === undefined) return false;
+  // v0.9: プレーンbooleanの場合はそのまま返す
+  if (typeof value === "boolean") return value;
+  // オブジェクト形式の場合、pathで解決
+  if (typeof value === "object" && value.path) {
     return getValueByPath(dataModel, value.path) ?? false;
   }
   return false;
@@ -93,10 +102,9 @@ export function adaptShippingFormA2UI(surface: ShippingFormA2UI): ShippingFormAd
 
   // Find TextField and ChoicePicker components
   for (const comp of surface.components) {
-    if ("TextField" in comp.component) {
-      const textField = comp.component.TextField;
-      const label = resolveString(textField.label, surface.dataModel);
-      const path = textField.text.path;
+    if (comp.component === "TextField") {
+      const label = resolveString(comp.label, surface.dataModel);
+      const path = typeof comp.text === "object" && comp.text.path ? comp.text.path : undefined;
 
       if (path) {
         // Extract field name from path (e.g., "/shipping/recipient" -> "recipient")
@@ -108,17 +116,17 @@ export function adaptShippingFormA2UI(surface: ShippingFormA2UI): ShippingFormAd
         const cleanLabel = label.replace(/ \*$/, "");
 
         let fieldType: FormField["type"] = "text";
-        if (textField.textFieldType === "email") fieldType = "text";
-        else if (textField.textFieldType === "phone") fieldType = "text";
-        else if (textField.textFieldType === "number") fieldType = "number";
-        else if (textField.textFieldType === "longText") fieldType = "textarea";
+        if (comp.textFieldType === "email") fieldType = "text";
+        else if (comp.textFieldType === "phone") fieldType = "text";
+        else if (comp.textFieldType === "number") fieldType = "number";
+        else if (comp.textFieldType === "longText") fieldType = "textarea";
 
         fields.push({
           name: fieldName,
           label: cleanLabel,
           type: fieldType,
           required: isRequired,
-          placeholder: resolveString(textField.placeholder, surface.dataModel) || undefined,
+          placeholder: resolveString(comp.placeholder, surface.dataModel) || undefined,
         });
 
         // Get initial value from data model
@@ -127,10 +135,9 @@ export function adaptShippingFormA2UI(surface: ShippingFormA2UI): ShippingFormAd
           initialData[fieldName] = String(initialValue);
         }
       }
-    } else if ("ChoicePicker" in comp.component) {
-      const picker = comp.component.ChoicePicker;
-      const label = resolveString(picker.label, surface.dataModel);
-      const path = picker.selectedId.path;
+    } else if (comp.component === "ChoicePicker") {
+      const label = resolveString(comp.label, surface.dataModel);
+      const path = typeof comp.selectedId === "object" && comp.selectedId.path ? comp.selectedId.path : undefined;
 
       if (path) {
         const fieldName = path.split("/").pop() || "";
@@ -142,7 +149,7 @@ export function adaptShippingFormA2UI(surface: ShippingFormA2UI): ShippingFormAd
           label: cleanLabel,
           type: "select",
           required: isRequired,
-          options: picker.options.map((opt) => ({
+          options: comp.options.map((opt) => ({
             value: opt.id,
             label: resolveString(opt.label, surface.dataModel),
           })),

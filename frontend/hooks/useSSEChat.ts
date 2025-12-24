@@ -144,14 +144,102 @@ export function useSSEChat() {
             }
 
             try {
-              const event: ChatSSEEvent = JSON.parse(data);
+              const event: any = JSON.parse(data);
+
+              // A2UI v0.9 envelope detection - check for A2UI keys first
+              const isA2UIEvent = "createSurface" in event || "updateComponents" in event ||
+                                  "updateDataModel" in event || "deleteSurface" in event;
 
               // デバッグ：イベントをコンソールに出力
-              console.log("[SSE Event]", event.type, {
+              const eventType = isA2UIEvent ?
+                ("createSurface" in event ? "a2ui_createSurface" :
+                 "updateComponents" in event ? "a2ui_updateComponents" :
+                 "updateDataModel" in event ? "a2ui_updateDataModel" :
+                 "a2ui_deleteSurface") : event.type;
+
+              console.log("[SSE Event]", eventType, {
                 hasReceivedContentEvent,
                 currentCartCandidatesCount: streamCartCandidates.length,
                 event
               });
+
+              // Handle A2UI v0.9 envelope format
+              if (isA2UIEvent) {
+                if ("createSurface" in event) {
+                  // createSurface: 新しいサーフェスを初期化
+                  const createData = event.createSurface;
+                  console.log("[A2UI v0.9] createSurface", {
+                    surfaceId: createData.surfaceId,
+                    catalogId: createData.catalogId
+                  });
+                  setA2UISurfaces(prev => {
+                    const next = new Map(prev);
+                    next.set(createData.surfaceId, {
+                      surfaceId: createData.surfaceId,
+                      catalogId: createData.catalogId,
+                      components: [],
+                      dataModel: {}
+                    });
+                    return next;
+                  });
+                } else if ("updateComponents" in event) {
+                  // updateComponents: コンポーネント定義を更新
+                  const componentsData = event.updateComponents;
+                  console.log("[A2UI v0.9] updateComponents", {
+                    surfaceId: componentsData.surfaceId,
+                    componentCount: componentsData.components?.length || 0
+                  });
+                  setA2UISurfaces(prev => {
+                    const next = new Map(prev);
+                    const surface = next.get(componentsData.surfaceId);
+                    if (surface) {
+                      next.set(componentsData.surfaceId, {
+                        ...surface,
+                        components: componentsData.components || []
+                      });
+                    }
+                    return next;
+                  });
+                } else if ("updateDataModel" in event) {
+                  // updateDataModel: データモデルを更新
+                  const dataModelData = event.updateDataModel;
+                  console.log("[A2UI v0.9] updateDataModel", {
+                    surfaceId: dataModelData.surfaceId,
+                    path: dataModelData.path,
+                    op: dataModelData.op
+                  });
+                  setA2UISurfaces(prev => {
+                    const next = new Map(prev);
+                    const surface = next.get(dataModelData.surfaceId);
+                    if (surface) {
+                      // Apply JSON Pointer operation (RFC 6901 compliant)
+                      const updatedDataModel = applyDataModelOperation(
+                        surface.dataModel,
+                        dataModelData.op,
+                        dataModelData.path,
+                        dataModelData.value
+                      );
+                      next.set(dataModelData.surfaceId, {
+                        ...surface,
+                        dataModel: updatedDataModel
+                      });
+                    }
+                    return next;
+                  });
+                } else if ("deleteSurface" in event) {
+                  // deleteSurface: サーフェスを削除
+                  const deleteData = event.deleteSurface;
+                  console.log("[A2UI v0.9] deleteSurface", {
+                    surfaceId: deleteData.surfaceId
+                  });
+                  setA2UISurfaces(prev => {
+                    const next = new Map(prev);
+                    next.delete(deleteData.surfaceId);
+                    return next;
+                  });
+                }
+                continue; // Skip the switch statement for A2UI events
+              }
 
               switch (event.type) {
                 case "agent_thinking":
@@ -397,87 +485,6 @@ export function useSSEChat() {
                       }
                     }, 500);
                   }
-                  break;
-
-                // A2UI v0.9 Protocol Messages
-                case "a2ui_create_surface":
-                  // createSurface: 新しいサーフェスを初期化
-                  const createEvent = event as any;
-                  console.log("[A2UI v0.9] createSurface", {
-                    surfaceId: createEvent.surface_id,
-                    catalogId: createEvent.catalog_id
-                  });
-                  setA2UISurfaces(prev => {
-                    const next = new Map(prev);
-                    next.set(createEvent.surface_id, {
-                      surfaceId: createEvent.surface_id,
-                      catalogId: createEvent.catalog_id,
-                      components: [],
-                      dataModel: {}
-                    });
-                    return next;
-                  });
-                  break;
-
-                case "a2ui_update_components":
-                  // updateComponents: コンポーネント定義を更新
-                  const componentsEvent = event as any;
-                  console.log("[A2UI v0.9] updateComponents", {
-                    surfaceId: componentsEvent.surface_id,
-                    componentCount: componentsEvent.components?.length || 0
-                  });
-                  setA2UISurfaces(prev => {
-                    const next = new Map(prev);
-                    const surface = next.get(componentsEvent.surface_id);
-                    if (surface) {
-                      next.set(componentsEvent.surface_id, {
-                        ...surface,
-                        components: componentsEvent.components || []
-                      });
-                    }
-                    return next;
-                  });
-                  break;
-
-                case "a2ui_update_data_model":
-                  // updateDataModel: データモデルを更新
-                  const dataModelEvent = event as any;
-                  console.log("[A2UI v0.9] updateDataModel", {
-                    surfaceId: dataModelEvent.surface_id,
-                    path: dataModelEvent.path,
-                    op: dataModelEvent.op
-                  });
-                  setA2UISurfaces(prev => {
-                    const next = new Map(prev);
-                    const surface = next.get(dataModelEvent.surface_id);
-                    if (surface) {
-                      // Apply JSON Pointer operation (RFC 6901 compliant)
-                      const updatedDataModel = applyDataModelOperation(
-                        surface.dataModel,
-                        dataModelEvent.op,
-                        dataModelEvent.path,
-                        dataModelEvent.value
-                      );
-                      next.set(dataModelEvent.surface_id, {
-                        ...surface,
-                        dataModel: updatedDataModel
-                      });
-                    }
-                    return next;
-                  });
-                  break;
-
-                case "a2ui_delete_surface":
-                  // deleteSurface: サーフェスを削除
-                  const deleteEvent = event as any;
-                  console.log("[A2UI v0.9] deleteSurface", {
-                    surfaceId: deleteEvent.surface_id
-                  });
-                  setA2UISurfaces(prev => {
-                    const next = new Map(prev);
-                    next.delete(deleteEvent.surface_id);
-                    return next;
-                  });
                   break;
 
                 case "done":

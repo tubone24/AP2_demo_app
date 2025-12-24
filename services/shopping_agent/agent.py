@@ -16,7 +16,7 @@ import json
 import hashlib
 import asyncio
 from pathlib import Path
-from typing import AsyncGenerator, Dict, Any, Optional
+from typing import AsyncGenerator, Dict, Any, Optional, Union
 from datetime import datetime, timezone, timedelta
 import logging
 
@@ -819,7 +819,13 @@ class ShoppingAgent(BaseAgent):
                     # EventSourceResponseはJSON文字列を期待するため、
                     # 辞書をJSON文字列に変換して返す
                     async for event in self._generate_fixed_response_langgraph(request.user_input, session, session_id):
-                        yield json.dumps(event.model_dump(exclude_none=True))
+                        # A2UI v0.9イベント（dict）とStreamEvent（Pydanticモデル）の両方を処理
+                        if isinstance(event, dict):
+                            # A2UI v0.9 envelope format - 直接JSONシリアライズ
+                            yield json.dumps(event)
+                        else:
+                            # StreamEvent - model_dump()でシリアライズ
+                            yield json.dumps(event.model_dump(exclude_none=True))
                         await asyncio.sleep(0.01)
 
                     # セッション保存（最終状態）
@@ -1343,7 +1349,7 @@ class ShoppingAgent(BaseAgent):
         user_input: str,
         session: Dict[str, Any],
         session_id: str
-    ) -> AsyncGenerator[StreamEvent, None]:
+    ) -> AsyncGenerator[Union[StreamEvent, Dict[str, Any]], None]:
         """
         LangGraph StateGraphを使用した応答生成（ストリーミング）
 
@@ -1434,8 +1440,18 @@ class ShoppingAgent(BaseAgent):
 
             # イベントをストリーミング出力
             for event_dict in result["events"]:
-                # agent_text_chunkは文字単位で遅延を挿入
-                if event_dict.get("type") == "agent_text_chunk":
+                # A2UI v0.9 envelope format check - these events don't have "type" field
+                # They use keys like createSurface, updateComponents, updateDataModel, deleteSurface
+                is_a2ui_v09_event = any(
+                    key in event_dict
+                    for key in ("createSurface", "updateComponents", "updateDataModel", "deleteSurface")
+                )
+
+                if is_a2ui_v09_event:
+                    # A2UI v0.9イベントは直接dictとしてyield（StreamEvent経由しない）
+                    yield event_dict
+                elif event_dict.get("type") == "agent_text_chunk":
+                    # agent_text_chunkは文字単位で遅延を挿入
                     yield StreamEvent(**event_dict)
                     await asyncio.sleep(0.02)  # 20ms遅延
                 else:
