@@ -14,12 +14,14 @@ export type SSEEventType =
   | "cart_options"
   | "product_list"
   | "credential_provider_selection"
-  | "shipping_form_request"
+  | "shipping_form_request"  // @deprecated: Use A2UI surfaces instead
   | "payment_method_selection"
   | "webauthn_request"
   | "stepup_authentication_request"  // AP2完全準拠: 3D Secure 2.0認証リクエスト
   | "step_up_redirect"
   | "payment_completed"  // AP2完全準拠: 決済完了通知
+  | "a2ui_surface"  // A2UI Surface (Agent-to-User Interface) - レガシー
+  // Note: A2UI v0.9 events don't have a "type" field (envelope format)
   | "done"
   | "error";
 
@@ -83,7 +85,9 @@ export interface CredentialProviderSelectionEvent extends SSEEvent {
   providers: CredentialProvider[];
 }
 
-// 配送先フォームリクエストイベント
+/**
+ * @deprecated Use A2UI surfaces instead (a2ui_create_surface, a2ui_update_components, etc.)
+ */
 export interface ShippingFormRequestEvent extends SSEEvent {
   type: "shipping_form_request";
   form_schema: FormSchema;
@@ -144,6 +148,53 @@ export interface PaymentCompletedEvent extends SSEEvent {
   status: string;
 }
 
+// A2UI Surface イベント（Agent-to-User Interface）- レガシー形式
+/** @deprecated Use A2UI v0.9 events instead */
+export interface A2UISurfaceEvent extends SSEEvent {
+  type: "a2ui_surface";
+  surface: {
+    surfaceId: string;
+    surfaceType: string;
+    components: any[];
+    dataModel: Record<string, any>;
+  };
+}
+
+// A2UI v0.9 Protocol Events
+// Reference: https://a2ui.org/specification/v0.9-a2ui/
+// Note: A2UI v0.9 uses envelope format - messages don't have a "type" field
+// Instead, each message is a JSON object containing exactly one key:
+// createSurface, updateComponents, updateDataModel, or deleteSurface
+
+export interface A2UICreateSurfaceEvent {
+  createSurface: {
+    surfaceId: string;
+    catalogId?: string;
+  };
+}
+
+export interface A2UIUpdateComponentsEvent {
+  updateComponents: {
+    surfaceId: string;
+    components: any[];
+  };
+}
+
+export interface A2UIUpdateDataModelEvent {
+  updateDataModel: {
+    surfaceId: string;
+    path?: string;
+    op?: "add" | "replace" | "remove";
+    value?: any;
+  };
+}
+
+export interface A2UIDeleteSurfaceEvent {
+  deleteSurface: {
+    surfaceId: string;
+  };
+}
+
 // すべてのSSEイベント型
 export type ChatSSEEvent =
   | AgentTextEvent
@@ -161,8 +212,22 @@ export type ChatSSEEvent =
   | StepupAuthenticationRequestEvent
   | StepUpRedirectEvent
   | PaymentCompletedEvent
+  | A2UISurfaceEvent
+  // A2UI v0.9 Protocol Events
+  | A2UICreateSurfaceEvent
+  | A2UIUpdateComponentsEvent
+  | A2UIUpdateDataModelEvent
+  | A2UIDeleteSurfaceEvent
   | DoneEvent
   | ErrorEvent;
+
+// カート候補（AP2/A2A仕様準拠）
+export interface CartCandidate {
+  artifact_id: string;
+  artifact_name: string;
+  cart_mandate: any;  // AP2 CartMandate structure
+  product_images?: string[];
+}
 
 // チャットメッセージ
 export interface ChatMessage {
@@ -172,6 +237,7 @@ export interface ChatMessage {
   timestamp: Date;
   metadata?: {
     products?: Product[];
+    cart_candidates?: CartCandidate[];  // カート候補（CartCarousel用）
     mandate?: any;
     mandate_type?: string;
     payment_result?: {

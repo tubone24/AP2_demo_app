@@ -11,23 +11,24 @@
  * - payer_email = JWT.email（オプション）
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { useSSEChat } from "@/hooks/useSSEChat";
 import { ChatMessage } from "@/components/chat/ChatMessage";
 import { ChatInput } from "@/components/chat/ChatInput";
 import { SignaturePromptModal } from "@/components/chat/SignaturePromptModal";
-import { ShippingAddressForm } from "@/components/shipping/ShippingAddressForm";
 import { PasskeyRegistration } from "@/components/auth/PasskeyRegistration";
 import { PasskeyAuthentication } from "@/components/auth/PasskeyAuthentication";
 import { ProductCarousel } from "@/components/product/ProductCarousel";
 import { CartCarousel } from "@/components/cart/CartCarousel";
 import { CartDetailsModal } from "@/components/cart/CartDetailsModal";
+import { A2UISurfaceRenderer } from "@/components/a2ui/A2UISurfaceRenderer";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Card, CardContent } from "@/components/ui/card";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Bot, LogOut, User } from "lucide-react";
 import { Product } from "@/lib/types/chat";
+import type { A2UIAction } from "@/lib/types/a2ui";
 import {
   isAuthenticated,
   getCurrentUser,
@@ -47,18 +48,22 @@ export default function ChatPage() {
     currentProducts,
     currentCartCandidates,
     signatureRequest,
-    credentialProviders,
-    shippingFormRequest,
-    paymentMethods,
+    // credentialProviders,  // A2UIに移行済み
+    // paymentMethods,  // A2UIに移行済み
     webauthnRequest,
     sessionId,
     sendMessage,
+    sendUserAction,  // A2UI v0.9: userActionメッセージ送信
     addMessage,
     clearSignatureRequest,
     clearWebauthnRequest,
     stopStreaming,
     setSessionId,  // AP2 Step-up対応：セッションID設定関数
     paymentCompletedInfo,  // 決済完了情報
+    // A2UI v0.9: サーフェス管理
+    a2uiSurfaces,
+    updateSurfaceDataModel,
+    clearA2UISurfaces,
   } = useSSEChat();
 
   const scrollAreaRef = useRef<HTMLDivElement>(null);
@@ -68,6 +73,90 @@ export default function ChatPage() {
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [cart, setCart] = useState<Product[]>([]);
   const [selectedCartForDetails, setSelectedCartForDetails] = useState<any | null>(null);
+
+  // A2UI v0.9: アクションハンドラー（ボタンクリック等）
+  // A2UI v0.9仕様: contextには解決済みの値を送信
+  const handleA2UIAction = useCallback((action: A2UIAction, surfaceId: string, sourceComponentId: string) => {
+    console.log("[A2UI] Action triggered:", { action, surfaceId, sourceComponentId });
+
+    // Get the current surface's dataModel for path resolution
+    const surface = a2uiSurfaces.get(surfaceId);
+    if (!surface) {
+      console.warn("[A2UI] Surface not found:", surfaceId);
+      return;
+    }
+
+    // Resolve all context values (both path refs and literals)
+    // A2UI v0.9: Client resolves values before sending
+    const resolvedContext: Record<string, any> = {};
+
+    if (action.context) {
+      for (const [key, value] of Object.entries(action.context)) {
+        if (value && typeof value === "object") {
+          if ("path" in value && value.path) {
+            // Path reference - resolve from dataModel
+            const path = value.path as string;
+            const parts = path.replace(/^\//, "").split("/");
+            let resolved: any = surface.dataModel;
+            for (const part of parts) {
+              if (resolved && typeof resolved === "object" && part in resolved) {
+                resolved = resolved[part];
+              } else {
+                resolved = undefined;
+                break;
+              }
+            }
+            resolvedContext[key] = resolved;
+          } else if ("literalNumber" in value) {
+            // Literal number - use directly
+            resolvedContext[key] = value.literalNumber;
+          } else if ("literalString" in value) {
+            // Literal string - use directly
+            resolvedContext[key] = value.literalString;
+          } else if ("literalBoolean" in value) {
+            // Literal boolean - use directly
+            resolvedContext[key] = value.literalBoolean;
+          }
+        }
+      }
+    }
+
+    // Send userAction with resolved context (A2UI v0.9 compliant)
+    sendUserAction(
+      action.name,
+      surfaceId,
+      sourceComponentId,
+      resolvedContext,
+      `${action.name}を実行しました`
+    );
+  }, [a2uiSurfaces, sendUserAction]);
+
+  // A2UI v0.9: データモデル更新ハンドラー（two-way binding + バリデーション）
+  const handleDataModelChange = useCallback((surfaceId: string) => {
+    return (path: string, value: any) => {
+      // Update the field value
+      updateSurfaceDataModel(surfaceId, path, value);
+
+      // Run validation after field update
+      const surface = a2uiSurfaces.get(surfaceId);
+      if (surface && surface.dataModel._validation?.requiredFields) {
+        const requiredFields = surface.dataModel._validation.requiredFields as string[];
+        const shipping = surface.dataModel.shipping || {};
+
+        // Calculate new shipping values (apply the current change)
+        const fieldName = path.replace("/shipping/", "");
+        const newShipping = { ...shipping, [fieldName]: value };
+
+        // Check if all required fields are filled
+        const formInvalid = requiredFields.some(
+          (field: string) => !newShipping[field] || newShipping[field].trim() === ""
+        );
+
+        // Update formInvalid
+        updateSurfaceDataModel(surfaceId, "/formInvalid", formInvalid);
+      }
+    };
+  }, [updateSurfaceDataModel, a2uiSurfaces]);
 
   // AP2完全準拠: Credential Provider用Passkeyは専用画面で登録
   // /auth/register-passkeyへリダイレクト
@@ -444,6 +533,8 @@ export default function ChatPage() {
                   key={message.id}
                   message={message}
                   onAddToCart={handleAddToCart}
+                  onSelectCart={handleSelectCart}
+                  onViewCartDetails={handleViewCartDetails}
                 />
               ))}
 
@@ -523,8 +614,8 @@ export default function ChatPage() {
                 </div>
               )}
 
-              {/* カート候補カルーセル（isStreamingの外・AP2/A2A仕様準拠） */}
-              {currentCartCandidates.length > 0 && (
+              {/* カート候補カルーセル（ストリーミング中のみ表示・確定後はChatMessage内で表示） */}
+              {isStreaming && currentCartCandidates.length > 0 && (
                 <div className="mb-4">
                   <div className="flex gap-3">
                     <Avatar className="w-8 h-8 flex-shrink-0">
@@ -543,91 +634,32 @@ export default function ChatPage() {
                 </div>
               )}
 
-              {/* Credential Provider選択（isStreamingの外） */}
-              {credentialProviders.length > 0 && (
-                <div className="mb-4">
+              {/* Credential Provider選択はA2UI surfacesで描画（旧式UIは削除済み） */}
+
+              {/* A2UI v0.9: サーフェスベースのUI描画 */}
+              {Array.from(a2uiSurfaces.values()).map((surface) => (
+                <div key={surface.surfaceId} className="mb-4">
                   <div className="flex gap-3">
                     <Avatar className="w-8 h-8 flex-shrink-0">
                       <AvatarFallback className="bg-green-500">
                         <Bot className="w-4 h-4 text-white" />
                       </AvatarFallback>
                     </Avatar>
-                    <div className="w-full max-w-[600px] space-y-2">
-                      {credentialProviders.map((provider: any, index: number) => (
-                        <Card
-                          key={provider.id}
-                          className="cursor-pointer hover:bg-accent transition-colors"
-                          onClick={() => sendMessage(String(index + 1))}
-                        >
-                          <CardContent className="p-4">
-                            <div className="flex items-center gap-3">
-                              <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center text-xl font-bold">
-                                {index + 1}
-                              </div>
-                              <div className="flex-1">
-                                <h3 className="font-semibold">{provider.name}</h3>
-                                <p className="text-sm text-muted-foreground">{provider.description}</p>
-                                <p className="text-xs text-muted-foreground mt-1">
-                                  対応: {provider.supported_methods.join(", ")}
-                                </p>
-                              </div>
-                            </div>
-                          </CardContent>
-                        </Card>
-                      ))}
+                    <div className="w-full max-w-[600px]">
+                      <A2UISurfaceRenderer
+                        surfaceId={surface.surfaceId}
+                        components={surface.components}
+                        dataModel={surface.dataModel}
+                        onDataModelChange={handleDataModelChange(surface.surfaceId)}
+                        onAction={handleA2UIAction}
+                      />
                     </div>
                   </div>
                 </div>
-              )}
+              ))}
 
-              {/* 配送先フォーム（isStreamingの外） */}
-              {shippingFormRequest && (
-                <ShippingAddressForm
-                  fields={shippingFormRequest.fields}
-                  onSubmit={(shippingData) => {
-                    // フォーム入力値をJSON文字列に変換してShopping Agentに送信
-                    sendMessage(JSON.stringify(shippingData));
-                  }}
-                />
-              )}
 
-              {/* 支払い方法選択（isStreamingの外） */}
-              {paymentMethods.length > 0 && (
-                <div className="mb-4">
-                  <div className="flex gap-3">
-                    <Avatar className="w-8 h-8 flex-shrink-0">
-                      <AvatarFallback className="bg-green-500">
-                        <Bot className="w-4 h-4 text-white" />
-                      </AvatarFallback>
-                    </Avatar>
-                    <div className="w-full max-w-[600px] space-y-2">
-                      {paymentMethods.map((method: any, index: number) => (
-                        <Card
-                          key={method.id}
-                          className="cursor-pointer hover:bg-accent transition-colors"
-                          onClick={() => sendMessage(String(index + 1))}
-                        >
-                          <CardContent className="p-4">
-                            <div className="flex items-center gap-3">
-                              <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center text-xl font-bold">
-                                {index + 1}
-                              </div>
-                              <div className="flex-1">
-                                <h3 className="font-semibold">
-                                  {method.brand?.toUpperCase()} **** {method.last4}
-                                </h3>
-                                <p className="text-sm text-muted-foreground">
-                                  {method.type === "card" ? "クレジットカード" : method.type}
-                                </p>
-                              </div>
-                            </div>
-                          </CardContent>
-                        </Card>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              )}
+              {/* 支払い方法選択はA2UI surfacesで描画（旧式UIは削除済み） */}
 
               {/* AP2完全準拠: 決済完了時の領収書表示 */}
               {paymentCompletedInfo && paymentCompletedInfo.receipt_url && (

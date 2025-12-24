@@ -16,7 +16,7 @@ import json
 import hashlib
 import asyncio
 from pathlib import Path
-from typing import AsyncGenerator, Dict, Any, Optional
+from typing import AsyncGenerator, Dict, Any, Optional, Union
 from datetime import datetime, timezone, timedelta
 import logging
 
@@ -73,6 +73,7 @@ from services.shopping_agent.utils import (
 )
 from services.shopping_agent.utils.signature_handlers import SignatureHandlers
 from services.shopping_agent.utils.merchant_integration import MerchantIntegrationHelpers
+from services.shopping_agent.utils.a2ui_parser import process_user_input, is_a2ui_message
 
 # NOTE: 古いLangGraph実装（langgraph_agent, langgraph_conversation, langgraph_shopping）は廃止
 # 新しいStateGraph版（langgraph_shopping_flow.py）を使用
@@ -818,7 +819,13 @@ class ShoppingAgent(BaseAgent):
                     # EventSourceResponseはJSON文字列を期待するため、
                     # 辞書をJSON文字列に変換して返す
                     async for event in self._generate_fixed_response_langgraph(request.user_input, session, session_id):
-                        yield json.dumps(event.model_dump(exclude_none=True))
+                        # A2UI v0.9イベント（dict）とStreamEvent（Pydanticモデル）の両方を処理
+                        if isinstance(event, dict):
+                            # A2UI v0.9 envelope format - 直接JSONシリアライズ
+                            yield json.dumps(event)
+                        else:
+                            # StreamEvent - model_dump()でシリアライズ
+                            yield json.dumps(event.model_dump(exclude_none=True))
                         await asyncio.sleep(0.01)
 
                     # セッション保存（最終状態）
@@ -1342,7 +1349,7 @@ class ShoppingAgent(BaseAgent):
         user_input: str,
         session: Dict[str, Any],
         session_id: str
-    ) -> AsyncGenerator[StreamEvent, None]:
+    ) -> AsyncGenerator[Union[StreamEvent, Dict[str, Any]], None]:
         """
         LangGraph StateGraphを使用した応答生成（ストリーミング）
 
@@ -1364,15 +1371,29 @@ class ShoppingAgent(BaseAgent):
         # Langfuseトレース設定（AP2完全準拠: オブザーバビリティ機能）
         from services.shopping_agent.langgraph_shopping_flow import LANGFUSE_ENABLED, CallbackHandler, langfuse_client
 
+        # A2UI v0.9: userActionメッセージをパース
+        # A2UI v0.9: context contains resolved values (not path refs)
+        processed_input, a2ui_action = process_user_input(user_input)
+        if a2ui_action:
+            logger.info(f"[A2UI v0.9] Received userAction: {a2ui_action.name}")
+            logger.debug(f"[A2UI v0.9] Context: {a2ui_action.context}")
+
         # 入力状態（Checkpointerと連携して状態を継続）
         # Checkpointerが既存の状態を読み込み、この入力とマージする
         input_state = {
-            "user_input": user_input,
+            "user_input": processed_input,  # A2UI: パース済み入力を使用
             "session_id": session_id,
             "session": session,
             "events": [],
             "next_step": None,
-            "error": None
+            "error": None,
+            # A2UI v0.9: アクション情報を追加（ノードで利用可能）
+            "a2ui_action": {
+                "name": a2ui_action.name,
+                "surface_id": a2ui_action.surface_id,
+                "source_component_id": a2ui_action.source_component_id,
+                "context": a2ui_action.context,  # A2UI v0.9: resolved values
+            } if a2ui_action else None
         }
 
         # Langfuseトレーシング: エージェント全体をagent typeでトレース
@@ -1419,8 +1440,18 @@ class ShoppingAgent(BaseAgent):
 
             # イベントをストリーミング出力
             for event_dict in result["events"]:
-                # agent_text_chunkは文字単位で遅延を挿入
-                if event_dict.get("type") == "agent_text_chunk":
+                # A2UI v0.9 envelope format check - these events don't have "type" field
+                # They use keys like createSurface, updateComponents, updateDataModel, deleteSurface
+                is_a2ui_v09_event = any(
+                    key in event_dict
+                    for key in ("createSurface", "updateComponents", "updateDataModel", "deleteSurface")
+                )
+
+                if is_a2ui_v09_event:
+                    # A2UI v0.9イベントは直接dictとしてyield（StreamEvent経由しない）
+                    yield event_dict
+                elif event_dict.get("type") == "agent_text_chunk":
+                    # agent_text_chunkは文字単位で遅延を挿入
                     yield StreamEvent(**event_dict)
                     await asyncio.sleep(0.02)  # 20ms遅延
                 else:

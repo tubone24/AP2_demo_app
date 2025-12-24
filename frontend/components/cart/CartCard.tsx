@@ -84,12 +84,31 @@ export function CartCard({
   onSelectCart,
   onViewDetails,
 }: CartCardProps) {
-  const { cart_mandate, artifact_name } = cartCandidate;
   const [selectedImage, setSelectedImage] = useState<{ url: string; label: string } | null>(null);
+
+  // 安全にデータを取得
+  const { cart_mandate, artifact_name } = cartCandidate || {};
+
+  if (!cart_mandate) {
+    console.error("[CartCard] cart_mandate is undefined:", cartCandidate);
+    return null;
+  }
 
   // AP2準拠の構造から情報を取得
   const { contents, _metadata } = cart_mandate;
+
+  if (!contents) {
+    console.error("[CartCard] contents is undefined:", cart_mandate);
+    return null;
+  }
+
   const { payment_request } = contents;
+
+  if (!payment_request || !payment_request.details) {
+    console.error("[CartCard] payment_request or details is undefined:", contents);
+    return null;
+  }
+
   const { display_items, total } = payment_request.details;
 
   const cartName = _metadata?.cart_name || artifact_name || "カート";
