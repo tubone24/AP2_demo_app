@@ -10,6 +10,7 @@ This application is a implementation of the AP2 (Agent Payments Protocol) specif
 
 - **LangGraph AI Conversations** - Intelligent dialogue management with OpenAI GPT-4
 - **MCP (Model Context Protocol) Integration** - Tool orchestration for AI agents
+- **A2UI v0.9 Protocol** - Agent-to-User Interface for dynamic form rendering
 - **Full-text Search** - Product search powered by Meilisearch
 - **KV Store** - Session and token management with Redis
 - **WebAuthn/Passkey Authentication** - Secure passwordless authentication
@@ -478,6 +479,7 @@ View test results in the Actions tab of the GitHub repository.
 - **TailwindCSS** 3.4.1
 - **shadcn/ui** - UI component library
 - **WebAuthn API** - Passkey signing
+- **A2UI v0.9** - Agent-to-User Interface protocol for dynamic UI rendering
 
 ### Infrastructure
 - **Docker** + **Docker Compose** - Container orchestration
@@ -622,9 +624,86 @@ This application fully implements the AP2 (Agent Payments Protocol) v0.2 specifi
 - **Challenge-Response**: Replay attack prevention with Redis TTL
 - **Token Lifecycle**: Proper TTL management for all tokens
 
+## A2UI v0.9 Protocol Support
+
+This application implements the **A2UI (Agent-to-User Interface)** protocol v0.9 for dynamic UI rendering during the shopping flow.
+
+### What is A2UI?
+
+A2UI is a protocol that allows AI agents to dynamically render UI components in the user's interface. Instead of hardcoding UI for each interaction type, the agent sends structured messages describing what UI to display, and the frontend renders it accordingly.
+
+**Reference**: [A2UI Specification v0.9](https://a2ui.org/specification/v0.9-a2ui/)
+
+### A2UI Message Types
+
+| Message Type | Description |
+|-------------|-------------|
+| `createSurface` | Initialize a new UI surface with a unique ID |
+| `updateComponents` | Provide component definitions (layout, fields, buttons) |
+| `updateDataModel` | Send/update data for two-way binding |
+| `deleteSurface` | Remove a surface when no longer needed |
+
+### Supported A2UI Components
+
+| Component | Description | Usage |
+|-----------|-------------|-------|
+| `Text` | Text display with style hints | Labels, headings, descriptions |
+| `TextField` | Text input with validation | Form fields (name, address, email) |
+| `Button` | Clickable button with action | Submit, cancel, navigation |
+| `ChoicePicker` | Radio/checkbox selection | Country selection, payment method |
+| `Card` | Container with optional click action | Credential provider cards |
+| `Column` | Vertical layout | Form layout |
+| `Row` | Horizontal layout | Button groups |
+| `Divider` | Visual separator | Section breaks |
+| `Image` | Image display | Product images, logos |
+
+### A2UI in Shopping Flow
+
+A2UI is used in the following steps:
+
+1. **Shipping Form** (`shipping_form`)
+   - Dynamic form with TextField components for address input
+   - ChoicePicker for country/region selection
+   - Two-way data binding with validation
+
+2. **Credential Provider Selection** (`cp_selection`)
+   - Card components for each available provider
+   - Click action to select a provider
+
+3. **Payment Method Selection** (`payment_method_selection`)
+   - Card components showing saved payment methods
+   - Click action to select and proceed
+
+### A2UI v0.9 Envelope Format
+
+A2UI v0.9 uses a simplified envelope format without a `type` field:
+
+```json
+// createSurface
+{"createSurface": {"surfaceId": "shipping-form-abc123", "catalogId": "..."}}
+
+// updateComponents
+{"updateComponents": {"surfaceId": "shipping-form-abc123", "components": [...]}}
+
+// updateDataModel
+{"updateDataModel": {"surfaceId": "shipping-form-abc123", "path": "/", "op": "replace", "value": {...}}}
+```
+
+### Implementation Files
+
+| File | Description |
+|------|-------------|
+| `services/shopping_agent/utils/a2ui_builders.py` | Backend A2UI message generators |
+| `frontend/hooks/useSSEChat.ts` | SSE parsing for A2UI events |
+| `frontend/components/a2ui/A2UISurfaceRenderer.tsx` | React component renderer |
+| `frontend/lib/types/a2ui.ts` | TypeScript type definitions |
+| `frontend/lib/a2ui/jsonPointer.ts` | JSON Pointer (RFC 6901) utilities |
+| `frontend/lib/a2ui/userAction.ts` | User action message builder |
+
 ## References
 
 - [AP2 Official Specification](https://ap2-protocol.org/specification/)
+- [A2UI Specification v0.9](https://a2ui.org/specification/v0.9-a2ui/)
 - [Google AP2 Samples](https://github.com/google-agentic-commerce/AP2)
 - [W3C Payment Request API](https://www.w3.org/TR/payment-request/)
 - [WebAuthn Specification](https://www.w3.org/TR/webauthn/)
