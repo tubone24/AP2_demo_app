@@ -376,7 +376,7 @@ services:
 
   # Meilisearch - 全文検索エンジン（商品検索用）
   meilisearch:
-    image: getmeili/meilisearch:v1.11
+    image: getmeili/meilisearch:v1.31
     container_name: ap2_meilisearch
     ports:
       - "7700:7700"
